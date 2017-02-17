@@ -1,0 +1,12 @@
+/4jupy/
+/root/
+.pdf
+.[rR][dD]a*
+.npy
+.npz
+.h5
+.nc
+.o
+.so
+.pyc
+__pycache__/
