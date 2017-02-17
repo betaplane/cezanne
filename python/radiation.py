@@ -1,17 +1,17 @@
 #!/usr/bin/env python
+from functools import partial
+
 import numpy as np
 import pandas as pd
-import ephem as ep
-# import pysolar as ps
-from functools import partial
 import matplotlib.pyplot as plt
-from scipy import interpolate as ip
-from mapping import basemap
 from netCDF4 import Dataset
-import helpers as hh
-from scipolate import interp4D
+from scipy import interpolate as ip
 from scipy.stats import binned_statistic
 
+import ephem as ep
+import helpers as hh
+from mapping import basemap
+from interpolation import interp4D
 
 
 D = pd.HDFStore('../../data/tables/station_data_new.h5')
@@ -124,6 +124,9 @@ b = regression(rs.xs('prom', level='aggr', axis=1), Ra)
 #     dict([(i, interp(i, mend, 755)) for i in m.index.levels[0]]),
 #     orient='index')
 
+S = pd.HDFStore('../../data/tables/LinearLinear.h5')
+Z = S['z']['d02']
+T2 = S['T2n']['d02']
 
 nc = Dataset('../../data/WRF/2d/d02_2014-09-10_transf.nc')
 ma = basemap(nc)
@@ -132,7 +135,7 @@ ij = ma(*hh.lonlat(sta))
 t = hh.get_time(nc)
 T = nc.variables['temp'][:]
 GP = nc.variables['ghgt'][:]
-HGT = nc.variables['HGT'][:]
+# HGT = nc.variables['HGT'][:]
 
 Ti = interp4D((x, y), T, ij, sta.index, t, method='linear')
 Gi = interp4D((x, y), GP, ij, sta.index, t, method='linear')
@@ -143,10 +146,12 @@ Gm = np.mean(GP,0)
 
 binned_statistic(Gm.flatten(), Tm.flatten(), 'std', 50)
 
-d = {}
-for s,r in Ti.iteritems():
-    z = sta['elev'][s] + 50
-    itpl = []
-    for t,c in r.iterrows():
-        itpl.append(ip.interp1d(Gi[s].loc[t], c, 'linear', bounds_error=False)(z))
-    d[s] = np.mean(itpl)
+def t50(s,r):
+    try:
+        z = Z[s] + 50
+        x = pd.Series([ip.interp1d(Gi[s].loc[t], c, 'linear', bounds_error=False)(z) for t,c in r.iterrows()], index=r.index)
+        return np.mean(T2[s] - x)
+    except:
+        return None
+
+a = pd.Series([(s,t50(s,r)) for s,r in Ti.iteritems()])

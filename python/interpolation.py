@@ -6,7 +6,8 @@ from mapping import basemap, affine
 import helpers as hh
 
 
-def grid_interp(xy, data, ij, index, time=None, method='nearest'):
+def grid_interp(xy, data, ij, index, time=None, method='linear'):
+    "Interpolation for data on a sufficiently regular mesh."
     x, y = xy
     i, j = ij
     m, n = data.shape[-2:]
@@ -26,20 +27,7 @@ def grid_interp(xy, data, ij, index, time=None, method='nearest'):
         )
 
 
-def interp4D(xy, data, ij, index, t, method='nearest'):
-    x, y = xy
-    i, j = ij
-    mn = (tuple(range(data.shape[-2])), tuple(range(data.shape[-1])))
-    tg = affine(x, y)
-    coords = np.roll(tg(np.r_['0,2', [i, j]]).T, 1, 1)
-    a = dict([(l,dict([(t[k], ip.interpn(mn, data[k,l,:,:], coords, method, bounds_error=False)) \
-     for k in range(data.shape[0])])) for l in range(data.shape[1])])
-    p = pd.Panel(a).transpose(1, 2, 0)
-    p.items = index
-    return p
-
-
-def irreg_interp(xy, data, ij, index, time=None, method='nearest'):
+def irreg_interp(xy, data, ij, index, time=None, method='linear'):
     x, y = xy
     i, j = ij
     interpolator = {
@@ -60,6 +48,20 @@ def irreg_interp(xy, data, ij, index, time=None, method='nearest'):
 
 
 
+def interp4D(xy, data, ij, index, t, method='linear'):
+    x, y = xy
+    i, j = ij
+    mn = (tuple(range(data.shape[-2])), tuple(range(data.shape[-1])))
+    tg = affine(x, y)
+    coords = np.roll(tg(np.r_['0,2', [i, j]]).T, 1, 1)
+    a = dict([(l,dict([(t[k], ip.interpn(mn, data[k,l,:,:], coords, method, bounds_error=False)) \
+     for k in range(data.shape[0])])) for l in range(data.shape[1])])
+    p = pd.Panel(a).transpose(1, 2, 0)
+    p.items = index
+    return p
+
+
+
 def interp_grib(grb, stations, method='linear', transf=False):
     """
 If transf=True, first project geographical coordinates to map, then use map coordinates
@@ -68,7 +70,7 @@ to interpolate using an unstructured array of points. Otherwise interpret lat/lo
 	"""
     x, t, lon, lat = hh.ungrib(grb)
     if transf:
-        m = basemap((lat, lon))
+        m = basemap((lat, lon)) # this is suspicious
         return irreg_interp(
             m(lon, lat),
             x,
@@ -85,28 +87,6 @@ to interpolate using an unstructured array of points. Otherwise interpret lat/lo
             stations.index,
             t,
             method=method)
-
-
-def interp_nc(nc,
-              var,
-              stations,
-              time=True,
-              tz=False,
-              method='linear',
-              bmap=None):
-    m = basemap(nc) if bmap is None else bmap
-    xy = m.xy()
-    ij = m(*hh.lonlat(stations))
-    x = nc.variables[var][:].squeeze()
-    if time:
-        t = pd.DatetimeIndex(hh.get_time(nc))
-        if tz:
-            t = t.tz_localize('UTC').tz_convert(hh.CEAZAMetTZ())
-        else:
-            t -= np.timedelta64(4, 'h')
-        return grid_interp(xy, x, ij, stations.index, t, method=method)
-    else:
-        return grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
 
 
 if __name__ == "__main__":
