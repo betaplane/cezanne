@@ -9,7 +9,7 @@ import helpers as hh
 
 class basemap(Basemap):
     def __init__(self, obj):
-        def latlon(lat, lon):
+        def lonlat(lon, lat):
             from pyproj import Geod
             geo = Geod(ellps='WGS84')
             x = [np.min(lon), np.max(lon), np.min(lat), np.max(lat)]
@@ -46,13 +46,13 @@ class basemap(Basemap):
 
         super().__init__(projection='lcc',
          **hh.try_list(obj,
-          lambda x: latlon(x['lat'],x['lon']),
+          lambda x: lonlat(x['lon'],x['lat']),
           lambda x: x.to_dict(),
           lambda x: hh.try_list(x, atts, attshw,
-           lambda x: latlon(hh.g2d(x.variables['XLAT']),hh.g2d(x.variables['XLONG'])),
+           lambda x: lonlat(hh.g2d(x.variables['XLONG']),hh.g2d(x.variables['XLAT'])),
           ),
-          lambda x: latlon(*x),
-          lambda x: latlon(*x[1].latlons())
+          lambda x: lonlat(*x),
+          lambda x: lonlat((lambda a,b:b,a)(*x[1].latlons()))
          )
         )
         try:

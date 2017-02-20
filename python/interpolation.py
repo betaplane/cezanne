@@ -70,7 +70,7 @@ to interpolate using an unstructured array of points. Otherwise interpret lat/lo
 	"""
     x, t, lon, lat = hh.ungrib(grb)
     if transf:
-        m = basemap((lat, lon)) # this is suspicious
+        m = basemap((lon, lat)) 
         return irreg_interp(
             m(lon, lat),
             x,
@@ -87,6 +87,22 @@ to interpolate using an unstructured array of points. Otherwise interpret lat/lo
             stations.index,
             t,
             method=method)
+
+def interp_nc(nc, var, stations, time=True, tz=False, method='linear', map=None):
+	m = mp.basemap(nc) if map is None else map
+	xy = m.xy()
+	ij = m(*hh.lonlat(stations))
+	x = nc.variables[var][:].squeeze()
+	if time:
+		t = pd.DatetimeIndex(hh.get_time(nc))
+		if tz:
+			t = t.tz_localize('UTC').tz_convert(hh.CEAZAMetTZ())
+		else:
+			t -= np.timedelta64(4,'h')
+		return sp.grid_interp(xy, x, ij, stations.index, t, method=method)
+	else:
+		return sp.grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
+
 
 
 if __name__ == "__main__":
