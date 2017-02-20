@@ -1,13 +1,11 @@
 #!/usr/bin/env python
-from functools import partial
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from netCDF4 import Dataset
 from scipy import interpolate as ip
-from scipy.stats import binned_statistic
-
+# from scipy.stats import binned_statistic
+from functools import partial
 import ephem as ep
 import helpers as hh
 from mapping import basemap
@@ -96,33 +94,6 @@ def regression(rm, Ra):
 
 
 b = regression(rs.xs('prom', level='aggr', axis=1), Ra)
-# stdom -  73 m
-# mend  - 705 m
-
-# S = pd.HDFStore('../data/IGRA/IGRAraw.h5')
-# stdom = S['stdom'][['TEMP', 'GPH']].replace({
-#     -9999: np.nan,
-#     -8888: np.nan
-# }).dropna(0, 'any')
-# mend = S['mend'][['TEMP', 'GPH']].replace({
-#     -9999: np.nan,
-#     -8888: np.nan
-# }).dropna(0, 'any')
-
-
-# def interp(i, X, z):
-#     try:
-#         return ip.interp1d(X.loc[i]['GPH'], X.loc[i]['TEMP'], 'linear')(z)
-#     except:
-#         return np.nan
-
-
-# t50st = pd.DataFrame.from_dict(
-#     dict([(i, interp(i, stdom, 123)) for i in m.index.levels[0]]),
-#     orient='index')
-# t50m = pd.DataFrame.from_dict(
-#     dict([(i, interp(i, mend, 755)) for i in m.index.levels[0]]),
-#     orient='index')
 
 S = pd.HDFStore('../../data/tables/LinearLinear.h5')
 Z = S['z']['d02']
@@ -140,12 +111,6 @@ GP = nc.variables['ghgt'][:]
 Ti = interp4D((x, y), T, ij, sta.index, t, method='linear')
 Gi = interp4D((x, y), GP, ij, sta.index, t, method='linear')
 
-
-Tm = np.mean(T,0)
-Gm = np.mean(GP,0)
-
-binned_statistic(Gm.flatten(), Tm.flatten(), 'std', 50)
-
 def t50(s,r):
     try:
         z = Z[s] + 50
@@ -154,4 +119,5 @@ def t50(s,r):
     except:
         return None
 
-a = pd.Series([(s,t50(s,r)) for s,r in Ti.iteritems()])
+a = pd.Series(*zip(*[(t50(s,r),s) for s,r in Ti.iteritems()]))
+
