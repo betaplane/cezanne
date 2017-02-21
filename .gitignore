@@ -1,5 +1,7 @@
 /4jupy/
+/5jupy/
 /root/
+__pycache__/
 .pdf
 .[rR][dD]a*
 .npy
@@ -9,4 +11,4 @@
 .o
 .so
 .pyc
-__pycache__/
+.ipynb_checkpoints
