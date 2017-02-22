@@ -62,7 +62,7 @@ def interp4D(xy, data, ij, index, t, method='linear'):
 
 
 
-def interp_grib(grb, stations, method='linear', transf=False):
+def grib_interp(grb, stations, method='linear', transf=False):
     """
 If transf=True, first project geographical coordinates to map, then use map coordinates
 to interpolate using an unstructured array of points. Otherwise interpret lat/lon as regular
@@ -88,8 +88,8 @@ to interpolate using an unstructured array of points. Otherwise interpret lat/lo
             t,
             method=method)
 
-def interp_nc(nc, var, stations, time=True, tz=False, method='linear', map=None):
-	m = mp.basemap(nc) if map is None else map
+def nc_interp(nc, var, stations, time=True, tz=False, method='linear', map=None):
+	m = basemap(nc) if map is None else map
 	xy = m.xy()
 	ij = m(*hh.lonlat(stations))
 	x = nc.variables[var][:].squeeze()
@@ -99,9 +99,9 @@ def interp_nc(nc, var, stations, time=True, tz=False, method='linear', map=None)
 			t = t.tz_localize('UTC').tz_convert(hh.CEAZAMetTZ())
 		else:
 			t -= np.timedelta64(4,'h')
-		return sp.grid_interp(xy, x, ij, stations.index, t, method=method)
+		return grid_interp(xy, x, ij, stations.index, t, method=method)
 	else:
-		return sp.grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
+		return grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
 
 
 

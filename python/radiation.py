@@ -121,3 +121,24 @@ def t50(s,r):
 
 a = pd.Series(*zip(*[(t50(s,r),s) for s,r in Ti.iteritems()]))
 
+with open('/home/arno/Documents/src/WRFV3/run/LANDUSE.TBL') as f:
+    l = []
+    for r in csv.reader(f):
+        if len(r)==1:
+            if r[0]=='SUMMER' or r[0]=='WINTER':
+                l[-1][1].append([r[0],[]])
+            else:
+                l.append([r[0],[]])
+        else:
+            try:
+                if re.search('Unassigned',r[8]): continue
+                s = [float(x) for x in r[:8]]
+                s.append(r[8])
+                l[-1][1][-1][1].append(s)
+            except: pass
+
+d = dict([(k,dict(v)) for k,v in l])
+
+modis = d['MODIFIED_IGBP_MODIS_NOAH']
+zs = dict([(x[0], x[4]) for x in modis['SUMMER']])
+zw = dict([(x[0], x[4]) for x in modis['WINTER']])
