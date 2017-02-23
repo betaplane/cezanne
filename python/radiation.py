@@ -13,7 +13,7 @@ from interpolation import interp4D
 
 
 D = pd.HDFStore('../../data/tables/station_data_new.h5')
-rs = D['rs_w']
+rs = D['rs_w'].xs('prom', level='aggr', axis=1)
 sta = D['sta']
 
 So = 1361
@@ -68,14 +68,22 @@ def extraterrestrial(stations, time):
 Ra = D['Ra_w']
 
 
-# regression coefficients clear-sky from extra-terrestrial radiation
-# 'b' - regression coeff
-# 'n' - number of points considered (selecting only times with stronges
 def regression(rm, Ra):
+    """Regress clear sky radiation onto theoretical extraterrestrial radiation.
+    Selects brightest days in data somewhat arbitrarily to do the regression.
+
+    :param rm: measured solar radiation
+    :param Ra: extraterrestrial radiation
+    :returns: DataFrame with columns 'b' (regression coefficients) and 'n' (number of samples used for regression)
+    :rtype: DataFrame
+
+    """
     b = []
     for c, r in rm.iteritems():
         x = pd.concat((Ra[c[0]], r), axis=1)
+        # eliminate measured values > than extraterrestrial radiation
         x.iloc[:, 1][x.iloc[:, 1] > x.iloc[:, 0]] = np.nan
+        # use Eq. 35 from Allen et al. as approximation and select days with > 0.9 relative sunshine duration
         xd = x.groupby(x.index.date).sum()
         n = 2 * (xd.iloc[:, 1] - 0.25 * xd.iloc[:, 0]) / xd.iloc[:, 0]
         n = n.reindex(x.index, method='ffill')
@@ -84,61 +92,89 @@ def regression(rm, Ra):
         try:
             for i in range(2):
                 X = y.dropna().as_matrix()
-                a = np.linalg.lstsq(X[:, :1], X[:, 1:])[0][0][0]
-                y = x[x.iloc[:, 1] > Ra[c[0]] * a]
+                a = np.linalg.lstsq(X[:, :1], X[:, 1:])
+                # for second round, select only hours where measured radiation > predicted from first round
+                y = x[x.iloc[:, 1] > Ra[c[0]] * a[0][0][0]]
         except:
-            b.append((np.nan, 0))
+            b.append((np.nan, np.nan, 0))
         else:
-            b.append((a, y.count().min()))
-    return pd.DataFrame(b, index=rm.columns, columns=['b', 'n'])
+            b.append((a[0][0][0], a[1][0], y.count().min()))
+    return pd.DataFrame(b, index=rm.columns, columns=['b', 'resid', 'n'])
 
 
-b = regression(rs.xs('prom', level='aggr', axis=1), Ra)
+b = regression(rs, Ra)
+
+def itpl():
+    "Interpolate 4D (true) temp and (mass level) geopotential fields to stations."
+    nc = Dataset('../../data/WRF/2d/d02_2014-09-10_transf.nc')
+    T = nc.variables['temp'][:]
+    GP = nc.variables['ghgt'][:]
+
+    ma = basemap(nc)
+    x, y = ma.xy()
+    ij = ma(*hh.lonlat(sta))
+    t = hh.get_time(nc)
+
+    Ti = interp4D((x, y), T, ij, sta.index, t, method='linear')
+    Gi = interp4D((x, y), GP, ij, sta.index, t, method='linear')
+
 
 S = pd.HDFStore('../../data/tables/LinearLinear.h5')
+R = pd.HDFStore('../../data/tables/4Dfields.h5')
 Z = S['z']['d02']
-T2 = S['T2n']['d02']
+T2 = S['T2']['d02']
+T4D = R['temp']
+G4D = R['ghgt']
 
-nc = Dataset('../../data/WRF/2d/d02_2014-09-10_transf.nc')
-ma = basemap(nc)
-x, y = ma.xy()
-ij = ma(*hh.lonlat(sta))
-t = hh.get_time(nc)
-T = nc.variables['temp'][:]
-GP = nc.variables['ghgt'][:]
-# HGT = nc.variables['HGT'][:]
+def temp_AGL(T,G,Z,z):
+    "Compute mean T difference between 'z' meters above ground and T2 from model data (model ground level)."
+    def tz(s,r):
+        try:
+            y = Z[s] + z
+            x = pd.Series([ip.interp1d(Gi[s].loc[t], c, 'linear', bounds_error=False)(y) for t,c in r.iterrows()], index=r.index)
+            return np.mean(T2[s] - x)
+        except:
+            return None
 
-Ti = interp4D((x, y), T, ij, sta.index, t, method='linear')
-Gi = interp4D((x, y), GP, ij, sta.index, t, method='linear')
+    return pd.Series(*zip(*[(tz(s,r),s) for s,r in Ti.iteritems()]))
 
-def t50(s,r):
-    try:
-        z = Z[s] + 50
-        x = pd.Series([ip.interp1d(Gi[s].loc[t], c, 'linear', bounds_error=False)(z) for t,c in r.iterrows()], index=r.index)
-        return np.mean(T2[s] - x)
-    except:
-        return None
+a = temp_AGL(T4D, G4D, Z, 50)
 
-a = pd.Series(*zip(*[(t50(s,r),s) for s,r in Ti.iteritems()]))
-
-with open('/home/arno/Documents/src/WRFV3/run/LANDUSE.TBL') as f:
-    l = []
-    for r in csv.reader(f):
-        if len(r)==1:
-            if r[0]=='SUMMER' or r[0]=='WINTER':
-                l[-1][1].append([r[0],[]])
+def landuse():
+    with open('/home/arno/Documents/src/WRFV3/run/LANDUSE.TBL') as f:
+        l = []
+        for r in csv.reader(f):
+            if len(r)==1:
+                if r[0]=='SUMMER' or r[0]=='WINTER':
+                    l[-1][1].append([r[0],[]])
+                else:
+                    l.append([r[0],[]])
             else:
-                l.append([r[0],[]])
-        else:
-            try:
-                if re.search('Unassigned',r[8]): continue
-                s = [float(x) for x in r[:8]]
-                s.append(r[8])
-                l[-1][1][-1][1].append(s)
-            except: pass
+                try:
+                    if re.search('Unassigned',r[8]): continue
+                    s = [float(x) for x in r[:8]]
+                    s.append(r[8])
+                    l[-1][1][-1][1].append(s)
+                except: pass
 
-d = dict([(k,dict(v)) for k,v in l])
+    d = dict([(k,dict(v)) for k,v in l])
 
-modis = d['MODIFIED_IGBP_MODIS_NOAH']
-zs = dict([(x[0], x[4]) for x in modis['SUMMER']])
-zw = dict([(x[0], x[4]) for x in modis['WINTER']])
+    modis = d['MODIFIED_IGBP_MODIS_NOAH']
+    zs = dict([(x[0], x[4]) for x in modis['SUMMER']])
+    zw = dict([(x[0], x[4]) for x in modis['WINTER']])
+
+# Choi, Minha, Jennifer M. Jacobs, and William P. Kustas. “Assessment of Clear and Cloudy Sky Parameterizations for Daily Downwelling Longwave Radiation over Different Land Surfaces in Florida, USA.” Geophysical Research Letters 35, no. 20 (October 18, 2008). doi:10.1029/2008GL035731.
+def cloud_N(Rs, Rso):
+    """Cloud fraction from measured solar radiation and theoretical clear sky radiation.
+
+    :param Rs: measured solar radiation
+    :param Rso: clear sky solar radiation
+    :returns: cloud fraction
+    :rtype: float
+
+    """
+    return 1 - Rs / Rso
+
+# Van Ulden, A. P., and A. A. M. Holtslag. “Estimation of Atmospheric Boundary Layer Parameters for Diffusion Applications.” Journal of Climate and Applied Meteorology 24, no. 11 (November 1985): 1196–1207. doi:10.1175/1520-0450(1985)024<1196:EOABLP>2.0.CO;2.
+def LW_isothermal(Tr):
+    -5.67e-8 * Tr**4 * (1 - 9.35e-6 * Tr**2) + 60 *

@@ -47,8 +47,8 @@ def irreg_interp(xy, data, ij, index, time=None, method='linear'):
         return pd.DataFrame(df, index=time, columns=index)
 
 
-
 def interp4D(xy, data, ij, index, t, method='linear'):
+    "Interpolates 4D data on 2D grids (i.e. no interpolation in vertical)."
     x, y = xy
     i, j = ij
     mn = (tuple(range(data.shape[-2])), tuple(range(data.shape[-1])))
@@ -61,7 +61,6 @@ def interp4D(xy, data, ij, index, t, method='linear'):
     return p
 
 
-
 def grib_interp(grb, stations, method='linear', transf=False):
     """
 If transf=True, first project geographical coordinates to map, then use map coordinates
@@ -70,7 +69,7 @@ to interpolate using an unstructured array of points. Otherwise interpret lat/lo
 	"""
     x, t, lon, lat = hh.ungrib(grb)
     if transf:
-        m = basemap((lon, lat)) 
+        m = basemap((lon, lat))
         return irreg_interp(
             m(lon, lat),
             x,
@@ -88,21 +87,27 @@ to interpolate using an unstructured array of points. Otherwise interpret lat/lo
             t,
             method=method)
 
-def nc_interp(nc, var, stations, time=True, tz=False, method='linear', map=None):
-	m = basemap(nc) if map is None else map
-	xy = m.xy()
-	ij = m(*hh.lonlat(stations))
-	x = nc.variables[var][:].squeeze()
-	if time:
-		t = pd.DatetimeIndex(hh.get_time(nc))
-		if tz:
-			t = t.tz_localize('UTC').tz_convert(hh.CEAZAMetTZ())
-		else:
-			t -= np.timedelta64(4,'h')
-		return grid_interp(xy, x, ij, stations.index, t, method=method)
-	else:
-		return grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
 
+def nc_interp(nc,
+              var,
+              stations,
+              time=True,
+              tz=False,
+              method='linear',
+              map=None):
+    m = basemap(nc) if map is None else map
+    xy = m.xy()
+    ij = m(*hh.lonlat(stations))
+    x = nc.variables[var][:].squeeze()
+    if time:
+        t = pd.DatetimeIndex(hh.get_time(nc))
+        if tz:
+            t = t.tz_localize('UTC').tz_convert(hh.CEAZAMetTZ())
+        else:
+            t -= np.timedelta64(4, 'h')
+        return grid_interp(xy, x, ij, stations.index, t, method=method)
+    else:
+        return grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
 
 
 if __name__ == "__main__":
