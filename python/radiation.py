@@ -74,7 +74,8 @@ def regression(rm, Ra):
 
     :param rm: measured solar radiation
     :param Ra: extraterrestrial radiation
-    :returns: DataFrame with columns 'b' (regression coefficients) and 'n' (number of samples used for regression)
+    :returns: DataFrame with columns 'b' (regression coefficients),
+        'rms' (root mean square of residuals) and 'n' (number of samples used for regression)
     :rtype: DataFrame
 
     """
@@ -92,17 +93,39 @@ def regression(rm, Ra):
         try:
             for i in range(2):
                 X = y.dropna().as_matrix()
-                a = np.linalg.lstsq(X[:, :1], X[:, 1:])
+                lsq = np.linalg.lstsq(X[:, :1], X[:, 1:])
+                a = lsq[0][0][0]
+                err = lsq[1][0]
+                n = y.count().min()
                 # for second round, select only hours where measured radiation > predicted from first round
-                y = x[x.iloc[:, 1] > Ra[c[0]] * a[0][0][0]]
+                y = x[x.iloc[:, 1] > Ra[c[0]] * a]
         except:
             b.append((np.nan, np.nan, 0))
         else:
-            b.append((a[0][0][0], a[1][0], y.count().min()))
-    return pd.DataFrame(b, index=rm.columns, columns=['b', 'resid', 'n'])
+            b.append((a, (err/n)**.5, n))
+    return pd.DataFrame(b, index=rm.columns, columns=['b', 'rms', 'n'])
 
 
-b = regression(rs, Ra)
+b = regression(rs, Ra).sort_index()
+# manual selection of sensors at stations which have 2 - for now take the ones with lower RMS
+from CEAZAMet import mult
+c = b.loc[mult(rs)]
+drop_codes = ['28', 'ANDACMP10', 'CACHRSTM', 'COMBRS', 'INILLARS', 'MINRS', 'PCRS2', 'TLHRSTM']
+b.drop(drop_codes,level='code',inplace=True)
+rs.drop(drop_codes,level='code',inplace=True,axis=1)
+
+# very high regression coefficients are also suspicious
+b.sort_values('b', inplace=True)
+drop_codes.extend(['INIA66', 'PAGN', 'LMBT', 'SALH', ''])
+
+def detect_breaks(df):
+    i = df.dropna().index
+    return pd.Series(np.diff(i), index=i[1:]).sort_values()
+
+def residuals(code):
+    return pd.concat((b['b'][code][0] * Ra[code], rs[code]), axis=1).diff(1, axis=1).iloc[:,1]
+
+rs['TASC'][:'2014-12-07 14']
 
 def itpl():
     "Interpolate 4D (true) temp and (mass level) geopotential fields to stations."
