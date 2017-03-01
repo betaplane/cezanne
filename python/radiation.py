@@ -15,18 +15,27 @@ from interpolation import interp4D
 D = pd.HDFStore('../../data/tables/station_data_new.h5')
 rs = D['rs_w'].xs('prom', level='aggr', axis=1)
 sta = D['sta']
+T = hh.extract(D['ta_c'], 'prom', C2K=True)
+
 
 So = 1361
 sun = ep.Sun()
 rad = np.pi / 180
 
+def stationize(df):
+    try:
+        return pd.DataFrame(df, columns=df.columns.get_level_values('station'))
+    except:
+        return pd.DataFrame(df, index=df.index.get_level_values('station')
 
+
+# hour angle
 def hour(obs, t):
     obs.date = t
     sun.compute(obs)
     return obs.sidereal_time() - sun.ra
 
-
+# declination
 def dec(obs, t):
     obs.date = t
     sun.compute(obs)
@@ -47,6 +56,7 @@ def extraterrestrial(stations, time):
         obs.elevation = r.elev
         f = partial(hour, obs)
         g = partial(dec, obs)
+        # this is to account for the averaging period in the database
         te = t + np.timedelta64(4, 'h') - np.timedelta64(int(r.interval), 's')
         w = np.array([f(i) for i in te])
         d = np.array([g(i) for i in te])
@@ -61,11 +71,47 @@ def extraterrestrial(stations, time):
         R = 12 / np.pi * So * (1 + 0.033 * np.cos(2 * np.pi / 365 * t[:-1].dayofyear)) * \
         ((w2 - w1) * np.sin(obs.lat) * np.sin(d) + np.cos(obs.lat) * np.cos(d) * (np.sin(w2) - np.sin(w1)))
         R[R < 0] = 0
-        return pd.concat((Ra, pd.Series(R, index=rs.index, name=c)), axis=1)
+        Ra = pd.concat((Ra, pd.Series(R, index=rs.index, name=c)), axis=1)
+    return Ra
 
 
-# Ra = extraterrestrial(sta, rs.index)
-Ra = D['Ra_w']
+def solalt(obs, t):
+    """
+    Returns sun's zenith angle based on PyEphem Observer and time, and as convenience also the
+    earth-sun distance in AU
+    See http://rhodesmill.org/pyephem/quick.html#bodies.
+    """
+    obs.date = t
+    sun.compute(obs)
+    return (sun.alt, sun.earth_distance)
+
+
+def extraterrestrial2(stations, t):
+    S0 = 1370
+    sun = ep.Sun()
+    rad = np.pi / 180
+    def per_station(c,r):
+        print(c)
+        obs = ep.Observer()
+        obs.lon = r.lon * rad
+        obs.lat = r.lat * rad
+        obs.elevation = r.elev
+        z = partial(solalt, obs)
+        # here, shift the time vector by each station's averaging period so it contains the interval endpoints
+        # add 1/2 hour to use midpoints (i.e. 270 mins together with UTC shift)
+        te = t + np.timedelta64(270, 'm') - np.timedelta64(int(r.interval), 's')
+        alt,d = np.array([z(i) for i in te]).T
+        # compute averages over mu (= cos zenith, = sin alt) analytically
+        mu = np.sin(alt)
+        mu[mu<0] = 0
+        return S0 * (1/d)**2 * mu
+    return pd.DataFrame(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]), index=time)
+
+
+Ra = extraterrestrial2(sta, rs.index)
+# Ra = D['Ra_w']
+
+def Rso
 
 
 def regression(rm, Ra):
@@ -154,14 +200,14 @@ def temp_AGL(T,G,Z,z):
     def tz(s,r):
         try:
             y = Z[s] + z
-            x = pd.Series([ip.interp1d(Gi[s].loc[t], c, 'linear', bounds_error=False)(y) for t,c in r.iterrows()], index=r.index)
+            x = pd.Series([ip.interp1d(G[s].loc[t], c, 'linear', bounds_error=False)(y) for t,c in r.iterrows()], index=r.index)
             return np.mean(T2[s] - x)
         except:
             return None
 
-    return pd.Series(*zip(*[(tz(s,r),s) for s,r in Ti.iteritems()]))
+    return pd.Series(*zip(*[(tz(s,r),s) for s,r in T.iteritems()]))
 
-a = temp_AGL(T4D, G4D, Z, 50)
+# a = temp_AGL(T4D, G4D, Z, 50)
 
 def landuse():
     with open('/home/arno/Documents/src/WRFV3/run/LANDUSE.TBL') as f:
@@ -199,5 +245,10 @@ def cloud_N(Rs, Rso):
     return 1 - Rs / Rso
 
 # Van Ulden, A. P., and A. A. M. Holtslag. “Estimation of Atmospheric Boundary Layer Parameters for Diffusion Applications.” Journal of Climate and Applied Meteorology 24, no. 11 (November 1985): 1196–1207. doi:10.1175/1520-0450(1985)024<1196:EOABLP>2.0.CO;2.
-def LW_isothermal(Tr):
-    -5.67e-8 * Tr**4 * (1 - 9.35e-6 * Tr**2) + 60 *
+def LW_isothermal(Tr, N):
+    return -5.67e-8 * Tr**4 * (1 - 9.35e-6 * Tr**2) + 60 * N
+
+stationize(b)
+Tr = T.apply(lambda c:c+a[c.name],0)
+N = cloud_N(rs, Ra*b['b'])
+Li = LW_isothermal(Tr, N)
