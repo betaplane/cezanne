@@ -10,6 +10,20 @@ import ephem as ep
 import helpers as hh
 from mapping import basemap
 from interpolation import interp4D
+from astropy.stats import LombScargle
+
+# https://climatedataguide.ucar.edu/climate-data/nino-sst-indices-nino-12-3-34-4-oni-and-tni
+oni = pd.read_csv('/home/arno/Downloads/oni.data',
+                  delim_whitespace=True,
+                  skiprows=1,
+                  skipfooter=8,
+                  index_col=0,
+                  na_values=-99.99,
+                  header=None).stack()
+
+def stack2index(index):
+    return pd.DatetimeIndex(['{}-{}'.format(*i) for i in index.tolist()])
+
 
 
 D = pd.HDFStore('../../data/tables/station_data_new.h5')
@@ -19,10 +33,19 @@ T = hh.extract(D['ta_c'], 'prom', C2K=True)
 
 
 def stationize(df):
-    try:
-        return pd.DataFrame(df, columns=df.columns.get_level_values('station'))
-    except:
-        return pd.DataFrame(df, index=df.index.get_level_values('station'))
+    c = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        c.columns = df.columns.get_level_values('station')
+    elif isinstance(df.index, pd.MultiIndex):
+        c.index = df.index.get_level_values('station')
+    return c
+
+def tx(d, freq='D'):
+    return np.array(d.index,dtype='datetime64[{}]'.format(freq)).astype(float), d.as_matrix().flatten()
+
+def LS(df):
+    d = df.asfreq('1D')
+    return pd.DataFrame(LombScargle(*tx(rf)).model(tx(d)[0], 1/365.24), index=d.index, columns=df.columns)
 
 
 class observer(ep.Observer):
@@ -78,7 +101,7 @@ def ETRaDay(stations, index):
         dec, dist = np.array([obs.decl(i) for i in index]).T
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
         return 1/np.pi * obs.S0 * dist**-2 * (ws * np.sin(obs.lat) * np.sin(dec) + np.cos(dec) * np.sin(ws))
-    return pd.DataFrame(dict([(c, per_station(c, r)) for c,r in stations.iterrows()]), index=index)
+    return pd.DataFrame(dict([(c, per_station(c, r)) for c,r in stations.iterrows()]), index=index.date)
 
 
 def ETRa1(stations, index):
@@ -109,7 +132,7 @@ def ETRa1(stations, index):
     # return per_station(*next(stations.iterrows()))
     p = pd.Panel(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]))
     p.major_axis = index
-    return p
+    return p.transpose(2,1,0)
 
 
 def ETRa2(stations, t):
@@ -148,9 +171,31 @@ def mask_night(stations, index):
     return pd.DataFrame(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]), index=index)
 
 
-Rm = ETRaDay(sta, rs.index)
-Ra = ETRa1(sta, rs.index)
+
+r = stationize(rs.loc[:,'5':'5'].xs('2',level='elev',axis=1))
+Rm = ETRaDay(sta.loc['5':'5'], pd.date_range('2004-01-01T12','2017-03-01T12', freq='D'))
+Ra = ETRa1(sta.loc['5':'5'], rs.index)
 # Ra = D['Ra_w']
+m = Ra['mask']
+
+def locMax(df, window):
+    ro = df.rolling(window).apply(np.argmax)
+    i = np.array(ro.index,dtype='datetime64[D]').flatten() + \
+        np.array(ro.as_matrix() - window + 1,dtype='timedelta64[D]').flatten()
+    return pd.Index(set(i)).dropna().sort_values()
+
+def locMaxDay(RaDay, rs, mask):
+    d = rs.copy()
+    # first, set NaNs at night to zero so as to not inflate daily averages
+    d[d.isnull()] = mask[mask==0]
+    # then, zero out not-NaN night values
+    dm = (d*mask).groupby(d.index.date).mean()
+    dm[dm==0] = np.nan
+    ratio = dm/RaDay
+    ratio = ratio[ratio<1].asfreq('1D')
+    return dm, ratio.loc[locMax(ratio, 10)]
+
+rm, ra = locMaxDay(Rm, r, m)
 
 def Rso1(Ra, z):
     return (.75 + 2e-5 * z) * Ra
