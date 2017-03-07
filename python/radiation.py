@@ -11,19 +11,7 @@ import helpers as hh
 from mapping import basemap
 from interpolation import interp4D
 from astropy.stats import LombScargle
-
-# https://climatedataguide.ucar.edu/climate-data/nino-sst-indices-nino-12-3-34-4-oni-and-tni
-oni = pd.read_csv('/home/arno/Downloads/oni.data',
-                  delim_whitespace=True,
-                  skiprows=1,
-                  skipfooter=8,
-                  index_col=0,
-                  na_values=-99.99,
-                  header=None).stack()
-
-def stack2index(index):
-    return pd.DatetimeIndex(['{}-{}'.format(*i) for i in index.tolist()])
-
+from scipy.integrate import quad
 
 
 D = pd.HDFStore('../../data/tables/station_data_new.h5')
@@ -100,8 +88,19 @@ def ETRaDay(stations, index):
         obs = observer(station)
         dec, dist = np.array([obs.decl(i) for i in index]).T
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
-        return 1/np.pi * obs.S0 * dist**-2 * (ws * np.sin(obs.lat) * np.sin(dec) + np.cos(dec) * np.sin(ws))
-    return pd.DataFrame(dict([(c, per_station(c, r)) for c,r in stations.iterrows()]), index=index.date)
+        return obs.S0/np.pi * dist**-2 * (ws * np.sin(obs.lat) * np.sin(dec) + np.cos(obs.lat) * np.cos(dec) * np.sin(ws))
+    return pd.DataFrame(dict([(c, per_station(c, r)) for c,r in stations.iterrows()]), index=index)
+
+def ETRaDayN(station, days):
+    "Numerical variant of ETRaDay."
+    obs = observer(station)
+    def mu(h, dec):
+        return np.sin(obs.lat) * np.sin(dec) + np.cos(obs.lat) * np.cos(dec) * np.cos(h)
+    def per_day(d):
+        dec, dist = obs.decl(d)
+        ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
+        return obs.S0/np.pi * dist**-2 * quad(mu, 0, abs(ws), args=(dec,))[0]
+    return pd.DataFrame({station.name: [per_day(d) for d in days]}, index=days)
 
 
 def ETRa1(stations, index):
@@ -125,10 +124,11 @@ def ETRa1(stations, index):
         w = np.where(w > -ws, w, -ws)
         w = np.where(w < ws, w, ws)
         # R = 12 / np.pi * S0 * (1 + 0.033 * np.cos(2 * np.pi / 365 * t[:-1].dayofyear)) * \
-        R = 12 / np.pi * obs.S0 * dist[1:]**-2 * \
-        (np.diff(w) * np.sin(obs.lat) * np.sin(dec[1:]) + np.cos(obs.lat) * np.cos(dec[1:]) * np.diff(np.sin(w)))
+        mu_ave = 12 / np.pi * (np.diff(w) * np.sin(obs.lat) * np.sin(dec[1:]) + \
+            np.cos(obs.lat) * np.cos(dec[1:]) * np.diff(np.sin(w)))
+        R = obs.S0 * dist[1:]**-2 * mu_ave
         R[R < 0] = 0
-        return {'Ra':R*m, 'mask':m}
+        return {'Ra':R*m, 'mu':mu_ave*m, 'mask':m}
     # return per_station(*next(stations.iterrows()))
     p = pd.Panel(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]))
     p.major_axis = index
@@ -150,25 +150,31 @@ def ETRa2(stations, t):
         return obs.S0 * d**-2 * mu
     return pd.DataFrame(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]), index=t)
 
+class station_time_intervals(object):
+    def __init__(self, t, sta, freq='60T', delta=pd.Timedelta(4,'h')):
+        self.index = pd.PeriodIndex(t+delta, freq=freq)
+        self.sta = sta
+    def __getitem__(self, key):
+       return self.index - pd.Timedelta(sta['interval'][key], 's')
 
-def mask_night(stations, index):
-    t = pd.date_range(index[0], index[-1] + np.timedelta64(1, 'h'), freq='H')
+
+def ETRaN(stations, index):
+    t = station_time_intervals(index, stations, pd.Timedelta(4,'H'))
     def per_station(code, station):
         print(code)
         obs = observer(station)
-        # this is to account for the averaging period in the database
-        te = t + np.timedelta64(4, 'h') - np.timedelta64(int(station.interval), 's')
-        w, dec = np.array([obs.angle_decl(i) for i in te]).T
-        w[w > np.pi] -= 2 * np.pi
-        w[w < -np.pi] += 2 * np.pi
-        # sunset hour angle
-        ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
-        # before sunrise
-        # this shifts the sunrise index to one earlier, so that the interval containing the sunrise is retained
-        m[:-1] = np.logical_or(m[:-1], m[1:])
-        # after sunset
-        return m * np.where(w < ws, 1, 0)[:-1]
-    return pd.DataFrame(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]), index=index)
+        # here, shift the time vector by each station's averaging period so it contains the interval endpoints
+        # add 1/2 hour to use midpoints (i.e. 270 mins together with UTC shift)
+        te = t + np.timedelta64(270, 'm') - np.timedelta64(int(station.interval), 's')
+        alt, d = np.array([obs.alt_dist(i) for i in te]).T
+        # mu = cos zenith = sin alt
+        mu = np.sin(alt)
+        mu[mu<0] = 0
+        return obs.S0 * d**-2 * mu
+    return pd.DataFrame(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]), index=t)
+
+
+
 
 
 
@@ -177,6 +183,11 @@ Rm = ETRaDay(sta.loc['5':'5'], pd.date_range('2004-01-01T12','2017-03-01T12', fr
 Ra = ETRa1(sta.loc['5':'5'], rs.index)
 # Ra = D['Ra_w']
 m = Ra['mask']
+
+def center(df):
+    d = df.copy()
+    d.index = pd.DatetimeIndex(d.index) + pd.Timedelta('12H')
+    return d
 
 def locMax(df, window):
     ro = df.rolling(window).apply(np.argmax)
@@ -196,9 +207,25 @@ def locMaxDay(RaDay, rs, mask):
     return dm, ratio.loc[locMax(ratio, 10)]
 
 rm, ra = locMaxDay(Rm, r, m)
+rm = center(rm)
 
 def Rso1(Ra, z):
+    "Daily clear sky only."
     return (.75 + 2e-5 * z) * Ra
+
+P = pd.HDFStore('../../data/tables/pressure.h5')
+b0,b1 = P['fit']
+z = sta.loc['5']['elev']
+p = np.exp(b0 + b1*z)
+p2 = 1013 * (1 - 0.0065 * z / 293) ** 5.26
+
+cs1 = center(Rso1(Rm, z))
+
+def Rso2(Ra, mu, p):
+    "Hourly clear sky, p in hPa"
+    return Ra * np.exp( -0.00018*p / mu)
+
+cs2 = Rso2(Ra['Ra'], Ra['mu'], p)
 
 
 def regression(rm, Ra):

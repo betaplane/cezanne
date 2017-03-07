@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-import requests, csv
-from io import StringIO as strio
+import requests, csv, re
+from io import StringIO
 from dateutil.parser import parse
 from datetime import datetime, timedelta
 import pandas as pd
@@ -9,8 +9,7 @@ from helpers import CEAZAMetTZ
 
 # url = 'http://192.168.5.2/ws/pop_ws.php'		# from inside
 url = 'http://www.ceazamet.cl/ws/pop_ws.php'  # from outside
-
-# raw_url = 'http://www.ceazamet.cl/ws/sensor_raw_csv.php'?s_cod=69&fi=2016-03-17&ff=2016-03-17
+raw_url = 'http://www.ceazamet.cl/ws/sensor_raw_csv.php'
 
 
 class Station(object):
@@ -40,6 +39,7 @@ class Station(object):
 
 
 class Field(object):
+    earliest = datetime(2003,1,1)
     params = {
         'fn': 'GetListaSensores',
         'p_cod': 'ceazamet',
@@ -61,37 +61,31 @@ class Field(object):
         try:
             self.first = parse(first)
         except:
-            self.first = first
+            self.first = self.earliest
         try:
             self.last = parse(last)
         except:
-            self.last = last
+            self.last = datetime.utcnow() - timedelta(hours=4)
 
     def __repr__(self):
         return self.name
 
 
+
 def fetch(station, field=None):
     s = requests.Session()
     s.headers.update({'Host': 'www.ceazamet.cl'})
-
-    def first(d):
-        try:
-            return d.strftime('%Y-%m-%d')
-        except:
-            return '2003-01-01'
-
     cols = ['ultima_lectura', 'min', 'prom', 'max', 'data_pc']
     params = {'fn': 'GetSerieSensor', 'interv': 'hora', 'valor_nan': 'nan'}
     for f in ([field] if field else station.fields):
         params.update({
             's_cod': f.sensor_code,
-            'fecha_inicio': first(f.first),
-            'fecha_fin': datetime.now().strftime('%Y-%m-%d')
+            'fecha_inicio': f.first.strftime('%Y-%m-%d'),
+            'fecha_fin': f.last.strftime('%Y-%m-%d')
         })
         while True:
             r = s.get(url, params=params)
-            io = strio(r.text)
+            io = StringIO(r.text)
             p = 0
             while next(io)[0] == '#':
                 n = p
@@ -118,12 +112,27 @@ def fetch(station, field=None):
                 break
     return D
 
+class Reader(StringIO):
+    def __init__(self, str):
+        super(Reader, self).__init__(str)
+        p = 0
+        while True:
+            l = next(self)
+            if l[0] != '#':
+                break
+            self.start = p + l.find(':') + 1
+            p = self.tell()
+        self.seek(self.start)
+
+    def reset(self):
+        self.seek(self.start)
+
 
 def get_stations():
     s = requests.Session()
     s.headers.update({'Host': 'www.ceazamet.cl'})
     req = s.get(url, params=Station.params)
-    io = strio(req.text)
+    io = StringIO(req.text)
     stations = [Station(*l[:7]) for l in csv.reader(io) if l[0][0] != '#']
     io.close()
 
@@ -136,7 +145,7 @@ def get_stations():
         while True:
             print(st.name)
             req = s.get(url, params=sensor(st))
-            io = strio(req.text)
+            io = StringIO(req.text)
             try:
                 st.fields = [
                     Field(*l[:7]) for l in csv.reader(io) if l[0][0] != '#'
@@ -149,11 +158,11 @@ def get_stations():
     return stations
 
 
-def get_field(field, stations):
+def get_field(field, stations, raw=False):
     for st in stations:
         fields = [f for f in st.fields if f.field == field]
         for f in fields:
-            d = fetch(st, f)
+            d = fetch_raw(st,f) if raw else fetch(st, f)
             try:
                 D = D.join(d, how="outer")
             except NameError:
@@ -205,7 +214,7 @@ def get_interval(stations):
             ds = date.strftime('%Y-%m-%d')
             params = {'s_cod': st.fields[0].sensor_code, 'fi': ds, 'ff': ds}
             r = s.get(raw_url, params=params)
-            io = csv.reader(strio(r.text))
+            io = csv.reader(StringIO(r.text))
             try:
                 dt = np.diff(
                     np.array(
@@ -219,6 +228,44 @@ def get_interval(stations):
                 print('{} - {}'.format(st.name, dt))
                 break
     return iv
+
+
+def fetch_raw(station, field=None):
+    s = requests.Session()
+    params = {'fi':'2000-01-01', 'ff':'2020-01-01'}
+    for f in ([field] if field else station.fields):
+        params.update({'s_cod': f.sensor_code})
+        trials = 10
+        while trials:
+            trials -= 1
+            r = s.get(raw_url, params=params)
+            reader = Reader(r.text)
+            try:
+                d = pd.read_csv(
+                    reader,
+                    index_col = 1,
+                    parse_dates = True
+                )
+            except:
+                print('error: {} from station {}'.format(f.field, station.name))
+            else:
+                # hack for lines from webservice ending in comma - pandas adds additional column
+                # and messes up names
+                cols = d.columns
+                d = d.iloc[:,1:4]
+                d.columns = pd.MultiIndex.from_arrays(
+                    np.r_['0,2', np.repeat([[station.code], [f.field], [f.sensor_code], [f.elev]], 3, 1), cols[-3:]],
+                    names=['station', 'field', 'code', 'elev', 'aggr']
+                )
+                try:
+                    D = D.join(d, how="outer")
+                except NameError:
+                    D = d
+                reader.close()
+                print('fetched {} from station {}'.format(f.field, station.name))
+                break
+    return D
+
 
 
 if __name__ == "__main__":
