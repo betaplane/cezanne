@@ -12,21 +12,15 @@ from mapping import basemap
 from interpolation import interp4D
 from astropy.stats import LombScargle
 from scipy.integrate import quad
+from datetime import datetime
 
 
 D = pd.HDFStore('../../data/tables/station_data_new.h5')
 rs = D['rs_w'].xs('prom', level='aggr', axis=1)
+R = pd.HDFStore('../../data/tables/station_data_raw.h5')
+rr = R['rs_w'].xs('avg', level='aggr', axis=1)
 sta = D['sta']
 T = hh.extract(D['ta_c'], 'prom', C2K=True)
-
-
-def stationize(df):
-    c = df.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        c.columns = df.columns.get_level_values('station')
-    elif isinstance(df.index, pd.MultiIndex):
-        c.index = df.index.get_level_values('station')
-    return c
 
 def tx(d, freq='D'):
     return np.array(d.index,dtype='datetime64[{}]'.format(freq)).astype(float), d.as_matrix().flatten()
@@ -75,6 +69,26 @@ class observer(ep.Observer):
         self.date = t
         self.sun.compute(self)
         return self.sidereal_time() - self.sun.ra, self.sun.dec
+
+    def period_params(self, p):
+        self.date = p.start_time + (p.end_time-p.start_time) * .5
+        self.sun.compute(self)
+        dec = self.sun.dec
+        dist = self.sun.earth_distance
+        self.date = p.start_time
+        self.sun.compute(self)
+        h1 = self.sidereal_time() - self.sun.ra
+        # if h1>np.pi: h1 -= 2*np.pi
+        # if h1<np.pi: h1 += 2*np.pi
+        self.date = p.end_time
+        self.sun.compute(self)
+        h2 = self.sidereal_time() - self.sun.ra
+        # if h2>np.pi: h2 -= 2*np.pi
+        # if h2<np.pi: h2 += 2*np.pi
+        # return h1, h2, dec, dist
+        return (h1+np.pi)%(2*np.pi)-np.pi, (h2+np.pi)%(2*np.pi)-np.pi, dec, dist
+
+
 
 
 # extra-terrestrial radiation
@@ -150,33 +164,40 @@ def ETRa2(stations, t):
         return obs.S0 * d**-2 * mu
     return pd.DataFrame(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]), index=t)
 
-class station_time_intervals(object):
-    def __init__(self, t, sta, freq='60T', delta=pd.Timedelta(4,'h')):
-        self.index = pd.PeriodIndex(t+delta, freq=freq)
-        self.sta = sta
-    def __getitem__(self, key):
-       return self.index - pd.Timedelta(sta['interval'][key], 's')
 
 
-def ETRaN(stations, index):
-    t = station_time_intervals(index, stations, pd.Timedelta(4,'H'))
-    def per_station(code, station):
-        print(code)
-        obs = observer(station)
-        # here, shift the time vector by each station's averaging period so it contains the interval endpoints
-        # add 1/2 hour to use midpoints (i.e. 270 mins together with UTC shift)
-        te = t + np.timedelta64(270, 'm') - np.timedelta64(int(station.interval), 's')
-        alt, d = np.array([obs.alt_dist(i) for i in te]).T
+def clear_sky(station, press):
+    time = pd.date_range(start='2004-01-01', end=datetime.utcnow().date(), freq='H')
+    print(station.name)
+    obs = observer(station)
+    def f(t):
+        alt, d = obs.alt_dist(t)
         # mu = cos zenith = sin alt
         mu = np.sin(alt)
-        mu[mu<0] = 0
-        return obs.S0 * d**-2 * mu
-    return pd.DataFrame(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]), index=t)
+        if mu<0: return 0
+        Ra = obs.S0 * d**-2 * mu
+        return Ra * np.exp( -0.00018 * press / mu)
+    return pd.DataFrame([f(t) for t in time], index=time-pd.Timedelta(4,'H'))
 
 
+def clear_sky_I(station, press):
+    time = pd.period_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
+    print(station.name)
+    obs = observer(station)
+    def rad(h,lat,dec,dist,press):
+        mu = np.sin(lat) * np.sin(dec) + np.cos(lat) * np.cos(dec) * np.cos(h)
+        if mu<=0: return 0
+        return obs.S0 * dist**-2 * mu * np.exp( -0.00018 * press / mu)
+    def f(p):
+        h1, h2, dec, dist = obs.period_params(p)
+        ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
+        if h2<-ws or h1>ws: return 0
+        return quad(rad, max(-ws,h1), min(ws,h2), args=(obs.lat, dec, dist, press))[0]
+    return pd.DataFrame([f(p) for p in time], index=time)
 
 
-
+P = pd.HDFStore('../../data/tables/pressure.h5')
+pm = P['p']['5'].mean()
 
 r = stationize(rs.loc[:,'5':'5'].xs('2',level='elev',axis=1))
 Rm = ETRaDay(sta.loc['5':'5'], pd.date_range('2004-01-01T12','2017-03-01T12', freq='D'))
