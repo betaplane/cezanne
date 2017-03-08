@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import requests, csv, re
+import requests, csv
 from io import StringIO
 from dateutil.parser import parse
 from datetime import datetime, timedelta
@@ -251,7 +251,7 @@ def fetch_raw(station, field=None):
             else:
                 # hack for lines from webservice ending in comma - pandas adds additional column
                 # and messes up names
-                cols = d.columns
+                cols = [x.lstrip() for x in d.columns]
                 d = d.iloc[:,1:4]
                 d.columns = pd.MultiIndex.from_arrays(
                     np.r_['0,2', np.repeat([[station.code], [f.field], [f.sensor_code], [f.elev]], 3, 1), cols[-3:]],

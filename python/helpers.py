@@ -176,3 +176,25 @@ def nearest(grid_lon, grid_lat, lon, lat):
     d = dv(grid_lon, grid_lat)
     lat_idx, lon_idx = np.unravel_index(np.argmin(d), grid_lon.shape)
     return lat_idx, lon_idx, d[lat_idx, lon_idx]
+
+def avg(df, interval):
+    if interval=='month':
+        m = df.groupby((df.index.year,df.index.month)).mean()
+        m.index = pd.DatetimeIndex(['{}-{}'.format(*i) for i in m.index.tolist()])
+    if interval=='hour':
+        m = df.groupby((df.index.date,df.index.hour)).mean()
+        m.index = pd.DatetimeIndex(['{}T{}:00'.format(*i) for i in m.index.tolist()])
+    return m
+
+
+def stationize(df):
+    """
+    Return a copy of a DataFrame with only station codes as labels (either columns or index).
+    Careful with multiple columns for same station.
+    """
+    c = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        c.columns = df.columns.get_level_values('station')
+    elif isinstance(df.index, pd.MultiIndex):
+        c.index = df.index.get_level_values('station')
+    return c

@@ -167,7 +167,7 @@ def ETRa2(stations, t):
 
 
 def clear_sky(station, press):
-    time = pd.date_range(start='2004-01-01', end=datetime.utcnow().date(), freq='H')
+    time = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
     print(station.name)
     obs = observer(station)
     def f(t):
@@ -179,25 +179,34 @@ def clear_sky(station, press):
         return Ra * np.exp( -0.00018 * press / mu)
     return pd.DataFrame([f(t) for t in time], index=time-pd.Timedelta(4,'H'))
 
+def clear_sky_param1(press, mu):
+    return np.exp( -0.00018 * press / mu)
 
-def clear_sky_I(station, press):
-    time = pd.period_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
+def clear_sky_I(station, param):
+    """
+    Numerical integration of hourly intervals of clear sky radiation.
+    """
+    time = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
+    dh = np.pi/12
     print(station.name)
     obs = observer(station)
-    def rad(h,lat,dec,dist,press):
+    def rad(h,lat,dec,dist):
         mu = np.sin(lat) * np.sin(dec) + np.cos(lat) * np.cos(dec) * np.cos(h)
-        if mu<=0: return 0
-        return obs.S0 * dist**-2 * mu * np.exp( -0.00018 * press / mu)
-    def f(p):
-        h1, h2, dec, dist = obs.period_params(p)
+        return obs.S0 * dist**-2 * mu * param(mu)
+    def f(t):
+        h, dec, dist = obs.allparams(t)
+        h = (h + np.pi) % (2*np.pi) - np.pi
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
-        if h2<-ws or h1>ws: return 0
-        return quad(rad, max(-ws,h1), min(ws,h2), args=(obs.lat, dec, dist, press))[0]
-    return pd.DataFrame([f(p) for p in time], index=time)
+        if h + dh < -ws or h > ws: return 0
+        return quad(rad, max(-ws, h), min(ws, h + dh), args=(obs.lat, dec, dist))[0] / dh
+    return pd.DataFrame([f(t) for t in time], index=time-pd.Timedelta(210,'m'))
+
 
 
 P = pd.HDFStore('../../data/tables/pressure.h5')
 pm = P['p']['5'].mean()
+st = sta.loc['5']
+csI = clear_sky_I(st, partial(clear_sky_param1, pm))
 
 r = stationize(rs.loc[:,'5':'5'].xs('2',level='elev',axis=1))
 Rm = ETRaDay(sta.loc['5':'5'], pd.date_range('2004-01-01T12','2017-03-01T12', freq='D'))
