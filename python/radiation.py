@@ -14,13 +14,16 @@ from astropy.stats import LombScargle
 from scipy.integrate import quad
 from datetime import datetime
 
+# solar noon offset from UTC is around 4h 45 min in the area
+Noon = pd.Timedelta(-285, 'm')
 
 D = pd.HDFStore('../../data/tables/station_data_new.h5')
 rs = D['rs_w'].xs('prom', level='aggr', axis=1)
 R = pd.HDFStore('../../data/tables/station_data_raw.h5')
-rr = R['rs_w'].xs('avg', level='aggr', axis=1)
+# rr = R['rs_w'].xs('avg', level='aggr', axis=1)
+# T = hh.extract(D['ta_c'], 'prom', C2K=True)
+
 sta = D['sta']
-T = hh.extract(D['ta_c'], 'prom', C2K=True)
 
 def tx(d, freq='D'):
     return np.array(d.index,dtype='datetime64[{}]'.format(freq)).astype(float), d.as_matrix().flatten()
@@ -28,6 +31,11 @@ def tx(d, freq='D'):
 def LS(df):
     d = df.asfreq('1D')
     return pd.DataFrame(LombScargle(*tx(rf)).model(tx(d)[0], 1/365.24), index=d.index, columns=df.columns)
+
+def tshift(df, delta):
+    d = df.copy()
+    d.index = pd.DatetimeIndex(d.index) + pd.Timedelta(delta)
+    return d
 
 
 class observer(ep.Observer):
@@ -41,14 +49,18 @@ class observer(ep.Observer):
         self.lat = station.lat * self.rad
         self.elevation = station.elev
 
-    def allparams(self, t):
+    def a(self, h):
+        "Shift hour angle to between [-pi, pi["
+        return (h + np.pi) % (2 * np.pi) - np.pi
+
+    def all_params(self, t):
         """
         Returns hour angle, sun's declination, sun-earth distance in AU.
         See https://en.wikipedia.org/wiki/Hour_angle.
         """
         self.date = t
         self.sun.compute(self)
-        return self.sidereal_time() - self.sun.ra, self.sun.dec, self.sun.earth_distance
+        return self.a(self.sidereal_time() - self.sun.ra), self.sun.dec, self.sun.earth_distance
 
     def alt_dist(self, t):
         """
@@ -69,25 +81,6 @@ class observer(ep.Observer):
         self.date = t
         self.sun.compute(self)
         return self.sidereal_time() - self.sun.ra, self.sun.dec
-
-    def period_params(self, p):
-        self.date = p.start_time + (p.end_time-p.start_time) * .5
-        self.sun.compute(self)
-        dec = self.sun.dec
-        dist = self.sun.earth_distance
-        self.date = p.start_time
-        self.sun.compute(self)
-        h1 = self.sidereal_time() - self.sun.ra
-        # if h1>np.pi: h1 -= 2*np.pi
-        # if h1<np.pi: h1 += 2*np.pi
-        self.date = p.end_time
-        self.sun.compute(self)
-        h2 = self.sidereal_time() - self.sun.ra
-        # if h2>np.pi: h2 -= 2*np.pi
-        # if h2<np.pi: h2 += 2*np.pi
-        # return h1, h2, dec, dist
-        return (h1+np.pi)%(2*np.pi)-np.pi, (h2+np.pi)%(2*np.pi)-np.pi, dec, dist
-
 
 
 
@@ -125,9 +118,7 @@ def ETRa1(stations, index):
         obs = observer(station)
         # this is to account for the averaging period in the database
         te = t + np.timedelta64(4, 'h') - np.timedelta64(int(station.interval), 's')
-        w, dec, dist = np.array([obs.allparams(i) for i in te]).T
-        w[w > np.pi] -= 2 * np.pi
-        w[w < -np.pi] += 2 * np.pi
+        w, dec, dist = np.array([obs.all_params(i) for i in te]).T
         # sunset hour angle
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
         # mask, where shift should ensure that intervals containing sunrise or -set are retained
@@ -179,45 +170,95 @@ def clear_sky(station, press):
         return Ra * np.exp( -0.00018 * press / mu)
     return pd.DataFrame([f(t) for t in time], index=time-pd.Timedelta(4,'H'))
 
-def clear_sky_param1(press, mu):
-    return np.exp( -0.00018 * press / mu)
+# Lhomme, Vacher, and Rocheteau 2007
+def clear_sky_param1(p, mu):
+    "p in [hPa]"
+    return np.exp( -1.8e-4 * p / mu)
 
-def clear_sky_I(station, param):
+# Meyers and Dale 1983 - without precipitable water and aerosol
+def clear_sky_param2(p, mu):
+    "p in [hPa]"
+    # optical air mass
+    m = 35 * (1224 * mu**2 + 1)**(-.5)
+    return 1.021 - .084 * (m * (949e-6 * p * .051))**(-.5)
+
+
+def clear_sky_I(station, time, param):
     """
-    Numerical integration of hourly intervals of clear sky radiation.
+    Numerical integration of <= daily intervals with different clear sky parameterizations.
+    The logic hopefully works for arbitrary intervals, but it's not thouroughly thought through
+    or tested.
+    Need to use UTC. Index times of returned DataFrame are beginning of intervals.
     """
-    time = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
-    dh = np.pi/12
+    # interval of integral in terms of hour angle
+    dh = 2 * np.pi * time.freq.delta / pd.Timedelta('1D')
     print(station.name)
     obs = observer(station)
     def rad(h,lat,dec,dist):
         mu = np.sin(lat) * np.sin(dec) + np.cos(lat) * np.cos(dec) * np.cos(h)
         return obs.S0 * dist**-2 * mu * param(mu)
     def f(t):
-        h, dec, dist = obs.allparams(t)
-        h = (h + np.pi) % (2*np.pi) - np.pi
+        h, dec, dist = obs.all_params(t)
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
-        if h + dh < -ws or h > ws: return 0
-        return quad(rad, max(-ws, h), min(ws, h + dh), args=(obs.lat, dec, dist))[0] / dh
-    return pd.DataFrame([f(t) for t in time], index=time-pd.Timedelta(210,'m'))
+        H = obs.a(h + dh)
+        R = 0
+        # this tests if the interval includes the nightly jump from positive to negative hour angles
+        # *and* if the endpoint of the interval is after sunrise
+        # if yes, add the interval between sunrise and endpoint (the 'normal case' logic already computes
+        # between startpoint and sunset)
+        # in case of daily interval, this will be the whole day
+        if H < h and H > -ws:
+            R = quad(rad, -ws, min(ws, H), args=(obs.lat, dec, dist))[0] / dh
+        if H < -ws or h > ws:
+            return R
+        return R + quad(rad, max(-ws, h), min(ws, H), args=(obs.lat, dec, dist))[0] / dh
+    return pd.Series([f(t) for t in time], index=time, name=station.name)
 
 
 
-P = pd.HDFStore('../../data/tables/pressure.h5')
-pm = P['p']['5'].mean()
-st = sta.loc['5']
-csI = clear_sky_I(st, partial(clear_sky_param1, pm))
+def Rso1(Ra, z):
+    "Daily clear sky only."
+    return (.75 + 2e-5 * z) * Ra
 
-r = stationize(rs.loc[:,'5':'5'].xs('2',level='elev',axis=1))
+def Rso2(Ra, mu, p):
+    "Hourly clear sky, p in hPa"
+    return Ra * np.exp( -0.00018*p / mu)
+
+
+r = hh.stationize(rs.loc[:,'5':'5'].xs('2',level='elev',axis=1))
 Rm = ETRaDay(sta.loc['5':'5'], pd.date_range('2004-01-01T12','2017-03-01T12', freq='D'))
 Ra = ETRa1(sta.loc['5':'5'], rs.index)
 # Ra = D['Ra_w']
 m = Ra['mask']
 
-def center(df):
-    d = df.copy()
-    d.index = pd.DatetimeIndex(d.index) + pd.Timedelta('12H')
-    return d
+
+P = pd.HDFStore('../../data/tables/pressure.h5')
+pm = P['p']['5'].mean()
+st = sta.loc['5']
+
+# b0,b1 = P['fit']
+# z = sta.loc['5']['elev']
+# p = np.exp(b0 + b1*z)
+# p2 = 1013 * (1 - 0.0065 * z / 293) ** 5.26
+
+# cs1 = Rso1(Rm, z)
+cs2 = tshift(Rso2(Ra['Ra'], Ra['mu'], pm), '30m')
+
+hours = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
+days = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='D')
+csI = clear_sky_I(st, hours, partial(clear_sky_param1, pm))
+csI2 = clear_sky_I(st, hours, partial(clear_sky_param2, pm))
+csId = clear_sky_I(st, days, partial(clear_sky_param1, pm))
+
+D = pd.DataFrame(index=hours)
+for n, s in sta.iterrows():
+    try:
+        p = press[n]
+    except:
+        p = 1013 * (1 - 0.0065 * s.elev / 293) ** 5.26
+    df = clear_sky_I(s, hours, partial(clear_sky_param1, p))
+    D = pd.concat((D,df), axis=1)
+
 
 def locMax(df, window):
     ro = df.rolling(window).apply(np.argmax)
@@ -236,27 +277,8 @@ def locMaxDay(RaDay, rs, mask):
     ratio = ratio[ratio<1].asfreq('1D')
     return dm, ratio.loc[locMax(ratio, 10)]
 
-rm, ra = locMaxDay(Rm, r, m)
-rm = center(rm)
-
-def Rso1(Ra, z):
-    "Daily clear sky only."
-    return (.75 + 2e-5 * z) * Ra
-
-P = pd.HDFStore('../../data/tables/pressure.h5')
-b0,b1 = P['fit']
-z = sta.loc['5']['elev']
-p = np.exp(b0 + b1*z)
-p2 = 1013 * (1 - 0.0065 * z / 293) ** 5.26
-
-cs1 = center(Rso1(Rm, z))
-
-def Rso2(Ra, mu, p):
-    "Hourly clear sky, p in hPa"
-    return Ra * np.exp( -0.00018*p / mu)
-
-cs2 = Rso2(Ra['Ra'], Ra['mu'], p)
-
+# rm, ra = locMaxDay(Rm, r, m)
+# rm = tshift(rm, '12H')
 
 def regression(rm, Ra):
     """Regress clear sky radiation onto theoretical extraterrestrial radiation.
