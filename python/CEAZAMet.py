@@ -159,17 +159,17 @@ def get_stations():
 
 
 def get_field(field, stations, raw=False):
+    D = {} if raw else pd.DataFrame()
     for st in stations:
         fields = [f for f in st.fields if f.field == field]
         for f in fields:
-            d = fetch_raw(st,f) if raw else fetch(st, f)
-            try:
-                D = D.join(d, how="outer")
-            except NameError:
-                D = d
+            if raw:
+                D[(st.code, f.sensor_code)] = fetch_raw(st, f)
+            else:
+                D = D.join(fetch(st, f), how="outer")
         if not fields:
-            print(u"{} doesn't have {}".format(st.name, field))
-    return D.sort_index(axis=1)
+            print("{} doesn't have {}".format(st.name, field))
+    return D if raw else D.sort_index(axis=1)
 
 
 def stations_with(stations, **kw):
@@ -230,41 +230,38 @@ def get_interval(stations):
     return iv
 
 
-def fetch_raw(station, field=None):
+def fetch_raw(station, f):
+    """
+    Needs to be called with a single Field instance.
+    """
     s = requests.Session()
-    params = {'fi':'2000-01-01', 'ff':'2020-01-01'}
-    for f in ([field] if field else station.fields):
-        params.update({'s_cod': f.sensor_code})
-        trials = 10
-        while trials:
-            trials -= 1
-            r = s.get(raw_url, params=params)
-            reader = Reader(r.text)
-            try:
-                d = pd.read_csv(
-                    reader,
-                    index_col = 1,
-                    parse_dates = True
-                )
-            except:
-                print('error: {} from station {}'.format(f.field, station.name))
-            else:
-                # hack for lines from webservice ending in comma - pandas adds additional column
-                # and messes up names
-                cols = [x.lstrip() for x in d.columns]
-                d = d.iloc[:,1:4]
-                d.columns = pd.MultiIndex.from_arrays(
-                    np.r_['0,2', np.repeat([[station.code], [f.field], [f.sensor_code], [f.elev]], 3, 1), cols[-3:]],
-                    names=['station', 'field', 'code', 'elev', 'aggr']
-                )
-                try:
-                    D = D.join(d, how="outer")
-                except NameError:
-                    D = d
-                reader.close()
-                print('fetched {} from station {}'.format(f.field, station.name))
-                break
-    return D
+    params = {'fi':'2000-01-01', 'ff':'2020-01-01', 's_cod': f.sensor_code}
+    trials = 10
+    while trials:
+        trials -= 1
+        r = s.get(raw_url, params=params)
+        reader = Reader(r.text)
+        try:
+            d = pd.read_csv(
+                reader,
+                index_col = 1,
+                parse_dates = True
+            )
+        except:
+            print('error: {} from station {}'.format(f.field, station.name))
+        else:
+            # hack for lines from webservice ending in comma - pandas adds additional column
+            # and messes up names
+            cols = [x.lstrip() for x in d.columns]
+            d = d.iloc[:,1:4]
+            d.columns = pd.MultiIndex.from_arrays(
+                np.r_['0,2', np.repeat([[station.code], [f.field], [f.sensor_code], [f.elev]], 3, 1), cols[-3:]],
+                names=['station', 'field', 'code', 'elev', 'aggr']
+            )
+            reader.close()
+            print('fetched {} from station {}'.format(f.field, station.name))
+            break
+    return d
 
 
 

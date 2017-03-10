@@ -20,7 +20,7 @@ Noon = pd.Timedelta(-285, 'm')
 D = pd.HDFStore('../../data/tables/station_data_new.h5')
 rs = D['rs_w'].xs('prom', level='aggr', axis=1)
 R = pd.HDFStore('../../data/tables/station_data_raw.h5')
-# rr = R['rs_w'].xs('avg', level='aggr', axis=1)
+rr = R['rs_w'].xs('avg', level='aggr', axis=1)
 # T = hh.extract(D['ta_c'], 'prom', C2K=True)
 
 sta = D['sta']
