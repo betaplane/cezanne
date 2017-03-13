@@ -14,16 +14,6 @@ from astropy.stats import LombScargle
 from scipy.integrate import quad
 from datetime import datetime
 
-# solar noon offset from UTC is around 4h 45 min in the area
-Noon = pd.Timedelta(-285, 'm')
-
-D = pd.HDFStore('../../data/tables/station_data_new.h5')
-rs = D['rs_w'].xs('prom', level='aggr', axis=1)
-R = pd.HDFStore('../../data/tables/station_data_raw.h5')
-rr = R['rs_w'].xs('avg', level='aggr', axis=1)
-# T = hh.extract(D['ta_c'], 'prom', C2K=True)
-
-sta = D['sta']
 
 def tx(d, freq='D'):
     return np.array(d.index,dtype='datetime64[{}]'.format(freq)).astype(float), d.as_matrix().flatten()
@@ -82,6 +72,10 @@ class observer(ep.Observer):
         self.sun.compute(self)
         return self.sidereal_time() - self.sun.ra, self.sun.dec
 
+    def azim_alt(self, t):
+        self.date = t
+        self.sun.compute(self)
+        return self.sun.az, self.sun.alt
 
 
 # extra-terrestrial radiation
@@ -225,39 +219,7 @@ def Rso2(Ra, mu, p):
     return Ra * np.exp( -0.00018*p / mu)
 
 
-r = hh.stationize(rs.loc[:,'5':'5'].xs('2',level='elev',axis=1))
-Rm = ETRaDay(sta.loc['5':'5'], pd.date_range('2004-01-01T12','2017-03-01T12', freq='D'))
-Ra = ETRa1(sta.loc['5':'5'], rs.index)
-# Ra = D['Ra_w']
-m = Ra['mask']
 
-
-P = pd.HDFStore('../../data/tables/pressure.h5')
-pm = P['p']['5'].mean()
-st = sta.loc['5']
-
-# b0,b1 = P['fit']
-# z = sta.loc['5']['elev']
-# p = np.exp(b0 + b1*z)
-# p2 = 1013 * (1 - 0.0065 * z / 293) ** 5.26
-
-# cs1 = Rso1(Rm, z)
-cs2 = tshift(Rso2(Ra['Ra'], Ra['mu'], pm), '30m')
-
-hours = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
-days = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='D')
-csI = clear_sky_I(st, hours, partial(clear_sky_param1, pm))
-csI2 = clear_sky_I(st, hours, partial(clear_sky_param2, pm))
-csId = clear_sky_I(st, days, partial(clear_sky_param1, pm))
-
-D = pd.DataFrame(index=hours)
-for n, s in sta.iterrows():
-    try:
-        p = press[n]
-    except:
-        p = 1013 * (1 - 0.0065 * s.elev / 293) ** 5.26
-    df = clear_sky_I(s, hours, partial(clear_sky_param1, p))
-    D = pd.concat((D,df), axis=1)
 
 
 def locMax(df, window):
@@ -277,8 +239,6 @@ def locMaxDay(RaDay, rs, mask):
     ratio = ratio[ratio<1].asfreq('1D')
     return dm, ratio.loc[locMax(ratio, 10)]
 
-# rm, ra = locMaxDay(Rm, r, m)
-# rm = tshift(rm, '12H')
 
 def regression(rm, Ra):
     """Regress clear sky radiation onto theoretical extraterrestrial radiation.
@@ -353,12 +313,6 @@ def itpl():
     Gi = interp4D((x, y), GP, ij, sta.index, t, method='linear')
 
 
-# S = pd.HDFStore('../../data/tables/LinearLinear.h5')
-# R = pd.HDFStore('../../data/tables/4Dfields.h5')
-# Z = S['z']['d02']
-# T2 = S['T2']['d02']
-# T4D = R['temp']
-# G4D = R['ghgt']
 
 def temp_AGL(T,G,Z,z):
     "Compute mean T difference between 'z' meters above ground and T2 from model data (model ground level)."
@@ -417,3 +371,60 @@ def LW_isothermal(Tr, N):
 # Tr = T.apply(lambda c:c+a[c.name],0)
 # N = cloud_N(rs, Ra*b['b'])
 # Li = LW_isothermal(Tr, N)
+
+if __name__ == "__main__":
+    # solar noon offset from UTC is around 4h 45 min in the area
+    Noon = pd.Timedelta(-285, 'm')
+
+    D = pd.HDFStore('../../data/tables/station_data_new.h5')
+    rs = D['rs_w'].xs('prom', level='aggr', axis=1)
+    R = pd.HDFStore('../../data/tables/station_data_raw.h5')
+    rr = R['rs_w'].xs('avg', level='aggr', axis=1)
+    # T = hh.extract(D['ta_c'], 'prom', C2K=True)
+
+    sta = D['sta']
+
+    r = hh.stationize(rs.loc[:,'5':'5'].xs('2',level='elev',axis=1))
+    Rm = ETRaDay(sta.loc['5':'5'], pd.date_range('2004-01-01T12','2017-03-01T12', freq='D'))
+    Ra = ETRa1(sta.loc['5':'5'], rs.index)
+    # Ra = D['Ra_w']
+    m = Ra['mask']
+
+
+    P = pd.HDFStore('../../data/tables/pressure.h5')
+    pm = P['p']['5'].mean()
+    st = sta.loc['5']
+
+    # b0,b1 = P['fit']
+    # z = sta.loc['5']['elev']
+    # p = np.exp(b0 + b1*z)
+    # p2 = 1013 * (1 - 0.0065 * z / 293) ** 5.26
+
+    # cs1 = Rso1(Rm, z)
+    cs2 = tshift(Rso2(Ra['Ra'], Ra['mu'], pm), '30m')
+
+    hours = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
+    days = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='D')
+    csI = clear_sky_I(st, hours, partial(clear_sky_param1, pm))
+    csI2 = clear_sky_I(st, hours, partial(clear_sky_param2, pm))
+    csId = clear_sky_I(st, days, partial(clear_sky_param1, pm))
+
+    D = pd.DataFrame(index=hours)
+    for n, s in sta.iterrows():
+        try:
+            p = press[n]
+        except:
+            p = 1013 * (1 - 0.0065 * s.elev / 293) ** 5.26
+        df = clear_sky_I(s, hours, partial(clear_sky_param1, p))
+        D = pd.concat((D,df), axis=1)
+
+
+# rm, ra = locMaxDay(Rm, r, m)
+# rm = tshift(rm, '12H')
+
+# S = pd.HDFStore('../../data/tables/LinearLinear.h5')
+# R = pd.HDFStore('../../data/tables/4Dfields.h5')
+# Z = S['z']['d02']
+# T2 = S['T2']['d02']
+# T4D = R['temp']
+# G4D = R['ghgt']
