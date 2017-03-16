@@ -30,12 +30,11 @@ class angle(object):
             z = self.z[self.sj, self.si]
         except:
             raise Exception('{} outside map boundaries'.format(station.name))
-        dz = z - station.elev
-        print('elevation difference grid - station: {:.0f} m'.format(dz))
+        self.dz = z - station.elev
+        print('{}: elevation difference grid - station: {:.0f} m'.format(station.name, self.dz))
         self.dist = ((self._xy[0] - sx)**2 + (self._xy[1] - sy)**2)**.5
         self.angle1 = np.arctan((self.z - z) / self.dist)
         self.angle2 = np.arctan((self.z - station.elev) / self.dist)
-        return dz
 
     def station_coords(self, station=None, get=True):
         if station is not None:
@@ -91,24 +90,19 @@ class angle(object):
                 ix = (i >= 0) & (i <= self._i[-1])
                 return i[ix], self._j[ix]
 
-    def max_ang(self, ang, dn):
-        try:
-            i, j = self.path(ang)
-            # remember i, j reversed
-            d = self.dist[j, i]
-            n = np.argmin(d)
-            a = self.angle1[j, i]
-            def ang_dist(ang):
-                a = ang[j,i]
-                m1 = np.argmax(a[n+1+dn:])
-                m2 = np.argmax(a[:n-dn])
-                if ang < np.pi/8:
-                    return (a[n+1+dn+m1], a[m2], d[n+1+dn+m1], d[m2])
-                else:
-                    return (a[m2], a[n+1+dn+m1], d[m2], d[n+1+dn+m1])
-            return np.array([ang_dist(a) for a in [self.angle1, self.angle2]])
-        except:
-            return np.ones(8) * np.nan
+    def max_alt(self, ang, dn):
+        i, j = self.path(ang)
+        d = self.dist[j, i] # remember i, j reversed
+        n = np.argmin(d)
+        def ang_dist(angle):
+            a = angle[j,i]
+            m1 = np.argmax(a[n+1+dn:])
+            m2 = np.argmax(a[:n-dn])
+            if ang < np.pi/8:
+                return (a[n+1+dn+m1], a[m2], d[n+1+dn+m1], d[m2])
+            else:
+                return (a[m2], a[n+1+dn+m1], d[m2], d[n+1+dn+m1])
+        return np.array([ang_dist(a) for a in [self.angle1, self.angle2]]).flatten()
 
     def circle(self, res, station=None, from_north=True, dx=2):
         """
@@ -123,32 +117,34 @@ class angle(object):
         """
         if station is not None:
             try:
-                dz = self.set_station(station)
+                print('Setting station {}.'.format(station.name))
+                self.set_station(station)
             except Exception as excp:
                 print(excp)
-                return pd.DataFrame(), np.nan
-            else:
-                print('Setting station {}.'.format(station.name))
+                return pd.DataFrame()
 
         da = 2*np.pi / res * np.arange(res/2)
-        c = np.array([self.max_ang(a, dx) for a in da]).T.flatten()
+        c = np.array([self.max_alt(a, dx) for a in da]).T.flatten()
         return pd.DataFrame(
             c.reshape((4, res)).T,
             columns=['alt_grid', 'dist_grid', 'alt_st', 'dist_st'],
             index=np.r_[da,da+np.pi]
-        ), dz
+        )
 
 
 if __name__ == "__main__":
-    ds = gdal.Open('../../data/geo/merged.tif')
+    # ds = gdal.Open('../../data/geo/merged.tif')
     D = pd.HDFStore('../../data/tables/station_data_new.h5', 'r')
     sta = D['sta']
     st = sta.loc['5']
 
-    A = angle(ds)
-    circles = [(c, A.circle(360, st)) for c, st in sta.iterrows()]
-    P = pd.Panel(dict([a[:2] for a in circles]))
-    dz = pd.Series([a[2] for a in circles], index=[a[0] for a in circles])
+    # A = angle(ds)
+    # c = A.circle(360, st)
+    # circles = [(c, A.circle(360, st)) for c, st in sta.iterrows()]
+    # P = pd.Panel(dict([a for a in circles]))
     R = pd.HDFStore('../../data/tables/radiation.h5')
-    R['shading'] = P
-    R.close()
+    # R['shading'] = P
+    # R.close()
+    sha = R['shading']
+
+

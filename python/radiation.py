@@ -16,11 +16,18 @@ from datetime import datetime
 
 
 def tx(d, freq='D'):
-    return np.array(d.index,dtype='datetime64[{}]'.format(freq)).astype(float), d.as_matrix().flatten()
+    return np.array(
+        d.index, dtype='datetime64[{}]'.format(freq)).astype(
+            float), d.as_matrix().flatten()
+
 
 def LS(df):
     d = df.asfreq('1D')
-    return pd.DataFrame(LombScargle(*tx(rf)).model(tx(d)[0], 1/365.24), index=d.index, columns=df.columns)
+    return pd.DataFrame(
+        LombScargle(*tx(rf)).model(tx(d)[0], 1 / 365.24),
+        index=d.index,
+        columns=df.columns)
+
 
 def tshift(df, delta):
     d = df.copy()
@@ -32,6 +39,7 @@ class observer(ep.Observer):
     # https://en.wikipedia.org/wiki/Solar_constant
     S0 = 1361
     rad = np.pi / 180
+
     def __init__(self, station):
         super(ep.Observer, self).__init__()
         self.sun = ep.Sun()
@@ -43,14 +51,15 @@ class observer(ep.Observer):
         "Shift hour angle to between [-pi, pi["
         return (h + np.pi) % (2 * np.pi) - np.pi
 
-    def all_params(self, t):
+    def h_dec_dist(self, t):
         """
         Returns hour angle, sun's declination, sun-earth distance in AU.
         See https://en.wikipedia.org/wiki/Hour_angle.
         """
         self.date = t
         self.sun.compute(self)
-        return self.a(self.sidereal_time() - self.sun.ra), self.sun.dec, self.sun.earth_distance
+        return self.a(self.sidereal_time() -
+                      self.sun.ra), self.sun.dec, self.sun.earth_distance
 
     def alt_dist(self, t):
         """
@@ -67,52 +76,64 @@ class observer(ep.Observer):
         self.sun.compute(self)
         return self.sun.dec, self.sun.earth_distance
 
-    def angle_decl(self, t):
+    def all_params(self, t):
         self.date = t
         self.sun.compute(self)
-        return self.sidereal_time() - self.sun.ra, self.sun.dec
-
-    def azim_alt(self, t):
-        self.date = t
-        self.sun.compute(self)
-        return self.sun.az, self.sun.alt
+        return self.a(
+            self.sidereal_time() - self.sun.ra
+        ), self.sun.dec, self.sun.earth_distance, self.sun.az
 
 
 # extra-terrestrial radiation
 # Allen, R.G., Pereira, L.S., Raes, D., Smith, M., 1998. FAO Irrigation and drainage paper No. 56.
 # Rome: Food and Agriculture Organization of the United Nations 56, 97–156.
 
+
 def ETRaDay(stations, index):
     "Daily average extraterrestrial radiation from explicit integral over hour angle (as in Allen et al.)."
+
     def per_station(code, station):
         print(code)
         obs = observer(station)
         dec, dist = np.array([obs.decl(i) for i in index]).T
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
-        return obs.S0/np.pi * dist**-2 * (ws * np.sin(obs.lat) * np.sin(dec) + np.cos(obs.lat) * np.cos(dec) * np.sin(ws))
-    return pd.DataFrame(dict([(c, per_station(c, r)) for c,r in stations.iterrows()]), index=index)
+        return obs.S0 / np.pi * dist**-2 * (
+            ws * np.sin(obs.lat) * np.sin(dec) + np.cos(obs.lat) * np.cos(dec)
+            * np.sin(ws))
+
+    return pd.DataFrame(
+        dict([(c, per_station(c, r)) for c, r in stations.iterrows()]),
+        index=index)
+
 
 def ETRaDayN(station, days):
     "Numerical variant of ETRaDay."
     obs = observer(station)
+
     def mu(h, dec):
-        return np.sin(obs.lat) * np.sin(dec) + np.cos(obs.lat) * np.cos(dec) * np.cos(h)
+        return np.sin(obs.lat) * np.sin(dec) + np.cos(
+            obs.lat) * np.cos(dec) * np.cos(h)
+
     def per_day(d):
         dec, dist = obs.decl(d)
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
-        return obs.S0/np.pi * dist**-2 * quad(mu, 0, abs(ws), args=(dec,))[0]
+        return obs.S0 / np.pi * dist**-2 * quad(
+            mu, 0, abs(ws), args=(dec, ))[0]
+
     return pd.DataFrame({station.name: [per_day(d) for d in days]}, index=days)
 
 
 def ETRa1(stations, index):
-    "Subdaily extraterrestrial radiation based on explicit integral over hour angle interval given by Allen et al. 1998."
+    "Hourly extraterrestrial radiation based on explicit integral over hour angle interval given by Allen et al. 1998."
     t = pd.date_range(index[0], index[-1] + np.timedelta64(1, 'h'), freq='H')
+
     def per_station(code, station):
         print(code)
         obs = observer(station)
         # this is to account for the averaging period in the database
-        te = t + np.timedelta64(4, 'h') - np.timedelta64(int(station.interval), 's')
-        w, dec, dist = np.array([obs.all_params(i) for i in te]).T
+        te = t + np.timedelta64(4, 'h') - np.timedelta64(
+            int(station.interval), 's')
+        w, dec, dist = np.array([obs.h_dec_dist(i) for i in te]).T
         # sunset hour angle
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
         # mask, where shift should ensure that intervals containing sunrise or -set are retained
@@ -122,52 +143,64 @@ def ETRa1(stations, index):
         # hence the mask
         w = np.where(w > -ws, w, -ws)
         w = np.where(w < ws, w, ws)
+        # Note: this integral is for one hour
         # R = 12 / np.pi * S0 * (1 + 0.033 * np.cos(2 * np.pi / 365 * t[:-1].dayofyear)) * \
         mu_ave = 12 / np.pi * (np.diff(w) * np.sin(obs.lat) * np.sin(dec[1:]) + \
             np.cos(obs.lat) * np.cos(dec[1:]) * np.diff(np.sin(w)))
         R = obs.S0 * dist[1:]**-2 * mu_ave
         R[R < 0] = 0
-        return {'Ra':R*m, 'mu':mu_ave*m, 'mask':m}
+        return {'Ra': R * m, 'mu': mu_ave * m, 'mask': m}
+
     # return per_station(*next(stations.iterrows()))
-    p = pd.Panel(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]))
+    p = pd.Panel(
+        dict([(c, per_station(c, r)) for c, r in stations.iterrows()]))
     p.major_axis = index
-    return p.transpose(2,1,0)
+    return p.transpose(2, 1, 0)
 
 
 def ETRa2(stations, t):
     "Subdaily extraterrestrial radiation by using interval midpoint zenith computed directly bu PyEphem."
+
     def per_station(code, station):
         print(code)
         obs = observer(station)
         # here, shift the time vector by each station's averaging period so it contains the interval endpoints
         # add 1/2 hour to use midpoints (i.e. 270 mins together with UTC shift)
-        te = t + np.timedelta64(270, 'm') - np.timedelta64(int(station.interval), 's')
+        te = t + np.timedelta64(270, 'm') - np.timedelta64(
+            int(station.interval), 's')
         alt, d = np.array([obs.alt_dist(i) for i in te]).T
         # mu = cos zenith = sin alt
         mu = np.sin(alt)
-        mu[mu<0] = 0
+        mu[mu < 0] = 0
         return obs.S0 * d**-2 * mu
-    return pd.DataFrame(dict([(c, per_station(c,r)) for c,r in stations.iterrows()]), index=t)
 
+    return pd.DataFrame(
+        dict([(c, per_station(c, r)) for c, r in stations.iterrows()]),
+        index=t)
 
 
 def clear_sky(station, press):
     time = pd.date_range(start='2004-01-01', end=datetime.utcnow(), freq='H')
     print(station.name)
     obs = observer(station)
+
     def f(t):
         alt, d = obs.alt_dist(t)
         # mu = cos zenith = sin alt
         mu = np.sin(alt)
-        if mu<0: return 0
+        if mu < 0: return 0
         Ra = obs.S0 * d**-2 * mu
-        return Ra * np.exp( -0.00018 * press / mu)
-    return pd.DataFrame([f(t) for t in time], index=time-pd.Timedelta(4,'H'))
+        return Ra * np.exp(-0.00018 * press / mu)
+
+    return pd.DataFrame(
+        [f(t) for t in time], index=time - pd.Timedelta(4, 'H'))
+
 
 # Lhomme, Vacher, and Rocheteau 2007
 def clear_sky_param1(p, mu):
     "p in [hPa]"
-    return np.exp( -1.8e-4 * p / mu)
+    return np.exp(-1.8e-4 * p / mu)
+
 
 # Meyers and Dale 1983 - without precipitable water and aerosol
 def clear_sky_param2(p, mu):
@@ -188,14 +221,20 @@ def clear_sky_I(station, time, param):
     dh = 2 * np.pi * time.freq.delta / pd.Timedelta('1D')
     print(station.name)
     obs = observer(station)
-    def rad(h,lat,dec,dist):
+
+    def rad(h, lat, dec, dist):
         mu = np.sin(lat) * np.sin(dec) + np.cos(lat) * np.cos(dec) * np.cos(h)
         return obs.S0 * dist**-2 * mu * param(mu)
+
     def f(t):
-        h, dec, dist = obs.all_params(t)
+        h, dec, dist, az = obs.all_params(t)
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
         H = obs.a(h + dh)
         R = 0
+        # average mu will also be returned (and azimuth), for convenience with subsequent calculations
+        # (e.g. topographic shading)
+        mu_ave = np.sin(obs.lat) * np.sin(dec[1:]) + \
+            np.cos(obs.lat) * np.cos(dec[1:]) * np.diff(np.sin(w)) / dh
         # this tests if the interval includes the nightly jump from positive to negative hour angles
         # *and* if the endpoint of the interval is after sunrise
         # if yes, add the interval between sunrise and endpoint (the 'normal case' logic already computes
@@ -204,22 +243,22 @@ def clear_sky_I(station, time, param):
         if H < h and H > -ws:
             R = quad(rad, -ws, min(ws, H), args=(obs.lat, dec, dist))[0] / dh
         if H < -ws or h > ws:
-            return R
-        return R + quad(rad, max(-ws, h), min(ws, H), args=(obs.lat, dec, dist))[0] / dh
-    return pd.Series([f(t) for t in time], index=time, name=station.name)
+            return R, az, mu_ave
+        return R + quad(
+            rad, max(-ws, h), min(ws, H), args=(obs.lat, dec, dist))[0] / dh, az, mu_ave
 
+    idx = pd.MultiIndex.from_product([[station.name], ['Rso, az, mu']])
+    return pd.DataFrame([f(t) for t in time], index=time, columns=idx)
 
 
 def Rso1(Ra, z):
     "Daily clear sky only."
     return (.75 + 2e-5 * z) * Ra
 
+
 def Rso2(Ra, mu, p):
     "Hourly clear sky, p in hPa"
-    return Ra * np.exp( -0.00018*p / mu)
-
-
-
+    return Ra * np.exp(-0.00018 * p / mu)
 
 
 def locMax(df, window):
@@ -228,15 +267,16 @@ def locMax(df, window):
         np.array(ro.as_matrix() - window + 1,dtype='timedelta64[D]').flatten()
     return pd.Index(set(i)).dropna().sort_values()
 
+
 def locMaxDay(RaDay, rs, mask):
     d = rs.copy()
     # first, set NaNs at night to zero so as to not inflate daily averages
-    d[d.isnull()] = mask[mask==0]
+    d[d.isnull()] = mask[mask == 0]
     # then, zero out not-NaN night values
-    dm = (d*mask).groupby(d.index.date).mean()
-    dm[dm==0] = np.nan
-    ratio = dm/RaDay
-    ratio = ratio[ratio<1].asfreq('1D')
+    dm = (d * mask).groupby(d.index.date).mean()
+    dm[dm == 0] = np.nan
+    ratio = dm / RaDay
+    ratio = ratio[ratio < 1].asfreq('1D')
     return dm, ratio.loc[locMax(ratio, 10)]
 
 
@@ -274,28 +314,36 @@ def regression(rm, Ra):
         except:
             b.append((np.nan, np.nan, 0))
         else:
-            b.append((a, (err/n)**.5, n))
+            b.append((a, (err / n)**.5, n))
     return pd.DataFrame(b, index=rm.columns, columns=['b', 'rms', 'n'])
+
 
 def quality():
     b = regression(rs, Ra).sort_index()
     # manual selection of sensors at stations which have 2 - for now take the ones with lower RMS
     from CEAZAMet import mult
     c = b.loc[mult(rs)]
-    drop_codes = ['28', 'ANDACMP10', 'CACHRSTM', 'COMBRS', 'INILLARS', 'MINRS', 'PCRS2', 'TLHRSTM']
-    b.drop(drop_codes,level='code',inplace=True)
-    rs.drop(drop_codes,level='code',inplace=True,axis=1)
+    drop_codes = [
+        '28', 'ANDACMP10', 'CACHRSTM', 'COMBRS', 'INILLARS', 'MINRS', 'PCRS2',
+        'TLHRSTM'
+    ]
+    b.drop(drop_codes, level='code', inplace=True)
+    rs.drop(drop_codes, level='code', inplace=True, axis=1)
 
     # very high regression coefficients are also suspicious
     b.sort_values('b', inplace=True)
     drop_codes.extend(['INIA66', 'PAGN', 'LMBT', 'SALH', ''])
 
+
 def detect_breaks(df):
     i = df.dropna().index
     return pd.Series(np.diff(i), index=i[1:]).sort_values()
 
+
 def residuals(code):
-    return pd.concat((b['b'][code][0] * Ra[code], rs[code]), axis=1).diff(1, axis=1).iloc[:,1]
+    return pd.concat(
+        (b['b'][code][0] * Ra[code], rs[code]), axis=1).diff(
+            1, axis=1).iloc[:, 1]
 
 
 def itpl():
@@ -313,43 +361,52 @@ def itpl():
     Gi = interp4D((x, y), GP, ij, sta.index, t, method='linear')
 
 
-
-def temp_AGL(T,G,Z,z):
+def temp_AGL(T, G, Z, z):
     "Compute mean T difference between 'z' meters above ground and T2 from model data (model ground level)."
-    def tz(s,r):
+
+    def tz(s, r):
         try:
             y = Z[s] + z
-            x = pd.Series([ip.interp1d(G[s].loc[t], c, 'linear', bounds_error=False)(y) for t,c in r.iterrows()], index=r.index)
+            x = pd.Series(
+                [
+                    ip.interp1d(G[s].loc[t], c, 'linear',
+                                bounds_error=False)(y) for t, c in r.iterrows()
+                ],
+                index=r.index)
             return np.mean(T2[s] - x)
         except:
             return None
 
-    return pd.Series(*zip(*[(tz(s,r),s) for s,r in T.iteritems()]))
+    return pd.Series(*zip(* [(tz(s, r), s) for s, r in T.iteritems()]))
+
 
 # a = temp_AGL(T4D, G4D, Z, 50)
+
 
 def landuse():
     with open('/home/arno/Documents/src/WRFV3/run/LANDUSE.TBL') as f:
         l = []
         for r in csv.reader(f):
-            if len(r)==1:
-                if r[0]=='SUMMER' or r[0]=='WINTER':
-                    l[-1][1].append([r[0],[]])
+            if len(r) == 1:
+                if r[0] == 'SUMMER' or r[0] == 'WINTER':
+                    l[-1][1].append([r[0], []])
                 else:
-                    l.append([r[0],[]])
+                    l.append([r[0], []])
             else:
                 try:
-                    if re.search('Unassigned',r[8]): continue
+                    if re.search('Unassigned', r[8]): continue
                     s = [float(x) for x in r[:8]]
                     s.append(r[8])
                     l[-1][1][-1][1].append(s)
-                except: pass
+                except:
+                    pass
 
-    d = dict([(k,dict(v)) for k,v in l])
+    d = dict([(k, dict(v)) for k, v in l])
 
     modis = d['MODIFIED_IGBP_MODIS_NOAH']
     zs = dict([(x[0], x[4]) for x in modis['SUMMER']])
     zw = dict([(x[0], x[4]) for x in modis['WINTER']])
+
 
 # Choi, Minha, Jennifer M. Jacobs, and William P. Kustas. “Assessment of Clear and Cloudy Sky Parameterizations for Daily Downwelling Longwave Radiation over Different Land Surfaces in Florida, USA.” Geophysical Research Letters 35, no. 20 (October 18, 2008). doi:10.1029/2008GL035731.
 def cloud_N(Rs, Rso):
@@ -363,9 +420,11 @@ def cloud_N(Rs, Rso):
     """
     return 1 - Rs / Rso
 
+
 # Van Ulden, A. P., and A. A. M. Holtslag. “Estimation of Atmospheric Boundary Layer Parameters for Diffusion Applications.” Journal of Climate and Applied Meteorology 24, no. 11 (November 1985): 1196–1207. doi:10.1175/1520-0450(1985)024<1196:EOABLP>2.0.CO;2.
 def LW_isothermal(Tr, N):
     return -5.67e-8 * Tr**4 * (1 - 9.35e-6 * Tr**2) + 60 * N
+
 
 # stationize(b)
 # Tr = T.apply(lambda c:c+a[c.name],0)
@@ -384,12 +443,12 @@ if __name__ == "__main__":
 
     sta = D['sta']
 
-    r = hh.stationize(rs.loc[:,'5':'5'].xs('2',level='elev',axis=1))
-    Rm = ETRaDay(sta.loc['5':'5'], pd.date_range('2004-01-01T12','2017-03-01T12', freq='D'))
+    r = hh.stationize(rs.loc[:, '5':'5'].xs('2', level='elev', axis=1))
+    Rm = ETRaDay(sta.loc['5':'5'],
+                 pd.date_range('2004-01-01T12', '2017-03-01T12', freq='D'))
     Ra = ETRa1(sta.loc['5':'5'], rs.index)
     # Ra = D['Ra_w']
     m = Ra['mask']
-
 
     P = pd.HDFStore('../../data/tables/pressure.h5')
     pm = P['p']['5'].mean()
@@ -414,10 +473,9 @@ if __name__ == "__main__":
         try:
             p = press[n]
         except:
-            p = 1013 * (1 - 0.0065 * s.elev / 293) ** 5.26
+            p = 1013 * (1 - 0.0065 * s.elev / 293)**5.26
         df = clear_sky_I(s, hours, partial(clear_sky_param1, p))
-        D = pd.concat((D,df), axis=1)
-
+        D = pd.concat((D, df), axis=1)
 
 # rm, ra = locMaxDay(Rm, r, m)
 # rm = tshift(rm, '12H')

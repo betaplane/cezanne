@@ -263,6 +263,18 @@ def fetch_raw(station, f):
             break
     return d
 
+def field_table(stations):
+    D = {}
+    for st in stations:
+        d = {}
+        for F in st.fields:
+            try:
+                f = d[F.field]
+                f[len(f)] = F.sensor_code
+            except:
+                d[F.field] = {0: F.sensor_code}
+        D[st.code] = d
+    return pd.Panel(D)
 
 
 if __name__ == "__main__":
