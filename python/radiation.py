@@ -226,15 +226,16 @@ def clear_sky_I(station, time, param):
         mu = np.sin(lat) * np.sin(dec) + np.cos(lat) * np.cos(dec) * np.cos(h)
         return obs.S0 * dist**-2 * mu * param(mu)
 
+    def mu(h, H, lat, dec):
+        return np.sin(lat) * np.sin(dec) + \
+            np.cos(lat) * np.cos(dec) * (np.sin(H) - np.sin(h)) / dh
+
     def f(t):
         h, dec, dist, az = obs.all_params(t)
         ws = np.arccos(-np.tan(obs.lat) * np.tan(dec))
         H = obs.a(h + dh)
         R = 0
-        # average mu will also be returned (and azimuth), for convenience with subsequent calculations
-        # (e.g. topographic shading)
-        mu_ave = np.sin(obs.lat) * np.sin(dec[1:]) + \
-            np.cos(obs.lat) * np.cos(dec[1:]) * np.diff(np.sin(w)) / dh
+        mu_ave = 0
         # this tests if the interval includes the nightly jump from positive to negative hour angles
         # *and* if the endpoint of the interval is after sunrise
         # if yes, add the interval between sunrise and endpoint (the 'normal case' logic already computes
@@ -242,12 +243,14 @@ def clear_sky_I(station, time, param):
         # in case of daily interval, this will be the whole day
         if H < h and H > -ws:
             R = quad(rad, -ws, min(ws, H), args=(obs.lat, dec, dist))[0] / dh
+            mu_ave = mu(-ws, min(ws, H), obs.lat, dec)
         if H < -ws or h > ws:
             return R, az, mu_ave
         return R + quad(
-            rad, max(-ws, h), min(ws, H), args=(obs.lat, dec, dist))[0] / dh, az, mu_ave
+            rad, max(-ws, h), min(ws, H), args=(obs.lat, dec, dist))[0] / dh, az, \
+            mu_ave + mu(max(-ws, h), min(ws, H), obs.lat, dec)
 
-    idx = pd.MultiIndex.from_product([[station.name], ['Rso, az, mu']])
+    idx = pd.MultiIndex.from_product([[station.name], ['Rso', 'az', 'mu']])
     return pd.DataFrame([f(t) for t in time], index=time, columns=idx)
 
 

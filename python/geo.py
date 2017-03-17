@@ -3,6 +3,7 @@ import gdal
 import pandas as pd
 import numpy as np
 from mpl_toolkits import basemap
+from scipy.interpolate import splrep, splev
 
 
 class angle(object):
@@ -130,6 +131,16 @@ class angle(object):
             columns=['alt_grid', 'dist_grid', 'alt_st', 'dist_st'],
             index=np.r_[da,da+np.pi]
         )
+
+def spline(x, s=.1):
+    rep = splrep(x.index, x, s=s, per=True)
+    return splev(x.index, rep)
+
+def sun_block(Rso, shading):
+    rep = splrep(shading.index, shading, s=.05, per=True)
+    return Rso.apply(lambda x: x.Rso * (np.sin(splev(x.az, rep)) < x.mu), 1)
+
+
 
 
 if __name__ == "__main__":

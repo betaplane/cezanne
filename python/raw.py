@@ -11,8 +11,14 @@ def group2idx(df):
     return df
 
 def tshift(df, h=-1):
-    df.index += pd.Timedelta(h, 'h')
-    return df
+    d = df.copy()
+    d.index += pd.Timedelta(h, 'h')
+    return d
+
+def decol(df):
+    d = df.copy()
+    d.columns = [0]
+    return d
 
 def hour_ave(df):
     """
@@ -34,7 +40,7 @@ def hour_ave(df):
     print('filtered:')
     [print(i) for i in g]
 
-    x = pd.DataFrame({'idx': df.index, 'dt': np.r_[np.nan, dt]}, index=df.index).join(df)
+    x = pd.DataFrame({'idx': df.index, 'dt': np.r_[np.nan, dt]}, index=df.index).join(decol(df))
     idx = x.index[x['dt'].isin([i[-1] for i in g])]
     # eleminate all the 'dt' instances arising from data gaps
     x.loc[idx, 'dt'] = np.nan # equivalent to sql 'in' or general 'contains'
@@ -62,4 +68,4 @@ def hour_ave(df):
     den = den.add(curr, fill_value=0)
     den = den.add(tshift(prev), fill_value=0)
 
-    return num / den, idx
+    return pd.DataFrame(num / den, columns = df.columns), idx

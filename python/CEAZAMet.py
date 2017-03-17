@@ -159,14 +159,17 @@ def get_stations():
 
 
 def get_field(field, stations, raw=False):
-    D = {} if raw else pd.DataFrame()
+    D = {} if raw
     for st in stations:
         fields = [f for f in st.fields if f.field == field]
         for f in fields:
             if raw:
                 D[(st.code, f.sensor_code)] = fetch_raw(st, f)
             else:
-                D = D.join(fetch(st, f), how="outer")
+                try:
+                    D = D.join(fetch(st, f), how="outer")
+                except NameError:
+                    D = fetch(st, f)
         if not fields:
             print("{} doesn't have {}".format(st.name, field))
     return D if raw else D.sort_index(axis=1)
