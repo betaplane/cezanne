@@ -159,7 +159,8 @@ def get_stations():
 
 
 def get_field(field, stations, raw=False):
-    D = {} if raw
+    if raw:
+        D = {}
     for st in stations:
         fields = [f for f in st.fields if f.field == field]
         for f in fields:
