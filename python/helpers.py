@@ -123,7 +123,7 @@ def day(df):
     return d
 
 
-def map():
+def basemap():
     from mpl_toolkits.basemap import Basemap
     return Basemap(
         lat_0=-30.5,
