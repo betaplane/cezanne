@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from scipy.interpolate import CubicSpline
 import matplotlib.pyplot as plt
+from matplotlib.figure import SubplotParams
 from mpl_toolkits import basemap
 import helpers as hh
 import statsmodels.api as sm
@@ -133,15 +134,18 @@ class PCA(object):
             resolution='h'
         )
 
-    def pca(self, rec=0, nrec=None, scale=None):
+    def pca(self, rec=0, nrec=None, scale=False, covscale=None):
         y = self.Y.fillna(0)
         if rec:
             y += self.mask * self.R
         if nrec is None:
             nrec = self.Y.shape[1]
-        self.cov = self.Y.cov()
-        if scale is not None:
-            self.cov *= scale
+        if scale:
+            self.cov = self.S.cov()
+        else:
+            self.cov = self.Y.cov()
+        if covscale is not None:
+            self.cov *= covscale
         w, v = np.linalg.eig(self.cov)
         i = np.argsort(w)[::-1] # eigenvalues not guaranteed to be ordered
         self.values = w[i]
@@ -153,6 +157,10 @@ class PCA(object):
         print('mse: {}, explained: {}%'.format(mse, self.values[0] / np.sum(np.abs(w)) * 100))
         # r = pd.DataFrame(np.r_['1,2',t].T*u, index=t.index, columns=m.columns)
 
+    def explained(self, n=None):
+        n = self.values.shape[0] if n is None else n
+        return self.values[:n] / np.sum(np.abs(self.values))
+
     def plot_map(self, pc, scale=1000):
         fig = plt.figure()
         self.map.scatter(*self.sta[['lon','lat']].as_matrix().T,
@@ -163,13 +171,43 @@ class PCA(object):
         plt.colorbar()
         fig.show()
 
+def plot(R, P, c1=None, c2=None, s=500):
+    fig, ax = plt.subplots(2, 5, figsize=(15,6), subplotpars=SubplotParams(right=.95, left=.05))
+    plt.set_cmap('coolwarm')
+    for j in range(2):
+        R.lag_regressions(P.PC[j], range(0, 8, 2), pval=.05, plot=False)
+        for i in range(4):
+            plt.sca(ax[j,3-i])
+            if c1 is None:
+                pl = R.map.contourf(R._i, R._j, R.regs[i])
+                print(pl.get_clim())
+            else:
+                R.map.contourf(R._i, R._j, R.regs[i], c1)
+            R.map.contour(R._i, R._j, R.pvals[i], [0.05], linewidths=[2], colors=['w'])
+            R.map.plot(P.map.boundarylons, P.map.boundarylats, latlon=True, color='k')
+            R.map.drawcoastlines()
+            if j==0:
+                plt.title('lag {} days'.format(-R.lags[i]))
+        # bb = ax[0,3].get_position()
+        # plt.colorbar(cax=fig.add_axes([bb.x1+0.02,bb.y0,0.05,bb.y1-bb.y0]))
+        plt.sca(ax[j,4])
+        pl = P.map.scatter(*P.sta[['lon','lat']].as_matrix().T,
+                      c = P.vectors[:,j],
+                      s = np.abs(P.vectors[:,j]) * s,
+                      latlon=True)
+        P.map.drawcoastlines()
+        print(pl.get_clim())
+        if c2 is not None:
+            plt.clim(-c2, c2)
+    fig.show()
+    return fig, ax
 
 
 if __name__ == "__main__":
     from netCDF4 import Dataset
 
     # nc = Dataset('../../data/NCEP/X164.77.119.34.78.12.40.44.nc')
-    R = RegressionMap(nc)
+    # R = RegressionMap(nc)
 
     # D = pd.HDFStore('../../data/tables/station_data_new.h5')
     # vv = D['vv_ms'].xs('prom',1,'aggr')
@@ -193,6 +231,9 @@ if __name__ == "__main__":
         vv.drop('9', 1, inplace=True)
         vv['INIA66'][:'2012-03-20'] = np.nan
 
+        # remove far away data
+        vv.drop(['CNPW', 'CNSD'], 1, inplace=True)
+
         d = vv['2013':]
         d = d.loc[:, d.count() > .7 * len(d)]
 
@@ -205,24 +246,3 @@ if __name__ == "__main__":
     P.pca()
     P.pca(1)
 
-    fig, ax = plt.subplots(2,5)
-    for j in range(2):
-        R.lag_regressions(P.PC[j], range(0, 8, 2), pval=.05, plot=False)
-        plt.set_cmap('coolwarm')
-        for i in range(4):
-            plt.sca(ax[j,3-i])
-            R.map.contourf(R._i, R._j, R.regs[i], range(-75,76,15))
-            R.map.contour(R._i, R._j, R.pvals[i], [0.05], linewidths=[2], colors=['w'])
-            R.map.plot(P.map.boundarylons, P.map.boundarylats, latlon=True, color='k')
-            R.map.drawcoastlines()
-            if j==0:
-                plt.title('lag {} days'.format(-R.lags[i]))
-        # bb = ax[0,3].get_position()
-        # plt.colorbar(cax=fig.add_axes([bb.x1+0.02,bb.y0,0.05,bb.y1-bb.y0]))
-        plt.sca(ax[j,4])
-        P.map.scatter(*P.sta[['lon','lat']].as_matrix().T,
-                      c = P.vectors[:,j],
-                      s = np.abs(P.vectors[:,j]) * 500,
-                      latlon=True)
-        P.map.drawcoastlines()
-        plt.clim(-.6,.6)
