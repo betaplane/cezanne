@@ -5,8 +5,8 @@ import helpers as hh
 import matplotlib.pyplot as plt
 
 
-D = pd.HDFStore('../data/station_data.h5')
-S = pd.HDFStore('../data/LinearLinear.h5')
+D = pd.HDFStore('../../data/tables/station_data.h5')
+S = pd.HDFStore('../../data/tables/LinearLinear.h5')
 
 def scapl(x,y,gr):
 	ym = y.mean().as_matrix()

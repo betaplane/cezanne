@@ -9,12 +9,12 @@ from scipy.stats import gaussian_kde
 import re
 
 
-D = pd.HDFStore('../data/station_data.h5')
+D = pd.HDFStore('../../data/tables/station_data.h5')
 
 sta = D['sta']
 T = hh.extract(D['ta_c'],'prom',True)
 
-S = pd.HDFStore('../data/LinearLinear.h5')
+S = pd.HDFStore('../../data/tables/LinearLinear.h5')
 Tm = S['T2']
 Z = S['z']
 
@@ -29,7 +29,7 @@ def abcd(df):
 	b,c = [np.where(m.diff(axis=1)[1]==i)[0].shape[0] for i in [1,-1]]
 	d = n-a-b-c
 	return a,b,c,d,n
-	
+
 
 cols = np.array([['fnl','d01','d02'],['d03_orl','d03_0_00','d03_0_12'],['d03_0_00','d03_1_00','d03_4_00']])
 fig,axs = plt.subplots(*cols.shape)
@@ -42,15 +42,15 @@ for i in range(cols.shape[0]):
 		t = Tm[s]
 		B = t-T
 		dz = Z['d03_op' if z.search(s) else s]-sta['elev']
-		
+
 		plt.sca(axs[i,j])
 		axs[i,j].set_title(cols[i,j])
-		
+
 		for h,f in enumerate([t, t+0.0065*dz, t-B.mean(), t-pd.rolling_mean(B,7*24,freq='1H',min_periods=1)]):
 			y = f-T
 			mae[i,j,h] = abs(y).mean().mean()
 			k = gaussian_kde(y.stack().dropna())
-			
+
 			p = pd.Panel({0: T.groupby(T.index.date).min(), 1:f.groupby(f.index.date).min()}).to_frame()
 			a,b,c,d,n = abcd(p[p<hh.K])
 			cold[i,j,h] = a/(a+b+c)
@@ -58,13 +58,14 @@ for i in range(cols.shape[0]):
 			p = pd.Panel({0: T.groupby(T.index.date).max(), 1:f.groupby(f.index.date).max()}).to_frame()
 			a,b,c,d,n = abcd(p[p>hh.K+30])
 			heat[i,j,h] = a/(a+b+c)
-# 			lab = 'MAE {:.3f}; cold {:.3f}; heat {:.3f}'.format(mae,cold,heat)
-			plt.plot(x,k(x),label=lab)
-# 			plt.legend()
+			# lab = 'MAE {:.3f}; cold {:.3f}; heat {:.3f}'.format(mae[i,j,h],cold[i,j,h],heat[i,j,h])
+			# plt.plot(x,k(x),label=lab)
+			plt.plot(x,k(x))
+			# plt.legend()
 
 		plt.grid()
 
-		
+
 fig,axs = plt.subplots(*cols.shape)
 cy = axs[0,0]._get_lines.prop_cycler
 col = [next(cy)['color'] for i in range(4)]
@@ -88,6 +89,5 @@ for i in range(cols.shape[0]):
 		if i==1:
 			if j==0: axs[1,0].set_ylabel('MAE')
 			if j==2: ax.set_ylabel('TS')
-		
-		
-	
+
+
