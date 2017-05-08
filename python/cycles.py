@@ -2,6 +2,7 @@
 import os
 import numpy as np
 import pandas as pd
+from netCDF4 import Dataset
 from astropy.stats import LombScargle
 import matplotlib.pyplot as plt
 from matplotlib import cm, colors
@@ -10,10 +11,11 @@ import matplotlib.gridspec as gs
 import helpers as hh
 from functools import partial
 import stipolate as st
+import mapping as mp
 
 
 K = 273.15
-dd = lambda s: os.path.join('../data',s)
+dd = lambda s: os.path.join('../../data/tables',s)
 
 D = pd.HDFStore(dd('station_data.h5'))
 
@@ -21,7 +23,7 @@ sta = D['sta']
 T = hh.extract(D['ta_c'],'prom') + K
 
 S = pd.HDFStore(dd('LinearLinear.h5'))
-# Tm = S['T2']
+Tm = S['T2n']
 
 
 def t(d):
@@ -93,24 +95,27 @@ def daily(s):
 		plt.plot(d.index,d,'-',label=l)
 	plt.legend()
 	fig.show()
-		
-n0 = Dataset(dd('wrf/T2_0.nc'))
-x0 = st.interp_nc(n0,'T2',sta,method='linear')
+
+g2 = Dataset(dd('../WRF/3d/grid_d03.nc'))
+Map = mp.basemap(g2)
+
+n0 = Dataset(dd('../WRF/3d/d03_day0.nc'))
+x0 = st.interp_nc(n0,'T2',sta,method='linear', map=Map)
 x0_1 = x0.iloc[:7440,:]
 x0_2 = x0.iloc[7440:,:]
 
-n4 = Dataset(dd('wrf/T2_4.nc'))
-x4 = st.interp_nc(n4,'T2',sta,method='linear')
+n4 = Dataset(dd('../WRF/3d/T2_4.nc'))
+x4 = st.interp_nc(n4,'T2',sta,method='linear', map=Map)
 x4_1 = x4.iloc[:7440,:]
 x4_2 = x4.iloc[7440:,:]
 
 fig = plt.figure()
-for i,x in enumerate([Tm.minor_xs('d03_orl'),x0_1,x0_2,x4_1,x4_2]):
-# 	y = (x-T)
-# 	y = (y-y.mean())**2
+for i,x in enumerate([Tm['d03_orl'],x0_1,x0_2,x4_1,x4_2]):
+	# y = (x-T)
 	y = (x-T)**2
+	# y = (y-y.mean())
 	y = y.groupby(y.index.hour).mean().mean(1)
 	plt.plot(y,label=['orl','op+0/00','op+0/12','op+4/00','op+4/12'][i])
 plt.legend()
-	
-	
+
+

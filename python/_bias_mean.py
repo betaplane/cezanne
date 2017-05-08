@@ -4,6 +4,8 @@ import pandas as pd
 import helpers as hh
 import matplotlib.pyplot as plt
 
+# relationship temp-humidity -- not useful
+
 
 D = pd.HDFStore('../../data/tables/station_data.h5')
 S = pd.HDFStore('../../data/tables/LinearLinear.h5')
