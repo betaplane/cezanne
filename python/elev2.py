@@ -8,8 +8,8 @@ from scipy.stats import gaussian_kde
 from scipy.optimize import brute
 
 
-D = pd.HDFStore('../data/station_data.h5')
-S = pd.HDFStore('../data/LinearLinear.h5')
+D = pd.HDFStore('../../data/tables/station_data.h5')
+S = pd.HDFStore('../../data/tables/LinearLinear.h5')
 
 T = hh.extract(D['ta_c'],'prom',1)
 Tm = S['T2']
@@ -21,14 +21,14 @@ B = Tm['d02']-T
 dz = Z['d02']-sta['elev']
 lm = L['d02']
 
-B = Tm['d03_orl']-T
-dz = Z['d03_orl']-sta['elev']
-lm = L['d03_orl']
+# B = Tm['d03_orl']-T
+# dz = Z['d03_orl']-sta['elev']
+# lm = L['d03_orl']
 
 # B = Tm['d03_0_12']-T
 # dz = Z['d03_op']-sta['elev']
 # lm = L['d03_op']
-# 
+
 # B = Tm['d02_0_00']-Tm['d03_0_00']
 # dz = Z['d02']-Z['d03_op']
 # lm = L['d02']
@@ -37,11 +37,10 @@ lm = L['d03_orl']
 lr = (B/dz * 1000)
 
 
-
-nc = Dataset('../data/wrf/geo_em.d03.nc')
+nc = Dataset('../../data/WRF/3d/geo_em.d03.nc')
 lm = nc.variables['LANDMASK'][0,:,:]
 glon,glat = hh.lonlat(nc)
-ma = hh.map()
+
 
 def landsea(r,d=5000):
 	from pyproj import Geod
@@ -76,7 +75,7 @@ def setup(ax,title=None,label=None):
 	ax.axvline(-6.5,color='g')
 	if title is not None: ax.set_title(title)
 	if label is not None: ax.set_ylabel(label,rotation=0,labelpad=20)
-	
+
 fig,ax = plt.subplots(2,2)
 ax[0,0].hist(lr[b][lr.index.hour==0].stack(), range=(-20,20))
 ax[0,0].hist(lr[b_s][lr.index.hour==0].stack(), range=(-20,20))
@@ -158,52 +157,55 @@ def d02():
 	plt.legend()
 	plt.gca().set_xlabel('hour')
 	plt.gca().set_ylabel('T')
-	
-fig = plt.figure() 
 
-plt.subplot(2,2,1)
-kplot(lr[b],'all')
-kplot(lr[b_l],'inland all')
-kplot(lr[b_l][lr.index.hour==0],'inland 0h')
-kplot(lr[b_l][lr.index.hour==12],'inland 12h')
-plt.axvline(-9.8,color='grey',ls='--')
-plt.axvline(-6.5,color='grey',ls=':')
-plt.grid()
-plt.legend()
-plt.title('station < grid')
-plt.gca().set_xlabel('T')
+d02()
 
-plt.subplot(2,2,2)
-kplot(lr[a],'all')
-kplot(lr[a_s],'coast all')
-kplot(lr[a_s][lr.index.hour==0],'coast 0h')
-kplot(lr[a_s][lr.index.hour==12],'coast 12h')
-plt.axvline(-9.8,color='grey',ls='--')
-plt.axvline(-6.5,color='grey',ls=':')
-plt.grid()
-plt.legend()
-plt.title('station > grid')
-plt.gca().set_xlabel('T')
+def d03():
+        fig = plt.figure() 
+
+        plt.subplot(2,2,1)
+        kplot(lr[b],'all')
+        kplot(lr[b_l],'inland all')
+        kplot(lr[b_l][lr.index.hour==0],'inland 0h')
+        kplot(lr[b_l][lr.index.hour==12],'inland 12h')
+        plt.axvline(-9.8,color='grey',ls='--')
+        plt.axvline(-6.5,color='grey',ls=':')
+        plt.grid()
+        plt.legend()
+        plt.title('station < grid')
+        plt.gca().set_xlabel('T')
+
+        plt.subplot(2,2,2)
+        kplot(lr[a],'all')
+        kplot(lr[a_s],'coast all')
+        kplot(lr[a_s][lr.index.hour==0],'coast 0h')
+        kplot(lr[a_s][lr.index.hour==12],'coast 12h')
+        plt.axvline(-9.8,color='grey',ls='--')
+        plt.axvline(-6.5,color='grey',ls=':')
+        plt.grid()
+        plt.legend()
+        plt.title('station > grid')
+        plt.gca().set_xlabel('T')
 
 
-plt.subplot(2,2,3)
-plt.plot(lr[b].groupby(lr.index.hour).apply(mode), label='all')
-plt.plot(lr[b_l].groupby(lr.index.hour).apply(mode), label='land')
-plt.gca().set_xticks([0,6,12,18])
-plt.axhline(-9.8,color='grey',ls='--')
-plt.axhline(-6.5,color='grey',ls=':')
-plt.grid()
-plt.legend()
-plt.gca().set_xlabel('hour')
-plt.gca().set_ylabel('T')
+        plt.subplot(2,2,3)
+        plt.plot(lr[b].groupby(lr.index.hour).apply(mode), label='all')
+        plt.plot(lr[b_l].groupby(lr.index.hour).apply(mode), label='land')
+        plt.gca().set_xticks([0,6,12,18])
+        plt.axhline(-9.8,color='grey',ls='--')
+        plt.axhline(-6.5,color='grey',ls=':')
+        plt.grid()
+        plt.legend()
+        plt.gca().set_xlabel('hour')
+        plt.gca().set_ylabel('T')
 
-plt.subplot(2,2,4)
-plt.plot(lr[a].groupby(lr.index.hour).apply(mode), label='all')
-plt.plot(lr[a_s].groupby(lr.index.hour).apply(mode), label='coast')
-plt.gca().set_xticks([0,6,12,18])
-plt.axhline(-9.8,color='grey',ls='--')
-plt.axhline(-6.5,color='grey',ls=':')
-plt.grid()
-plt.legend()
-plt.gca().set_xlabel('hour')
-plt.gca().set_ylabel('T')
+        plt.subplot(2,2,4)
+        plt.plot(lr[a].groupby(lr.index.hour).apply(mode), label='all')
+        plt.plot(lr[a_s].groupby(lr.index.hour).apply(mode), label='coast')
+        plt.gca().set_xticks([0,6,12,18])
+        plt.axhline(-9.8,color='grey',ls='--')
+        plt.axhline(-6.5,color='grey',ls=':')
+        plt.grid()
+        plt.legend()
+        plt.gca().set_xlabel('hour')
+        plt.gca().set_ylabel('T')

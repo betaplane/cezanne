@@ -113,8 +113,11 @@ def panel_append(P, n):
     return pd.Panel(d)
 
 
-def tsplit(df):
-    return np.where(np.diff(df.index).astype(int) <= 0)[0][0] + 1
+def tsplit(a):
+    try:
+        return np.where(np.diff(a.index).astype(int) <= 0)[0][0] + 1
+    except:
+        return np.where(np.diff(get_time(a)).astype(int) <= 0)[0][0] + 1
 
 
 def day(df):
