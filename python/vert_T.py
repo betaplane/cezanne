@@ -22,45 +22,6 @@ def ts(x):
     return np.array(x.unstack().index, dtype='datetime64[h]')
 
 
-# 3D interpolation using only 4 surrounding points
-def int4(map, k, sta):
-    "t4 = int4(map, time_index, sta['CIM00085586'])"
-    x, y = map.xy()
-
-    def xy(i, j):
-        return (x[i, j], y[i, j])
-
-    def contains(p):
-        for i in range(lon.shape[0] - 1):
-            for j in range(lon.shape[1] - 1):
-                if Polygon((xy(i, j), xy(i + 1, j), xy(i + 1, j + 1), xy(
-                        i, j + 1), xy(i, j))).contains(p):
-                    return i, j
-
-    lon, lat = map(*sta[['lon', 'lat']])
-    i, j = contains(Point(lon, lat))
-    d = np.array(
-        (xy(i, j), xy(i + 1, j), xy(i + 1, j + 1), xy(i, j + 1))).repeat(29, 0)
-    Tx = np.array((T[k, :, i, j], T[k, :, i + 1, j], T[k, :, i + 1, j + 1],
-                   T[k, :, i, j + 1]))
-    Px = np.array((P[k, :, i, j], P[k, :, i + 1, j], P[k, :, i + 1, j + 1],
-                   P[k, :, i, j + 1]))
-    d = np.r_['0,2', d.T, np.log([Px.flatten()])]
-    l = np.r_['0,2', np.repeat([(lon, lat)], len(pl), 0).T, [pl]]
-    return LinearNDInterpolator(d.T, Tx.flatten(), rescale=True)(l.T)
-
-
-# 3D interpolation on complete unstructured mesh
-def inta(j, k):
-    "ta = inta(0,t[0])"
-    d = np.r_[np.r_[[x.flatten()], [y.flatten()]].repeat(29, 1),
-              [np.log(P[j, :, :, :]).transpose((1, 2, 0)).flatten()]]
-    l = np.r_['0,2', np.r_[[ij[0]], [ij[1]]].repeat(len(pl), 1),
-              [np.repeat([pl], 2, 0).flatten()]]
-    return LinearNDInterpolator(
-        d.T, T[j, :, :, :].transpose(
-            (1, 2, 0)).flatten(), rescale=True)(l.T).reshape((2, -1))
-
 
 nc = Dataset('../data/wrf/d02_2014-09-10_transf.nc')
 ma = basemap(nc)
