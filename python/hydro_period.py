@@ -24,6 +24,7 @@ def midx(df):
     df.index = pd.DatetimeIndex(['{}-{}'.format(*t) for t in df.index])
     return df
 xm = midx(x.groupby((x.index.year, x.index.month)).mean())
+xs = xm.dropna().resample('1M').first().fillna(0)
 
 def months(start, n, t):
     """
@@ -38,14 +39,3 @@ xg = x.groupby(partial(months, 5, 12)).mean()
 b = hh.lsqdf(xg)
 
 xr = xg.q - b['b0'] - b['b1'] * xg.r
-
-def coherence(df, f=None, norm='psd'):
-    def t(df):
-        df = df.dropna()
-        return np.array(df.index, dtype='datetime64[D]').astype(int), df
-    if f is None:
-        f, X = LombScargle(*t(df.iloc[:,0])).autopower(normalization=norm)
-    else:
-        X = LombScargle(*t(df.iloc[:,0])).power(f, normalization=norm)
-    Y = LombScargle(*t(df.iloc[:,1])).power(f, normalization=norm)
-    return f,X,Y# np.abs(X * np.conj(Y))**2 / (np.abs(X)**2 * np.abs(Y)**2)
