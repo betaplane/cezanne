@@ -151,7 +151,7 @@ class LS(object):
     def csd(self, n=0, f=None):
         if n==0:
             G = self.raw(f)
-            return (G.iloc[0] * np.conj(G.iloc[1]))
+            return (G.iloc[:,0] * np.conj(G.iloc[:,1]))
         else:
             G = self.welch(n, f)
             return (G.iloc[0] * np.conj(G.iloc[1])).mean(1)
