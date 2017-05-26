@@ -83,15 +83,20 @@ class GLR(object):
         self._i = dict([(k, pd.MultiIndex.from_product((i, [k]))) for k in [0, 1]])
         w[w > c] = np.nan
         self._w = np.exp(-(w / s) ** 2).fillna(0)
-        v = w.notnull()
         self._L = pd.DataFrame(
             np.kron(np.diag(self._w.sum(1)) - self._w, np.identity(2)),
             index = j, columns = j)
-        self._C = pd.DataFrame({0:1, 1:dz})
+
+        v = w.notnull()
+        # v = pd.DataFrame(np.identity(len(w)), index=i, columns=i)
+        z = self._dz.dot(v)
+        z2 = (self._dz**2).dot(v**2)
+
+        self._C = pd.DataFrame({0:1, 1:self._dz})
         self._dz1 = self._diag(np.ones(len(i)), 0, 0) + \
-            self._diag(self._dz, 1, 0) + \
-            self._diag(self._dz, 0, 1)
-        self._dz2 = self._diag(self._dz**2, 1, 1)
+            self._diag(z, 1, 0) + \
+            self._diag(z, 0, 1)
+        self._dz2 = self._diag(z2, 1, 1)
 
     def regress(self, X, lda):
         C = self._C.mul(X.sum(), 0).stack()
