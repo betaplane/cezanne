@@ -4,108 +4,117 @@ import pandas as pd
 from scipy.linalg import solve
 import helpers as hh
 
-D = pd.HDFStore('../../data/tables/station_data_new.h5')
-S = pd.HDFStore('../../data/tables/LinearLinear.h5')
-T = hh.stationize(D['ta_c'].xs('prom', 1, 'aggr').drop('10', 1, 'elev')) + 273.15
-Tm = S['T2']
-sta = D['sta']
-dist = D['dist']
-dz = S['z']['d03_op'] - sta['elev']
-dt = Tm['d03_0_00']-T
-D.close()
-S.close()
 
-X = dz.dropna().to_frame()
-X[1] = 1
-Y = dt[dz.index]
-w = dist.loc[dz.index, dz.index]
-w[w>50000] = np.nan
-w = np.exp(-(w / 20000) ** 2)
-
-def space(v, data, weights=True):
-    try:
-        y = data.mul(v, 0) if weights else data.loc[v.index[v.notnull()]]
-        y.dropna(inplace=True)
-    except:
-        return np.nan
-    if len(y) < 5:
-        return np.nan
-    x = y.as_matrix()
-    b = np.linalg.lstsq(x[:,:2], x[:,2])[0]
-    return pd.concat((pd.Series(b*[1000,1], index=['b','c']), data.ix[y.index, 2]))
-
-def time(t, weights=True):
-    m = pd.concat((X, t), 1).dropna()
-    return w.apply(space, data=m, weights=weights).loc['b']
-
-def mspace(v, data, weights=False):
-    try:
-        y = data.mul(v, 0, level=0) if weights else data.loc[v.index[v.notnull()].tolist()]
-        y = y.dropna()
-    except:
-        return np.nan
-    if len(y) < 5:
-        return np.nan
-    x = y[[1,'x','y']].as_matrix()
-    b = np.linalg.lstsq(x[:,:2], x[:,2])[0]
-    return b[1]
-
-def mtime(t, weights=False):
-    # from IPython.core.debugger import Tracer; Tracer()()
-    x, y = X[0].align(t.T, broadcast_axis=1)
-    f = pd.Panel({'x':x, 'y':y}).to_frame()
-    f[1] = 1
-    return w.apply(mspace, data=f, weights=weights) * 1000
-
-def grouper(t, s=0, h=3):
-    return (np.array(t, dtype='datetime64[h]').astype(int) - s) // 3
-
-b = time(Y.loc['2015-08-12 08'])
-
-def plot(c):
-    fig = plt.figure()
-    y = pd.concat((dz, c, d[c.name]),1)
-    plt.scatter(y.iloc[:,0], y.iloc[:,1],c=y.iloc[:,2])
-    plt.colorbar()
-    plt.scatter(y.ix[c.name,0], y.ix[c.name,1], color='r')
-    xl = plt.gca().get_xlim()
-    x = np.linspace(xl[0], xl[1], 100)
-    plt.plot(x, c['c'] + x * c['b']/1000, '-')
-    fig.show()
-
-
-class GLR(object):
+class reg_base(object):
     def __init__(self, dz, dist, s=20000, c=50000):
         self._dz = dz.dropna()
         i = self._dz.index
         w = dist.loc[i, i]
+        w[w > c] = np.nan
+        self._w = np.exp(-(w / s) ** 2)
+
+    def plot(self, X, loc):
+        fig = plt.figure()
+        w = self._w[loc]
+        w = w[w>0]
+        i = w.index
+        x = X[i].as_matrix().T.flatten()
+        plt.scatter(np.repeat(self._dz[i], len(X)), x, c=np.repeat(w, len(X)))
+        plt.colorbar()
+        plt.scatter(np.repeat(self._dz[loc], len(X)), X[loc], color='r')
+        xl = plt.gca().get_xlim()
+        y = np.linspace(xl[0], xl[1], 100)
+        plt.plot(y, self.p['icpt'][loc] + y * self.p['lr'][loc], '-')
+        fig.show()
+
+class OLS(reg_base):
+    def __init__(self, *args, **kw):
+        self._weights = kw.pop('weights', False)
+        super(OLS, self).__init__(*args, **kw)
+
+    def _space(self, v, data):
+        try:
+            y = data.mul(v, 0) if self._weights else data.loc[v.index[v.notnull()]]
+            y.dropna(inplace=True)
+        except:
+            return pd.Series([np.nan, np.nan], index=['icpt', 'lr'])
+        if len(y) < 5:
+            return pd.Series([np.nan, np.nan], index=['icpt', 'lr'])
+        x = y[[1,'x','y']].as_matrix()
+        b = np.linalg.lstsq(x[:,:2], x[:,2])[0]
+        return pd.Series(b, index=['icpt','lr'])
+
+    def _time(self, t):
+        a = self._dz.to_frame()
+        a[1] = 1
+        m = pd.concat((a, t), 1).dropna()
+        self.p = self._w.apply(self._space, data=m).T
+
+    def _mspace(self, v, data):
+        try:
+            y = data.mul(v, 0, level=0) if self._weights else data.loc[v.index[v.notnull()].tolist()]
+            y = y.dropna()
+        except:
+            return pd.Series([np.nan, np.nan], index=['icpt', 'lr'])
+        if len(y) < 5:
+            return pd.Series([np.nan, np.nan], index=['icpt', 'lr'])
+        x = y[[1,'x','y']].as_matrix()
+        b = np.linalg.lstsq(x[:,:2], x[:,2])[0]
+        return pd.Series(b, index=['icpt', 'lr'])
+
+    def _mtime(self, t):
+        x, y = self._dz.align(t.T, broadcast_axis=1)
+        f = pd.Panel({'x':x, 'y':y}).to_frame()
+        f[1] = 1
+        self.p = self._w.apply(self._mspace, data=f).T
+
+    @staticmethod
+    def _grouper(t, s=0, h=3):
+        return (np.array(t, dtype='datetime64[h]').astype(int) - s) // 3
+
+    def regress(self, X, mult=True):
+        if mult:
+            self._mtime(X)
+        else:
+            X.apply(self._time)
+        return self.p['lr'] * 1000
+
+
+class GLR(reg_base):
+    def __init__(self, *args, **kw):
+        super(GLR, self).__init__(*args, **kw)
+        i = self._dz.index
         j = pd.MultiIndex.from_product((i, [0, 1]))
         self._i = dict([(k, pd.MultiIndex.from_product((i, [k]))) for k in [0, 1]])
-        w[w > c] = np.nan
-        self._w = np.exp(-(w / s) ** 2).fillna(0)
-        self._L = pd.DataFrame(
+        m = self._w.notnull()
+        self._w.fillna(0, inplace=True)
+        self.L = pd.DataFrame(
             np.kron(np.diag(self._w.sum(1)) - self._w, np.identity(2)),
             index = j, columns = j)
 
-        v = w.notnull()
-        # v = pd.DataFrame(np.identity(len(w)), index=i, columns=i)
-        z = self._dz.dot(v)
-        z2 = (self._dz**2).dot(v**2)
-
-        self._C = pd.DataFrame({0:1, 1:self._dz})
-        self._dz1 = self._diag(np.ones(len(i)), 0, 0) + \
-            self._diag(z, 1, 0) + \
-            self._diag(z, 0, 1)
-        self._dz2 = self._diag(z2, 1, 1)
+        # m = pd.DataFrame(np.identity(len(w)), index=i, columns=i)
+        # [ 1]
+        # [dz]
+        self._m = pd.concat((m, m.mul(self._dz, 1)), 0)
+        self._m.index = pd.MultiIndex.from_product(([0, 1], i)).swaplevel()
 
     def regress(self, X, lda):
-        C = self._C.mul(X.sum(), 0).stack()
-        i = C.index
-        A = self._dz1 * len(X) + self._dz2
-        p = solve(A.loc[i, i] + lda * self._L.loc[i, i], C)
-        q = pd.DataFrame(p, index=i).unstack()
-        q.columns = ['icpt', 'lr']
-        return q
+        x = X[self._m.columns].T.notnull()
+        # do identical operation on each timestep, then sum over times
+        # [1]
+        #    [dz**2]
+        ad = np.sum((self._m ** 2).dot(x), 1)
+        #      [dz]
+        # [dz]
+        bc = np.sum((self._m.xs(0, 0, 1) * self._m.xs(1, 0, 1)).dot(x), 1)
+        self.A = self._diag(ad.xs(0, 0, 1), 0, 0) + self._diag(ad.xs(1, 0, 1), 1, 1)
+        self.A = self.A + self._diag(bc, 0, 1) + self._diag(bc, 1, 0)
+        self.C = np.sum(self._m.dot(X[self._m.columns].T.fillna(0)), 1)
+        i = self.C.index
+        p = solve(self.A.loc[i, i] + lda * self.L.loc[i, i], self.C)
+        self.p = pd.DataFrame(p, index=i).unstack()
+        self.p.columns = ['icpt', 'lr']
+        return self.p['lr'] * 1000
 
     def _diag(self, ii, row, col):
         a = pd.DataFrame(np.diag(ii), index = self._i[row], columns = self._i[col])
@@ -118,16 +127,20 @@ class GLR(object):
             pd.concat((c, d), 1).sort_index(1)
         ), 0).sort_index(0)
 
-    def plot(self, X, p, loc):
-        fig = plt.figure()
-        w = self._w[loc]
-        w = w[w>0]
-        i = w.index
-        x = X[i].as_matrix().T.flatten()
-        plt.scatter(np.repeat(self._dz[i], len(X)), x, c=np.repeat(w, len(X)))
-        plt.colorbar()
-        plt.scatter(np.repeat(self._dz[loc], len(X)), X[loc], color='r')
-        xl = plt.gca().get_xlim()
-        y = np.linspace(xl[0], xl[1], 100)
-        plt.plot(y, c['c'] + x * c['b']/1000, '-')
-        fig.show()
+
+
+if __name__=="__main__":
+    D = pd.HDFStore('../../ceaza/data/station_data_new.h5')
+    S = pd.HDFStore('../../ceaza/data/LinearLinear.h5')
+    T = hh.stationize(D['ta_c'].xs('prom', 1, 'aggr').drop('10', 1, 'elev')) + 273.15
+    Tm = S['T2']
+    sta = D['sta']
+    dist = D['dist']
+    dz = S['z']['d03_op'] - sta['elev']
+    dt = Tm['d03_0_00']-T
+    D.close()
+    S.close()
+    X = dt.loc['2015-05-18']
+
+    g = OLS(dz, dist)
+    p = g.regress(X)
