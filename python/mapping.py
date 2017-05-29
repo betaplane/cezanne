@@ -67,31 +67,26 @@ class basemap(Basemap):
         return affine(*self(*self._lonlat))
 
 
-def map_plot(df, sta, map=None):
-    if map is None:
-        map = basemap(sta.loc[df.dropna().index])
-    elif not isinstance(map, Basemap):
-        map = basemap(map)
+def map_plot(df, sta, Map=None, vmin=None, vmax=None):
+    if Map is None:
+        Map = basemap(sta.loc[df.dropna().index])
+    elif not isinstance(Map, Basemap):
+        Map = basemap(Map)
     fig = plt.figure()
     try:
         B = pd.concat(
             sta.loc[:, ('lon', 'lat')].align(df, level='station', axis=0),
-            axis=1).dropna()
+            axis=1).dropna().as_matrix()
     except:
-        B = pd.concat(
-            sta.loc[:, ('lon', 'lat')].align(df, axis=0), axis=1).dropna()
-    norm = colors.Normalize(vmin=min(B.iloc[:, -1]), vmax=max(B.iloc[:, -1]))
-    sm = cm.ScalarMappable(norm=norm)
-    sm.set_array(B.iloc[:, -1])
-    for i, c in B.iterrows():
-        map.plot(
-            c['lon'], c['lat'], 'o', color=sm.to_rgba(c.iloc[-1]), latlon=True)
-    plt.colorbar(sm)
-    map.drawcoastlines()
-    map.drawparallels(range(-40, -15, 5), labels=[1, 1, 1, 1])
-    map.drawmeridians(range(-90, -60, 5), labels=[1, 1, 1, 1])
+        B = pd.concat((sta.loc[:, ('lon', 'lat')], df), axis=1).dropna().as_matrix()
+    Map.scatter(B[:,0], B[:,1], c=B[:,2], marker='o', latlon=True, vmin=vmin, vmax=vmax)
+    # Map.scatter(B[:,0], B[:,1], c=B[:,2], marker='o', latlon=True)
+    cb = plt.colorbar()
+    Map.drawcoastlines()
+    Map.drawparallels(range(-40, -15, 5), labels=[1, 1, 1, 1])
+    Map.drawmeridians(range(-90, -60, 5), labels=[1, 1, 1, 1])
     fig.show()
-    return map
+    return fig, cb
 
 
 def affine(x, y):
