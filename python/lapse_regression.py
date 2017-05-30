@@ -16,9 +16,9 @@ class reg_base(object):
         fig = plt.figure()
         w = self._w[loc]
         w = w[w>0]
-        i = w.index
+        i = list(set(w.index).intersection(X.columns))
         x = X[i].as_matrix().T.flatten()
-        plt.scatter(np.repeat(self._dz[i], len(X)), x, c=np.repeat(w, len(X)))
+        plt.scatter(np.repeat(self._dz[i], len(X)), x, c=np.repeat(w[i], len(X)))
         plt.colorbar()
         plt.scatter(np.repeat(self._dz[loc], len(X)), X[loc], color='r')
         xl = plt.gca().get_xlim()
@@ -97,10 +97,11 @@ class GLR(reg_base):
         j = pd.MultiIndex.from_product((i, [0, 1]))
 
         # mask for the actual regression
-        m = (self._dist < c)
+        # m = (self._dist < c)
 
         # the weights for the graph Laplacian
         self._w = 1 - self._dist / self._dist.max().max()
+        m = self._w
 
         # no weighting would be identity here
         # m = pd.DataFrame(np.identity(len(w)), index=i, columns=i)
@@ -132,7 +133,7 @@ class GLR(reg_base):
         bc = np.sum((m.xs(0, 0, 1) * m.xs(1, 0, 1)).dot(x), 1)
         self.A = self._diag(ad.xs(0, 0, 1), 0, 0) + self._diag(ad.xs(1, 0, 1), 1, 1)
         self.A = self.A + self._diag(bc, 0, 1) + self._diag(bc, 1, 0)
-        self.C = np.sum(m.dot(xt.fillna(0)), 1)
+        self.C = np.sum(m.dot(xt.fillna(0)), 1) # possibly wrong
         i = self.C.index
         p = solve(self.A.loc[i, i] + lda * self.L.loc[i, i], self.C)
         self.p = pd.DataFrame(p, index=i).unstack()
