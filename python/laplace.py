@@ -7,12 +7,6 @@ import helpers as hh
 import matplotlib.pyplot as plt
 
 
-class reg_base(object):
-    def __init__(self, dz, dist):
-        self._dz = dz.dropna()
-        i = self._dz.index
-        self._dist = dist.loc[i, i]
-
 
 
 # This is an implementation of a linear regression local in space and time (but over some neighborhood), with
@@ -23,15 +17,18 @@ class reg_base(object):
 
 class GLR(object):
     def __init__(self, reg_mask, coeff_mask=None):
-        self._w = xr.DataArray(reg_mask, dims=('space', 'i'))
-        self.W = 1 - self._w / self._w.max()
-        self.L = np.diag(self.W.sum('i')) - self.W
+        self.W = xr.DataArray(reg_mask, dims=('space', 'i'))
+        # self.W = 1 - self._w / self._w.max()
+        self.L = xr.DataArray(np.diag(np.array(coeff_mask.sum(1))) - coeff_mask, dims=('space', 'i'))
 
     def regress(self, X, Y, lda, plot=None):
         """
-        :params X: predictor (var x space x time)
-        :params Y: target (var x space x time)
-        :params lda: regularization parameter (lambda)
+        :param X: predictor
+        :type X: xarray with dims 'var', 'space', 'time'
+        :param Y: target
+        :type Y: xarray with dims 'space', 'time'
+        :param lda: regularization parameter (lambda)
+        :param plot: None or location from 'space' dim to plot
         """
         x, y = xr.broadcast(X * self.W, Y * self.W, exclude=['var'])
         C = (x * y).sum(('time', 'space')).transpose('i', 'var')
@@ -52,9 +49,20 @@ class GLR(object):
         plt.scatter(x.sel(space=loc), y.sel(space=loc), color='r')
         xl = plt.gca().get_xlim()
         z = np.linspace(xl[0], xl[1], 100)
-        plt.plot(z, self.p.sel(i=loc, var=0).values + z * self.p.sel(i=loc, var=0).values, '-')
+        plt.plot(z, self.p.sel(i=loc, var=1).values + z * self.p.sel(i=loc, var=0).values, '-')
         fig.show()
 
+    @classmethod
+    def test(cls, icpt=[0, 1], slope=[3, 3], reg=0, coeff=0, lda=0, plot=0):
+        x = np.linspace(0, 1, len(icpt)*100).reshape((100, -1))
+        y = [slope] * x + np.random.rand(len(icpt)*100).reshape(x.shape) / 2 + [icpt]
+        x = np.r_['0,3', x, np.ones(x.shape)]
+        X = xr.DataArray(x, dims=('var', 'time', 'space'))
+        Y = xr.DataArray(y, dims=('time', 'space'))
+        I = np.identity(len(icpt))
+        r = cls(I+(1-I)*(1-reg), I+(1-I)*(1-coeff))
+        r.regress(X, Y, lda, plot)
+        return r
 
 
 

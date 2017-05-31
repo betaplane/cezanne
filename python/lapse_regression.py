@@ -91,17 +91,18 @@ class OLS(reg_base):
 # In SDM, 324–332. SIAM, 2013. http://epubs.siam.org/doi/abs/10.1137/1.9781611972832.36.
 
 class GLR(reg_base):
-    def __init__(self, *args, c=50000, s=20000):
+    def __init__(self, *args, reg_mask, coeff_mask):
         super(GLR, self).__init__(*args)
         i = self._dz.index
         j = pd.MultiIndex.from_product((i, [0, 1]))
 
         # mask for the actual regression
         # m = (self._dist < c)
+        m = reg_mask
 
         # the weights for the graph Laplacian
-        self._w = 1 - self._dist / self._dist.max().max()
-        m = self._w
+        # self._w = 1 - self._dist / self._dist.max().max()
+        self._w = coeff_mask
 
         # no weighting would be identity here
         # m = pd.DataFrame(np.identity(len(w)), index=i, columns=i)
@@ -151,6 +152,7 @@ class GLR(reg_base):
             pd.concat((a, b), 1).sort_index(1),
             pd.concat((c, d), 1).sort_index(1)
         ), 0).sort_index(0)
+
 
 
 
