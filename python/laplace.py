@@ -16,12 +16,27 @@ import matplotlib.pyplot as plt
 # In SDM, 324–332. SIAM, 2013. http://epubs.siam.org/doi/abs/10.1137/1.9781611972832.36.
 
 class GLR(object):
-    def __init__(self, reg_mask, coeff_mask=None, time_mask=None):
-        self.W = xr.DataArray(reg_mask, dims=('space', 'i'))
-        # self.W = 1 - self._w / self._w.max()
-        L = np.kron(time_mask, coeff_mask)
-        i = pd.MultiIndex.from_product(([0,1], [0,1]))
-        self.L = xr.DataArray(np.diag(np.array(L.sum(1))) - L, coords=[i, i])
+    def __init__(self, distances, weights=None, laplacian=None):
+        d = xr.DataArray(distances, dims=('space', 'i'))
+        if weights is None:
+            self.W = 1 - d / d.max()
+        else:
+            self.W = weights(d)
+        if laplacian is None:
+            self.L = self.W
+        else:
+            self.L = laplacian(d)
+
+    def time_laplacian(self, t=None, size=None, func=None):
+        if size is None:
+            DT = np.abs([[i - j for i in t] for j in t])
+        else:
+            DT = 1 - la.toeplitz(np.linspace(0, 1, size))
+        if func is not None:
+            DT = func(DT)
+        K = np.kron(DT, self.L)
+        i = pd.MultiIndex.from_product(([0, 1], [0, 1]))
+        self.K = xr.DataArray(np.diag(np.array(K.sum(1))) - K, coords=[i, i])
 
     def _block(self, X, Y):
         x, y = xr.broadcast(X * self.W, Y * self.W, exclude=['var'])
@@ -31,7 +46,7 @@ class GLR(object):
         # (see Hastie et al.)
         xm = (x.sum('space') / self.W.sum('space')).mean('time')
         ym = (y.sum('space') / self.W.sum('space')).mean('time')
-        # from IPython.core.debugger import Tracer; Tracer()()
+
         x = x - xm * self.W # important!
         y = y - ym * self.W # mean needs to be multiplied by mask
         C = (x * y).sum(('time', 'space')).transpose('i', 'var')
@@ -39,26 +54,47 @@ class GLR(object):
         A = la.block_diag(*np.einsum('ijkl,imkl->ijm', a, a))
         return A, C, xm, ym
 
-    def regress(self, X, Y, lda, window=None, step=None):
+    def regress(self, X, Y, lda, window=None, step=None, laplacian=None):
         """
         :param X: predictor
         :type X: xarray with dims 'var', 'space', 'time' (NO intercept!)
         :param Y: target
         :type Y: xarray with dims 'space', 'time'
         :param lda: regularization parameter (lambda)
+        :param window: window width for weighted regression in time (in array indexes)
+        :param step: increment by which the window to shift (in array indexes)
+        :param laplacian: set if the time Laplacian should be computed from the data's time axis
+        :type laplacian: callable
         """
-        i = pd.MultiIndex.from_product(([0, 1], X['space']))
         nvar = X['var'].size
-        L = self.L.loc[i, i]
-        # from IPython.core.debugger import Tracer; Tracer()()
+
+        if laplacian is not None:
+            self.time_laplacian(Y['time'], func=laplacian)
+
+        if hasattr(self, 'K'):
+            # in case we have a space-time Laplacian
+            i = pd.MultiIndex.from_product(([0, 1], X['space']))
+            L = self.K.loc[i, i]
+        else:
+            # in case we only have a space Laplacian
+            i = X['space']
+            L = self.L.loc[i, i]
+
+        # we prepare one time 'chunk' at a time - we need all the chunks eventually for
+        # the linear system, but the subroutine only takes as much as needed as per time weighting
+        # - but it does deal with all space at a time, both for weighting and arranging it for
+        # the graph Laplacian
         A, C, xm, ym = zip(*[self._block(
             X.isel(time=slice(k, k+window)),
             Y.isel(time=slice(k, k+window))
         ) for k in range(0, Y['time'].size, step)])
+
         L = np.kron(L, np.identity(nvar))
         A = la.block_diag(*A)
         C = np.vstack(C).flatten()
         p = la.solve(A + lda * L, C).reshape((-1, nvar)) # i x nvar
+
+        # the intercept is computed from mean of y plus mean x dot beta
         icpt = np.vstack(ym).reshape((-1, 1)) - np.sum(np.vstack(xm) * p, 1).reshape((-1,1))
         p = np.r_['1,2', p, icpt]
         coords = [i, np.r_[X['var'], ['icpt']]]
@@ -89,7 +125,7 @@ class GLR(object):
             fig.show()
 
     @classmethod
-    def test(cls, icpt=[[0, 1], [2, 3]], slope=[[3, -1], [1, -5]], reg=0, coeff=0, time=0, lda=0):
+    def test(cls, icpt=[[0, 1], [2, 3]], slope=[[3, -1], [1, -5]], dist=0, lapl=0, time=0, lda=0):
         x = np.atleast_3d(np.linspace(0, 1, 100)).transpose((1,0,2))
         y = [slope] * x + [icpt]
         y = y + np.random.randn(*y.shape) / 10
@@ -99,7 +135,8 @@ class GLR(object):
         X = xr.DataArray(x, dims=('var', 'time', 'space'))
         Y = xr.DataArray(y.transpose((1,0,2)).reshape((-1,2)), dims=('time', 'space'))
         I = np.identity(2)
-        r = cls(I+(1-I)*(1-reg), I+(1-I)*(1-coeff), I+(1-I)*(1-time))
+        r = cls(1-I) #, lambda d:d+(1-I)*(1-dist), lambda d:I+(1-I)*(1-lapl))
+        r.time_laplacian(size=2, func=lambda d:I+(1-I)*(1-time))
         r.regress(X, Y, lda, window=100, step=100)
         fig, axs = plt.subplots(r.p['time'].size, r.p['space'].size)
         for i,ay in enumerate(axs):
