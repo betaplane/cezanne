@@ -14,6 +14,7 @@ def detrend(df):
         return c - b[0] - b[1] * t
     return df.apply(lstsq, 0)
 
+# Schulz, Michael, and Karl Stattegger. “SPECTRUM: Spectral Analysis of Unevenly Spaced Paleoclimatic Time Series.” Computers & Geosciences 23, no. 9 (1997): 929–945.
 
 
 class LS(object):
@@ -30,7 +31,7 @@ class LS(object):
         t = np.array(df.index, dtype='datetime64[m]').astype(int)
         period = np.timedelta64(1, period).astype('timedelta64[m]').astype(int)
         self._y.index = t / period
-        self._tf = tshift
+        self._tf = tshift # shift should be applied to one of the time series, see Schulz and Stattegger
         self._tol1 = tol1
         self._tol2 = tol2
         self._detr = detrend
