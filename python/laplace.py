@@ -135,8 +135,8 @@ class GLR(object):
         X = xr.DataArray(x, dims=('var', 'time', 'space'))
         Y = xr.DataArray(y.transpose((1,0,2)).reshape((-1,2)), dims=('time', 'space'))
         I = np.identity(2)
-        r = cls(1-I) #, lambda d:d+(1-I)*(1-dist), lambda d:I+(1-I)*(1-lapl))
-        r.time_laplacian(size=2, func=lambda d:I+(1-I)*(1-time))
+        r = cls(1-I, lambda d:d*dist+I, lambda d:d*lapl+I)
+        r.time_laplacian(size=2, func=lambda d:d+(1-I)*time)
         r.regress(X, Y, lda, window=100, step=100)
         fig, axs = plt.subplots(r.p['time'].size, r.p['space'].size)
         for i,ay in enumerate(axs):
