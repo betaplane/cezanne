@@ -134,9 +134,9 @@ class GLR(object):
             fig = plt.figure()
         else:
             plt.sca(ax)
-        # x, y, w = xr.broadcast(X.sel(var=0), Y, self.W.sel(space=loc[1]))
+        # x, y, w = xr.broadcast(X.sel(var=var), Y, self.W.sel(space=loc[1]))
         # plt.scatter(x, y, c=w)
-        x, y = xr.broadcast(X.sel(var=0), Y)
+        x, y = xr.broadcast(X.sel(var=var), Y)
         plt.scatter(x, y)
         # plt.colorbar()
         plt.scatter(x.sel(space=loc[1]), y.sel(space=loc[1]), color='r')
