@@ -39,13 +39,17 @@ class GLR(object):
         # for any time window (otherwise, would only multiply with same indexes)
         T = min(t, Y['time'].size)
 
-        # safeguard against window over-running end of time series
-        W = self.W.sel(time=slice(0, T))
         try:
             X['time'] = np.arange(T) # will fail if 'time' not in dims
         except ValueError:
             pass
         Y['time'] = np.arange(T)
+
+        # get a missing values mask for the weight matrix
+        mv = (X.count('var') == X['var'].size) * Y.notnull()
+
+        # safeguard against window over-running end of time series, and zero out missing values
+        W = self.W.sel(time=slice(0, T)) * mv
 
         # takes care of broadcasting too
         x = X * W
@@ -129,7 +133,7 @@ class GLR(object):
         self.p['var'] = np.r_[self._var, ['icpt']]
 
 
-    def plot(self, X, Y, loc, var='0', icpt='icpt', ax=None):
+    def plot(self, X, Y, loc, var='x', icpt='icpt', ax=None):
         if ax is None:
             fig = plt.figure()
         else:
@@ -157,7 +161,9 @@ class GLR(object):
         # x = np.r_['0,3', x, np.ones(x.shape)]
         x = np.r_['0,3', x]
         X = xr.DataArray(x, dims=('var', 'time', 'space'))
+        X['var'] = ['x']
         Y = xr.DataArray(y.transpose((1,0,2)).reshape((-1,2)), dims=('time', 'space'))
+        Y[np.random.randint(0,200,50), :] = np.nan
         if vars:
             return X, Y
         I = np.identity(2)
@@ -183,8 +189,8 @@ class GLR(object):
 
 if __name__=="__main__":
     import helpers as hh
-    D = pd.HDFStore('../../data/tables/station_data_new.h5')
-    S = pd.HDFStore('../../data/tables/LinearLinear.h5')
+    D = pd.HDFStore('../../ceaza/data/station_data_new.h5')
+    S = pd.HDFStore('../../ceaza/data/LinearLinear.h5')
     t = hh.stationize(D['ta_c'].xs('prom', 1, 'aggr').drop('10', 1, 'elev')) + 273.15
     Tm = S['T2n']
     sta = D['sta']
