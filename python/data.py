@@ -1,13 +1,57 @@
 #!/usr/bin/env python
 from glob import glob
 import os
-from configparser import ConfigParser
 import xarray as xr
-
+import pandas as pd
+from datetime import datetime, timedelta
+from configparser import ConfigParser
+from mpl_toolkits.basemap import Basemap
+from mapping import matts
+from interpolation import xr_interp
 
 conf = ConfigParser()
 conf.read('data.cfg')
 
+class Data(object):
+    def __init__(self, config='data.cfg'):
+        self.conf = ConfigParser()
+        self.conf.read(confi)
 
-for f in glob(os.path.join(conf['datadir']['wrf'], '*.nc')):
-    nc = xr.open_dataset(f)
+    def open(name):
+        ext = os.path.splitext(name)[1]
+        p = os.path.join(conf['data']['base'], conf['data'][ext], name)
+        return pd.HDFStore(p)
+
+
+def netcdf(var, domain, lead_day, from_date, sta=None):
+    dirs = sorted(glob(os.path.join(conf['wrf']['op1'], 'c01*')))
+    dirs.extend(sorted(glob(os.path.join(conf['wrf']['op2'], 'c01*'))))
+    s = (from_date + timedelta(days=lead_day)).strftime('%Y%m%d%H')
+    def name(d):
+        dt = datetime.strptime(os.path.split(d)[1], 'c01_%Y%m%d%H')
+        f = glob(os.path.join(d, '*_{}_*'.format(domain)))
+        s = (dt + timedelta(days=lead_day)).strftime('%Y-%m-%d_%H:%M:%S')
+        return os.path.join(d, 'wrfout_{}_{}'.format(domain, s))
+    files = [name(d) for d in dirs if d[-10:] >= s]
+    files = [f for f in files if os.path.isfile(f)]
+    ds = xr.open_dataset(files[0])
+    if sta is not None:
+        Map = Basemap(projection='lcc', **matts(ds))
+        df = xr_interp(ds, var, sta, map=Map)
+        for f in files[1:]:
+            df = pd.concat((df, xr_interp(xr.open_dataset(f), var, sta, map=Map)), 0)
+            print(f)
+    else:
+        df = xr.open_dataset(files[0])[var]
+        for f in files[1:]:
+            df = xr.concat((df, xr.open_dataset(f)[var]), 'Time')
+            print(f)
+    return df
+
+def append(df, *args, hour=12, dt=-4, **kwargs):
+    t = df.dropna(0, 'all').index[-1].to_datetime()
+    h = t.replace(hour=hour)
+    if h > t - timedelta(hours=dt-1):
+        h = h - timedelta(days=1)
+    n = netcdf(*args, **kwargs, from_date=h)
+    return pd.concat((df[:n.index[0] - timedelta(minutes=1)], n), 0)

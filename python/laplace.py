@@ -189,8 +189,8 @@ class GLR(object):
 
 if __name__=="__main__":
     import helpers as hh
-    D = pd.HDFStore('../../ceaza/data/station_data_new.h5')
-    S = pd.HDFStore('../../ceaza/data/LinearLinear.h5')
+    D = hh.data('station_data_new.h5')
+    S = hh.data('LinearLinear.h5')
     t = hh.stationize(D['ta_c'].xs('prom', 1, 'aggr').drop('10', 1, 'elev')) + 273.15
     Tm = S['T2n']
     sta = D['sta']

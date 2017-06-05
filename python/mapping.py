@@ -7,6 +7,24 @@ import numpy as np
 import helpers as hh
 
 
+def matts(file, width=None, height=None):
+    return {
+        'lat_0':
+        file.CEN_LAT,
+        'lat_1':
+        file.TRUELAT1,
+        'lat_2':
+        file.TRUELAT2,
+        'lon_0':
+        file.CEN_LON,
+        'width':
+        file.DX * (getattr(file, 'WEST-EAST_GRID_DIMENSION')
+                   if width is None else width),
+        'height':
+        file.DY * (getattr(file, 'SOUTH-NORTH_GRID_DIMENSION')
+                   if height is None else height)
+    }
+
 class basemap(Basemap):
     def __init__(self, obj):
         def lonlat(lon, lat):
@@ -22,28 +40,13 @@ class basemap(Basemap):
                 'lat_2': -40
             }
 
-        def atts(file, width=None, height=None):
-            return {
-                'lat_0':
-                file.CEN_LAT,
-                'lat_1':
-                file.TRUELAT1,
-                'lat_2':
-                file.TRUELAT2,
-                'lon_0':
-                file.CEN_LON,
-                'width':
-                file.DX * (getattr(file, 'WEST-EAST_GRID_DIMENSION')
-                           if width is None else width),
-                'height':
-                file.DY * (getattr(file, 'SOUTH-NORTH_GRID_DIMENSION')
-                           if height is None else height)
-            }
 
         def attshw(file):
             h, w = file.variables['XLONG_M'].shape[-2:]
             return atts(file, w, h)
 
+        # this doesn't work if one of the calls to try_list succeeds but returns the wrong
+        # object for the init call to Basemap
         super().__init__(projection='lcc',
          **hh.try_list(obj,
           lambda x: lonlat(x['lon'],x['lat']),

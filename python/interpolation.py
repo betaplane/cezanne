@@ -2,8 +2,10 @@
 import numpy as np
 import pandas as pd
 from scipy import interpolate as ip
-from mapping import basemap, affine
+from mapping import basemap, affine, matts
+from mpl_toolkits.basemap import Basemap as bmap
 import helpers as hh
+import re
 
 
 def grid_interp(xy, data, ij, index, time=None, method='linear'):
@@ -109,6 +111,31 @@ def nc_interp(nc,
     else:
         return grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
 
+
+def xr_interp(xr,
+              var,
+              stations,
+              time=True,
+              tz=False,
+              method='linear',
+              map=None):
+    m = bmap(projection='lcc', **matts(xr)) if map is None else map
+    ij = m(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
+    v = xr[var]
+    lon = [c for c in v.coords if re.search('lon', c, re.IGNORECASE)][0]
+    lat = [c for c in v.coords if re.search('lat', c, re.IGNORECASE)][0]
+    time = [c for c in v.coords if re.search('time', c, re.IGNORECASE)][0]
+    xy = m(hh.g2d(v.coords[lon]), hh.g2d(v.coords[lat].data))
+    x = np.array(xr[var]).squeeze()
+    if time:
+        t = xr['XTIME']
+        if tz:
+            t = t.tz_localize('UTC').tz_convert(hh.CEAZAMetTZ())
+        else:
+            t -= np.timedelta64(4, 'h')
+        return grid_interp(xy, x, ij, stations.index, t, method=method)
+    else:
+        return grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
 
 # Below are some implementations of interpolations of 3D fields
 # to 1D vertical profiles. I have compared the results to simplified

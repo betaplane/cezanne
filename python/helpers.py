@@ -18,7 +18,7 @@ def try_list(obj, *args):
 
 def g2d(v):
     m, n = v.shape[-2:]
-    return v[:].flatten()[-m * n:].reshape((m, n))
+    return np.array(v[:]).flatten()[-m * n:].reshape((m, n))
 
 
 class CEAZAMetTZ(tzinfo):
@@ -201,3 +201,11 @@ def stationize(df):
     elif isinstance(df.index, pd.MultiIndex):
         c.index = df.index.get_level_values('station')
     return c
+
+def data(name):
+    from configparser import ConfigParser
+    conf = ConfigParser()
+    conf.read('data.cfg')
+    ext = os.path.splitext(name)[1]
+    p = os.path.join(conf['data']['base'], conf['data'][ext], name)
+    return pd.HDFStore(p)
