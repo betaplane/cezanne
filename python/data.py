@@ -8,6 +8,8 @@ from configparser import ConfigParser
 from mpl_toolkits.basemap import Basemap
 from mapping import matts
 from interpolation import xr_interp
+import concurrent.futures as cc
+
 
 conf = ConfigParser()
 conf.read('data.cfg')
@@ -38,15 +40,20 @@ def netcdf(var, domain, lead_day, from_date, sta=None):
     if sta is not None:
         Map = Basemap(projection='lcc', **matts(ds))
         df = xr_interp(ds, var, sta, map=Map)
-        for f in files[1:]:
-            df = pd.concat((df, xr_interp(xr.open_dataset(f), var, sta, map=Map)), 0)
-            print(f)
+        with cc.ThreadPoolExecutor(max_workers=4) as exe:
+            fl = {exe.submit(lambda f:xr_interp(xr.open_dataset(f), var, sta, map=Map)): f for f in files[1:]}
+            for f in cc.as_completed(fl):
+                df = pd.concat((df, f.result()), 0)
+                print(fl[f])
     else:
         df = xr.open_dataset(files[0])[var]
-        for f in files[1:]:
-            df = xr.concat((df, xr.open_dataset(f)[var]), 'Time')
-            print(f)
+        with cc.ThreadPoolExecutor(max_workers=4) as exe:
+            fl = {exe.submit(lambda f: xr.open_dataset(f)[var]): f for f in files[1:]}
+            for f in cc.as_completed(fl):
+                df = xr.concat((df, f.result()), 'Time')
+                print(fl[f])
     return df
+
 
 def append(df, *args, hour=12, dt=-4, **kwargs):
     t = df.dropna(0, 'all').index[-1].to_datetime()
