@@ -129,9 +129,10 @@ def xr_interp(nc,
         x = np.array(ds[var]).squeeze()
         if time:
             t = ds['XTIME'] + np.timedelta64(dt, 'h')
-            return grid_interp(xy, x, ij, stations.index, t, method=method)
+            df = grid_interp(xy, x, ij, stations.index, t, method=method)
         else:
-            return grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
+            df = grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
+    return df, m if map is None else df
 
 # Below are some implementations of interpolations of 3D fields
 # to 1D vertical profiles. I have compared the results to simplified

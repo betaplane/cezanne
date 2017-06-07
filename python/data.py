@@ -1,66 +1,70 @@
 #!/usr/bin/env python
-from glob import glob
 import os
-import xarray as xr
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import timedelta
 from configparser import ConfigParser
-from mpl_toolkits.basemap import Basemap
-from mapping import matts
-from interpolation import xr_interp
-import concurrent.futures as cc
-from timeit import default_timer as timer
-import CEAZAMet as cm
-
-
-conf = ConfigParser()
-conf.read('data.cfg')
+from CEAZAMet as import Fetcher, NoNewStationError
+from WRF import Fetcher as WRF
 
 
 class Data(object):
     def __init__(self, config='data.cfg'):
         self.conf = ConfigParser()
         self.conf.read(config)
-        self._sta = self.conf['data']['sta']
-        self.sta = self._sta['sta']
         self._data = {}
         self.meta = {}
+        self.open('_sta', self.conf['data']['sta'])
+        self.sta = self._sta['stations']
+        self.flds = self._sta['fields']
 
     def open(self, key, name):
         ext = os.path.splitext(name)[1]
-        p = os.path.join(conf['data']['base'], conf['data'][ext], name)
+        p = os.path.join(self.conf['data']['base'], self.conf['data'][ext], name)
         self._data[key] = pd.HDFStore(p)
 
     def append(self, key, var, sta=None, dt=-4):
         d = self._data[key]
         df = d[var]
         m = d['meta'][var].to_dict()
-        t = df.dropna(0, 'all').index[-1].to_pydatetime()
         typ = m.pop('type')
         if typ == 'netcdf':
-            return self._append_netcdf(df, var, m, sta, dt)
-        elif type == 'ceazamet' or type == 'ceazaraw':
-            return self._append_ceazamet(df, var, typ)
+            D = self._append_netcdf(df, var, m, sta, dt)
+        elif typ == 'ceazamet' or type == 'ceazaraw':
+            D = self._append_ceazamet(df, var, typ)
+        self._data[key][var] = D
 
     def _append_netcdf(self, df, var,  meta, sta=None, dt=-4):
         t = df.dropna(0, 'all').index[-1].to_pydatetime()
         h = t.replace(hour=m['hour'])
         if h > t - timedelta(hours=dt-1):
             h = h - timedelta(days=1)
-        n = netcdf(var, from_date=h, sta=sta, **meta)
+        self.fetch = WRF(meta, self.conf, h)
+        n = self.fetch.netcdf(var, sta=sta)
         return pd.concat((df[:n.index[0] - timedelta(minutes=1)], n), 0)
 
     def _append_ceazamet(self, df, var, typ):
+        raw = True if typ=='ceazaraw' else False
         t = df.dropna(0, 'all').index[-1].to_pydatetime()
-        sta = cm.get_stations(self.sta)
-        n = cm.get_field(var, self.sta, from_date=t.date(), raw=True if typ=='ceazaraw' else False)
-        n = pd.concat((df[:n.index[0] - timedelta(seconds=1)], n), 0)
-        if sta:
-            m = cm.get_field(var, sta, raw=True if typ=='ceazaraw' else False)
-            n = pd.concat((n, m), 1)
+        self.fetch = Fetcher()
+        try:
+            sta, flds = self.fetch.get_stations(self.sta)
+        except NoNewStationError:
+            pass
+        else:
+            n = set(flds.index.get_level_values('sensor_code')) - set(df.columns.get_level_values('sensor_code'))
+            f = flds.loc[pd.IndexSlice[list(n), var, :], :]
+            b = self.fetch.get_field(var, f, raw=raw)
+            d = pd.concat((d, b), 1)
+            self._sta['stations'] = sta
+            self._sta['fields'] = flds
+            self.sta = sta
+            self.flds = flds
+        a = self.fetch.get_field(var, self.flds, from_date=t.date(), raw=raw)
+        d = pd.concat((df[:a.index[0] - timedelta(seconds=1)], a), 0)
+        return d
 
 
-    def meta(self, key, domain, lead_day, hour):
+    def set_meta(self, key, domain, lead_day, hour):
         try:
             m = self._data[key]['meta']
         except KeyError:
@@ -68,7 +72,20 @@ class Data(object):
         self._data[key]['meta'] = pd.concat((m, pd.DataFrame([domain, lead_day, hour],
                                             index=['domain','lead_day','hour'],
                                             columns=['key'])), 1)
-
+    @staticmethod
+    def compare(a, b):
+        d = a.drop('data_pc', 1, 'aggr') - b.drop('data_pc', 1, 'aggr')
+        l = None
+        for t, r in d[d[d!=0].count(1)!=0].iterrows():
+            r.dropna(inplace=True)
+            c = r[r!=0].index
+            x = a.loc[t, c].to_frame()
+            x.columns = pd.MultiIndex.from_product((x.columns, ['a']))
+            y = b.loc[t, c].to_frame()
+            y.columns = pd.MultiIndex.from_product((y.columns, ['b']))
+            z = pd.concat((x, y), 1)
+            l = pd.concat((l, z), 0)
+        return l
 
     def __getattr__(self, name):
         return self._data[name]
@@ -76,48 +93,3 @@ class Data(object):
     def __del__(self):
         for d in self._data.values():
             d.close()
-
-
-
-def netcdf(var, domain, lead_day, from_date=None, hour=None, sta=None, dt=-4):
-    start = timer()
-    def name(d):
-        dt = datetime.strptime(os.path.split(d)[1], 'c01_%Y%m%d%H')
-        f = glob(os.path.join(d, '*_{}_*'.format(domain)))
-        s = (dt + timedelta(days=lead_day)).strftime('%Y-%m-%d_%H:%M:%S')
-        return os.path.join(d, 'wrfout_{}_{}'.format(domain, s))
-
-    dirs = sorted(glob(os.path.join(conf['wrf']['op1'], 'c01*')))
-    dirs.extend(sorted(glob(os.path.join(conf['wrf']['op2'], 'c01*'))))
-    if from_date is None:
-        files = [name(d) for d in dirs if d[-2:] == '{:02}'.format(hour)]
-    else:
-        dh = (from_date + timedelta(days=lead_day)).strftime('%Y%m%d%H')
-        files = [name(d) for d in dirs if d[-10:] >= dh]
-    files = [f for f in files if os.path.isfile(f)]
-    ds = xr.open_dataset(files[0])
-    if sta is not None:
-        Map = Basemap(projection='lcc', **matts(ds))
-        df = xr_interp(ds, var, sta, map=Map)
-        with cc.ThreadPoolExecutor(max_workers=16) as exe:
-            fl = {exe.submit(lambda x:xr_interp(xr.open_dataset(x), var, sta, map=Map, dt=dt), f):
-                  f for f in files[1:]}
-            for f in cc.as_completed(fl):
-                df = pd.concat((df, f.result()), 0)
-                print(fl[f])
-        df.sort_index(inplace=True)
-    else:
-        df = xr.open_dataset(files[0])[var]
-        with cc.ThreadPoolExecutor(max_workers=16) as exe:
-            fl = {exe.submit(xr.open_dataset, f): f for f in files[1:]}
-            for f in cc.as_completed(fl):
-                ds = f.result()
-                df = xr.concat((df, ds[var]), 'Time')
-                df.close()
-                print(fl[f])
-        df = df[df['XTIME'].argsort(), :, :]
-        df['XTIME'] = df['XTIME'] + np.timedelta64(dt, 'h')
-    print(timer() - start)
-    return df
-
-
