@@ -132,7 +132,7 @@ def xr_interp(nc,
             df = grid_interp(xy, x, ij, stations.index, t, method=method)
         else:
             df = grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
-    return df, m if map is None else df
+    return (df, m) if map is None else df
 
 # Below are some implementations of interpolations of 3D fields
 # to 1D vertical profiles. I have compared the results to simplified

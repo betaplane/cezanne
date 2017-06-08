@@ -1,10 +1,12 @@
 #!/usr/bin/env python
-import os
+from os.path import join as jo
 import pandas as pd
 from datetime import timedelta
+from glob import glob
 from configparser import ConfigParser
 from CEAZAMet import Fetcher, NoNewStationError
-# from WRF import Fetcher as WRF
+# from WRF import WRFOUT
+import WRF
 
 
 class Data(object):
@@ -12,8 +14,9 @@ class Data(object):
         self.conf = ConfigParser()
         self.conf.read(config)
         self._data = {}
-        self.meta = {}
-        self.open('_sta', self.conf['data']['sta'])
+        base = self.conf['base']['path']
+        self._paths = {k: jo(base, v) for k, v in self.conf['paths'].items()}
+        self.open('_sta', 'stations.h5')
         try:
             self.sta = self._sta['stations']
             self.flds = self._sta['fields']
@@ -21,9 +24,19 @@ class Data(object):
             pass
 
     def open(self, key, name):
-        ext = os.path.splitext(name)[1]
-        p = os.path.join(self.conf['data']['base'], self.conf['data'][ext], name)
-        self._data[key] = pd.HDFStore(p)
+        def gl(s):
+            return [f for g in [glob(jo(p, '**', s), recursive=True)
+                              for p in self._paths.values()] for f in g]
+        fl = gl(name)
+        if len(fl) != 1:
+            fl = gl('*{}*'.format(name))
+        if len(fl) != 1:
+            print('{} files found'.format(len(fl)))
+        else:
+            try:
+                self._data[key] = pd.HDFStore(fl[0])
+            except:
+                print('Not a HDF5 file.')
 
     def append(self, key, var, sta=None, dt=-4):
         d = self._data[key]
@@ -37,16 +50,16 @@ class Data(object):
         return D
         # self._data[key][var] = D
 
-    def _append_netcdf(self, df, var, meta, sta=None, dt=-4):
+    def update_netcdf(self, df, var, sta=None, dt=-4, **meta):
         t = df.dropna(0, 'all').index[-1].to_pydatetime()
-        h = t.replace(hour=m['hour'])
+        h = t.replace(hour=meta['hour'])
         if h > t - timedelta(hours=dt-1):
             h = h - timedelta(days=1)
-        self.fetch = WRF(meta, self.conf, h)
-        n = self.fetch.netcdf(var, sta=sta)
+        self.OUT = WRF.OUT(paths=self.conf['wrf'].values(), from_date=h, **meta)
+        n = self.OUT.netcdf([var], sta=sta)
         return pd.concat((df[:n.index[0] - timedelta(minutes=1)], n), 0)
 
-    def _append_ceazamet(self, df, var, typ):
+    def update_ceazamet(self, df, var, typ):
         raw = True if typ=='ceazaraw' else False
         t = df.dropna(0, 'all').index[-1].to_pydatetime() - timedelta(days=2)
         self.fetch = Fetcher()
@@ -67,18 +80,38 @@ class Data(object):
         d = pd.concat((df[:a.index[0] - timedelta(seconds=1)], a), 0)
         return d
 
+    def close(self, key=None):
+        if key is None:
+            sta = self._data.pop('_sta')
+            while self._data:
+                k, v = self._data.popitem()
+                v.close()
+            self._data['_sta'] = sta
+        else:
+            v = self._data.pop(key)
+            v.close()
 
-    def set_meta(self, key, domain, lead_day, hour):
+    def set_meta(self, key, *args, **kwargs):
         try:
             m = self._data[key]['meta']
         except KeyError:
             m = pd.DataFrame(index=['domain','lead_day','hour'])
-        self._data[key]['meta'] = pd.concat((m, pd.DataFrame([domain, lead_day, hour],
-                                            index=['domain','lead_day','hour'],
-                                            columns=['key'])), 1)
+        self._data[key]['meta'] = pd.concat((m, self.meta(*args, **kwargs)))
+
+    def meta(var, typ, domain, lead_day, hour):
+        return pd.DataFrame([typ, domain, lead_day, hour],
+                                            index=['typ', 'domain','lead_day','hour'],
+                                            columns=[var])
+
+
     @staticmethod
     def compare(a, b):
-        d = a.drop('data_pc', 1, 'aggr') - b.drop('data_pc', 1, 'aggr')
+        try:
+            d = a.drop('data_pc', 1, 'aggr') - b.drop('data_pc', 1, 'aggr')
+        except AssertionError:
+            d = a - b
+        if d.shape[0] > max(a.shape[0], b.shape[0]) or d.shape[1] > max(a.shape[1], b.shape[1]):
+            print('Warning: DataFrames maybe not properly matched.')
         l = None
         for t, r in d[d[d!=0].count(1)!=0].iterrows():
             r.dropna(inplace=True)
@@ -87,13 +120,28 @@ class Data(object):
             x.columns = pd.MultiIndex.from_product((x.columns, ['a']))
             y = b.loc[t, c].to_frame()
             y.columns = pd.MultiIndex.from_product((y.columns, ['b']))
-            z = pd.concat((x, y), 1)
-            l = pd.concat((l, z), 0)
-        return l.T
+            z = pd.concat((x, y), 1).T
+            l = z if l is None else l.combine_first(z) # this makes sure there are no double columns
+        return l
+
+    def compare_all(self, file_a, file_b):
+        return {k: self.compare(file_a[k], file_b[k])
+                for k in set(file_a.keys()).intersection(file_b.keys())}
 
     def __getattr__(self, name):
-        return self._data[name]
+        try:
+            return self._data[name]
+        except KeyError:
+            return self._paths[name]
+
+    def __getitem__(self, value):
+        idx = pd.IndexSlice
+        try:
+            return self.flds.loc[idx[value, :, :], :]
+        except:
+            return self.flds.loc[idx[:, value, :], :]
 
     def __del__(self):
         for d in self._data.values():
+            print('closing {}'.format(d.filename))
             d.close()

@@ -39,6 +39,7 @@ class Fetcher(object):
     url = 'http://www.ceazamet.cl/ws/pop_ws.php'
     raw_url = 'http://www.ceazamet.cl/ws/sensor_raw_csv.php'
     max_workers = 16
+    from_date = datetime(2003, 1, 1)
 
     field = {
         'fn': 'GetListaSensores',
@@ -64,7 +65,8 @@ class Fetcher(object):
         'c6': 'e_ultima_lectura'
     }
 
-    def get_field(self, field, field_table, from_date=datetime(2003, 1, 1), raw=False):
+    def get_field(self, field, field_table, from_date=None, raw=False):
+        from_date = self.from_date if from_date is None else from_date
         self.data = {}
         def get(f):
             try:
@@ -74,19 +76,24 @@ class Fetcher(object):
             else:
                 i = df.columns.size
                 df.columns = pd.MultiIndex.from_arrays(
-                    np.r_[np.repeat([f[0][0], f[0][1], f[0][2], f[1].elev]e, i), df.columns].reshape((-1, i)),
+                    np.r_[
+                        np.repeat([f[0][0], f[0][1], f[0][2], f[1].elev], i),
+                        df.columns
+                    ].reshape((-1, i)),
                     names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
                 )
                 print('fetched {} from {}'.format(f[0][2], f[0][0]))
                 return f[0][2], df
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
-            self.data = [exe.submit(get, c) for c in field_table.loc[pd.IndexSlice[:, field, :], :].iterrows()]
+            self.data = [exe.submit(get, c) for c in
+                         field_table.loc[pd.IndexSlice[:, field, :], :].iterrows()]
 
         data = dict([d.result() for d in as_completed(self.data)])
         return data if raw else pd.concat(data.values(), 1).sort_index(axis=1)
 
-    def fetch(self, code, from_date=datetime(2003, 1, 1)):
+    def fetch(self, code, from_date=None):
+        from_date = self.from_date if from_date is None else from_date
         cols = ['ultima_lectura', 'min', 'prom', 'max', 'data_pc']
         params = {
             'fn': 'GetSerieSensor',
@@ -110,7 +117,8 @@ class Fetcher(object):
             else:
                 return d.astype(float)
 
-    def fetch_raw(self, code, from_date=datetime(2003, 1, 1)):
+    def fetch_raw(self, code, from_date=None):
+        from_date = self.from_date if from_date is None else from_date
         params = {'fi': from_date.strftime('%Y-%m-%d'),
                   'ff': datetime.utcnow().strftime('%Y-%m-%d'),
                   's_cod': code}
