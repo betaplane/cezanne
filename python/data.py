@@ -3,8 +3,8 @@ import os
 import pandas as pd
 from datetime import timedelta
 from configparser import ConfigParser
-from CEAZAMet as import Fetcher, NoNewStationError
-from WRF import Fetcher as WRF
+from CEAZAMet import Fetcher, NoNewStationError
+# from WRF import Fetcher as WRF
 
 
 class Data(object):
@@ -14,8 +14,11 @@ class Data(object):
         self._data = {}
         self.meta = {}
         self.open('_sta', self.conf['data']['sta'])
-        self.sta = self._sta['stations']
-        self.flds = self._sta['fields']
+        try:
+            self.sta = self._sta['stations']
+            self.flds = self._sta['fields']
+        except:
+            pass
 
     def open(self, key, name):
         ext = os.path.splitext(name)[1]
@@ -31,9 +34,10 @@ class Data(object):
             D = self._append_netcdf(df, var, m, sta, dt)
         elif typ == 'ceazamet' or type == 'ceazaraw':
             D = self._append_ceazamet(df, var, typ)
-        self._data[key][var] = D
+        return D
+        # self._data[key][var] = D
 
-    def _append_netcdf(self, df, var,  meta, sta=None, dt=-4):
+    def _append_netcdf(self, df, var, meta, sta=None, dt=-4):
         t = df.dropna(0, 'all').index[-1].to_pydatetime()
         h = t.replace(hour=m['hour'])
         if h > t - timedelta(hours=dt-1):
@@ -44,7 +48,7 @@ class Data(object):
 
     def _append_ceazamet(self, df, var, typ):
         raw = True if typ=='ceazaraw' else False
-        t = df.dropna(0, 'all').index[-1].to_pydatetime()
+        t = df.dropna(0, 'all').index[-1].to_pydatetime() - timedelta(days=2)
         self.fetch = Fetcher()
         try:
             sta, flds = self.fetch.get_stations(self.sta)
@@ -85,7 +89,7 @@ class Data(object):
             y.columns = pd.MultiIndex.from_product((y.columns, ['b']))
             z = pd.concat((x, y), 1)
             l = pd.concat((l, z), 0)
-        return l
+        return l.T
 
     def __getattr__(self, name):
         return self._data[name]

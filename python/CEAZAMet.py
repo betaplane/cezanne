@@ -5,7 +5,8 @@ from dateutil.parser import parse
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
-from helpers import CEAZAMetTZ
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from timeit import default_timer as timer
 
 # url = 'http://192.168.5.2/ws/pop_ws.php'		# from inside
 
@@ -17,9 +18,9 @@ class FetchError(Exception):
 class NoNewStationError(Exception):
     pass
 
-class __Reader(StringIO):
+class _Reader(StringIO):
     def __init__(self, str):
-        super(Reader, self).__init__(str)
+        super(_Reader, self).__init__(str)
         p = 0
         while True:
             try:
@@ -32,13 +33,12 @@ class __Reader(StringIO):
             p = self.tell()
         self.seek(self.start)
 
-    def reset(self):
-        self.seek(self.start)
 
 class Fetcher(object):
     trials = range(10)
     url = 'http://www.ceazamet.cl/ws/pop_ws.php'
     raw_url = 'http://www.ceazamet.cl/ws/sensor_raw_csv.php'
+    max_workers = 16
 
     field = {
         'fn': 'GetListaSensores',
@@ -64,14 +64,29 @@ class Fetcher(object):
         'c6': 'e_ultima_lectura'
     }
 
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({'Host': 'www.ceazamet.cl'})
+    def get_field(self, field, field_table, from_date=datetime(2003, 1, 1), raw=False):
+        self.data = {}
+        def get(f):
+            try:
+                df = self.fetch_raw(f[0][2], from_date) if raw else self.fetch(f[0][2], from_date)
+            except FetchError as fe:
+                print(fe)
+            else:
+                i = df.columns.size
+                df.columns = pd.MultiIndex.from_arrays(
+                    np.r_[np.repeat([f[0][0], f[0][1], f[0][2], f[1].elev], i), df.columns].reshape((-1, i)),
+                    names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
+                )
+                print('fetched {} from {}'.format(f[0][2], f[0][0]))
+                return f[0][2], df
 
-    def __del__(self):
-        self.session.close()
+        with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
+            self.data = [exe.submit(get, c) for c in field_table.loc[pd.IndexSlice[:, field, :], :].iterrows()]
 
-    def fetch(self, code, from_date=datetime(2003, 1, 1), session=None):
+        data = dict([d.result() for d in as_completed(self.data)])
+        return data if raw else pd.concat(data.values(), 1).sort_index(axis=1)
+
+    def fetch(self, code, from_date=datetime(2003, 1, 1)):
         cols = ['ultima_lectura', 'min', 'prom', 'max', 'data_pc']
         params = {
             'fn': 'GetSerieSensor',
@@ -82,10 +97,10 @@ class Fetcher(object):
             'fecha_fin': datetime.utcnow().strftime('%Y-%m-%d')
             }
         for trial in self.trials:
-            r = self.session.get(self.url, params=params)
+            r = requests.get(self.url, params=params)
             if not r.ok:
                 continue
-            reader = __Reader(r.text)
+            reader = _Reader(r.text)
             try:
                 d = pd.read_csv(
                     reader, index_col=0, parse_dates=True, usecols=cols)
@@ -93,22 +108,17 @@ class Fetcher(object):
                 raise FetchError(r.url)
             else:
                 reader.close()
-                break
-        try:
-            return d
-        except:
-            return None
-
+                return d
 
     def fetch_raw(self, code, from_date=datetime(2003, 1, 1)):
         params = {'fi': from_date.strftime('%Y-%m-%d'),
                   'ff': datetime.utcnow().strftime('%Y-%m-%d'),
                   's_cod': code}
         for trial in self.trials:
-            r = self.session.get(self.raw_url, params=params)
+            r = requests.get(self.raw_url, params=params)
             if not r.ok:
                 continue
-            reader = __Reader(r.text)
+            reader = _Reader(r.text)
             try:
                 d = pd.read_csv(
                     reader,
@@ -124,81 +134,65 @@ class Fetcher(object):
                 d = d.iloc[:,1:4]
                 d.columns = cols
                 reader.close()
-                break
-        return d
-
+                return d
 
     def get_stations(self, sta=None):
-        with requests.Session() as s:
+        for trial in self.trials:
+            req = requests.get(self.url, params=self.station)
+            if not req.ok:
+                continue
+            with StringIO(req.text) as sio:
+                try:
+                    self.stations = [(l[0], l[1:6]) for l in csv.reader(sio) if l[0][0] != '#']
+                except:
+                    print('attempt #{}'.format(trial))
+                else:
+                    break
+
+        if sta is not None:
+            self.stations = [(c, st) for c, st in self.stations if c not in sta.index]
+
+        if len(self.stations) == 0:
+            raise NoNewStationError
+
+        stations = pd.DataFrame.from_items(
+            self.stations,
+            columns = ['full', 'lon', 'lat', 'elev', 'first'],
+            orient='index'
+        )
+        stations.index.name = 'station'
+
+        def get(st):
+            params = self.field.copy()
+            params['e_cod'] = st[0]
             for trial in self.trials:
-                req = self.session.get(url, params=self.station)
+                print(st[1].full)
+                req = requests.get(self.url, params=params)
                 if not req.ok:
                     continue
                 with StringIO(req.text) as sio:
                     try:
-                        self.stations = [(l[0], l[1:6]) for l in csv.reader(sio) if l[0][0] != '#']
+                        return [((st[0], l[0], l[1]), l[2:6])
+                                  for l in csv.reader(sio) if l[0][0] != '#']
                     except:
-                        print(trial)
-                    else:
-                        break
-            if sta is not None:
-                self.stations = [(c, st) for c, st in self.stations if c not in sta.index]
-            if len(stations) == 0:
-                raise NoNewStationException
-            stations = pd.DataFrame.from_items(
-                self.stations,
-                columns = ['full', 'lon', 'lat', 'elev', 'first'],
-                orient='index'
-            )
-            stations.index.name = 'station'
+                        print('attempt #{}'.format(trial))
 
-            self.fields = []
-            for c, st in stations.iterrows():
-                params = self.field.copy()
-                params['e_cod'] = c
-                for trial in self.trials:
-                    print(st.name)
-                    req = self.session.get(url, params=params)
-                    if not req.ok:
-                        continue
-                    with StringIO(req.text) as sio:
-                        try:
-                            fields.extend(
-                                [((c, l[0], l[1]), l[2:6]) for l in csv.reader(sio) if l[0][0] != '#']
-                            )
-                        except:
-                            print(trial)
-                        else:
-                            break
+        with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
+            fields = [exe.submit(get, s) for s in stations.iterrows()]
 
-            fields = pd.DataFrame.from_items(
-                self.fields,
-                columns = ['full', 'unit', 'elev', 'first'],
-                orient = 'index'
-            )
-            fields.index = pd.MultiIndex.from_tuples(
-                fields.index.tolist(),
-                names = ['station', 'field', 'sensor_code']
-            )
-            return stations, fields.sort_index()
+        self.fields = [f for g in as_completed(fields) for f in g.result()]
 
+        fields = pd.DataFrame.from_items(
+            self.fields,
+            columns = ['full', 'unit', 'elev', 'first'],
+            orient = 'index'
+        )
+        fields.index = pd.MultiIndex.from_tuples(
+            fields.index.tolist(),
+            names = ['station', 'field', 'sensor_code']
+        )
+        return stations.sort_index(), fields.sort_index()
 
-    def get_field(self, field, field_table, from_date=datetime(2003, 1, 1), raw=False):
-        self.data = {}
-        for c, f in field_table.loc[pd.IndexSlice[:, field, :], :].iterrows():
-            try:
-                df = self.fetch_raw(c[2], from_date) if raw else self.fetch(c[2], from_date)
-            except FetchError as fe:
-                print(fe)
-            else:
-                i = df.columns.size
-                df.columns = pd.MultiIndex.from_arrays(
-                    np.r_[np.repeat([c[0], field, c[2], f.elev], i), df.columns].reshape((-1, i)),
-                    names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
-                )
-                print('fetched {} ({}) from {}'.format(field, c[2], c[0]))
-                self.data[c[2]] = df
-        return self.data if raw else pd.concat(self.data.values(), 1).sort_index(axis=1)
 
 
 def stations_with(stations, **kw):
