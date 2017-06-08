@@ -74,7 +74,7 @@ class Fetcher(object):
             else:
                 i = df.columns.size
                 df.columns = pd.MultiIndex.from_arrays(
-                    np.r_[np.repeat([f[0][0], f[0][1], f[0][2], f[1].elev], i), df.columns].reshape((-1, i)),
+                    np.r_[np.repeat([f[0][0], f[0][1], f[0][2], f[1].elev]e, i), df.columns].reshape((-1, i)),
                     names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
                 )
                 print('fetched {} from {}'.format(f[0][2], f[0][0]))
@@ -104,11 +104,11 @@ class Fetcher(object):
             try:
                 d = pd.read_csv(
                     reader, index_col=0, parse_dates=True, usecols=cols)
+                reader.close()
             except:
                 raise FetchError(r.url)
             else:
-                reader.close()
-                return d
+                return d.astype(float)
 
     def fetch_raw(self, code, from_date=datetime(2003, 1, 1)):
         params = {'fi': from_date.strftime('%Y-%m-%d'),
@@ -125,6 +125,7 @@ class Fetcher(object):
                     index_col = 1,
                     parse_dates = True
                 )
+                reader.close()
             except:
                 raise FetchError(r.url)
             else:
@@ -133,8 +134,7 @@ class Fetcher(object):
                 cols = [x.lstrip() for x in d.columns][-3:]
                 d = d.iloc[:,1:4]
                 d.columns = cols
-                reader.close()
-                return d
+                return d.astype(float)
 
     def get_stations(self, sta=None):
         for trial in self.trials:
