@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from os.path import join as jo
+from os import walk
 import pandas as pd
 from datetime import timedelta
 from glob import glob
@@ -90,6 +91,19 @@ class Data(object):
         else:
             v = self._data.pop(key)
             v.close()
+
+    def ls(self):
+        for p in self._paths.values():
+            for s in walk(p):
+                print(s[0])
+                print('\n'.join(['\t{}'.format(f) for f in s[2]]))
+
+    def get(self, key, string=None, field=':', sensor_code=':', elev=':', aggr=':'):
+        if string is not None:
+            idx = eval('pd.IndexSlice[{}]'.format(string))
+        else:
+            idx = eval('pd.IndexSlice[{},{},{},{}]'.format(field, sensor_code, elev, aggr))
+        return self._data[key].loc[:, idx]
 
     def set_meta(self, key, *args, **kwargs):
         try:

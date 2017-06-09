@@ -28,7 +28,7 @@ def hour_ave(df):
     no use. Returns (df, idx), where df is the averaged DataFrame and idx is an index
     containing all times where missing data intervals where backfilled.
     """
-    dt = np.diff(df.index).astype(float) * 1e-9
+    dt = np.diff(df.index).astype(float) * 1e-9 # seconds
     c = Counter(dt) # counts distinct elements in dt
     # heuristic for cleaning:
     # eliminate elements whose occurrence is less than half of the time over which they do occur
@@ -69,3 +69,24 @@ def hour_ave(df):
     den = den.add(tshift(prev), fill_value=0)
 
     return pd.DataFrame(num / den, columns = df.columns), idx
+
+def ave(df):
+    t = np.array(df.index, dtype='datetime64[m]')
+    dt = np.diff(t).astype(float)
+    # counts distinct elements in dt
+    c = Counter(dt).most_common(1)[0][0]
+
+    # look for indexes which are != the most common timestep on both sides
+    d = np.r_[np.nan, dt, dt, np.nan].reshape((2,-1))
+    i = (d != c).all(0) # not ok
+    j = (d == c).any(0) # ok
+    l = pd.DataFrame(d[:,i].T, index=df.index[i])
+
+    # look for groups of not ok indexes
+    m = np.where(i)[0]
+    n = np.where(np.diff(m) != 1)[0]
+    n = np.r_['0', [-1], n, n , [-2]] + 1
+    k = [m[x[0]:x[1]] for x in n.reshape((2, -1)).T if np.diff(x) > 1]
+    p = np.array(sorted(set(m) - set([x for y in k for x in y])))
+
+    p[(d[:, p] < c).any(0)]
