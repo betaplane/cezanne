@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import helpers as hh
 from collections import Counter
+from datetime import datetime
 
 
 def group2idx(df):
@@ -20,6 +21,7 @@ def decol(df):
     d.columns = [0]
     return d
 
+# old strategy. new one is in CEAZAMet.
 def hour_ave(df):
     """
     Average raw data by true hour. Takes a one-column DataFrame or Series.
@@ -70,23 +72,3 @@ def hour_ave(df):
 
     return pd.DataFrame(num / den, columns = df.columns), idx
 
-def ave(df):
-    t = np.array(df.index, dtype='datetime64[m]')
-    dt = np.diff(t).astype(float)
-    # counts distinct elements in dt
-    c = Counter(dt).most_common(1)[0][0]
-
-    # look for indexes which are != the most common timestep on both sides
-    d = np.r_[np.nan, dt, dt, np.nan].reshape((2,-1))
-    i = (d != c).all(0) # not ok
-    j = (d == c).any(0) # ok
-    l = pd.DataFrame(d[:,i].T, index=df.index[i])
-
-    # look for groups of not ok indexes
-    m = np.where(i)[0]
-    n = np.where(np.diff(m) != 1)[0]
-    n = np.r_['0', [-1], n, n , [-2]] + 1
-    k = [m[x[0]:x[1]] for x in n.reshape((2, -1)).T if np.diff(x) > 1]
-    p = np.array(sorted(set(m) - set([x for y in k for x in y])))
-
-    p[(d[:, p] < c).any(0)]

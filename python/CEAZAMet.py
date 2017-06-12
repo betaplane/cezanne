@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
+from collections import Counter
 
 # url = 'http://192.168.5.2/ws/pop_ws.php'		# from inside
 
@@ -34,7 +35,10 @@ class _Reader(StringIO):
         self.seek(self.start)
 
 
-class Fetcher(object):
+class Downloader(object):
+    """Class to download data from CEAZAMet webservice. Main reason for having a class is
+    to be able to reference the data (Downloader.data) in case something goes wrong at some point.
+    """
     trials = range(10)
     url = 'http://www.ceazamet.cl/ws/pop_ws.php'
     raw_url = 'http://www.ceazamet.cl/ws/sensor_raw_csv.php'
@@ -89,7 +93,7 @@ class Fetcher(object):
             self.data = [exe.submit(get, c) for c in
                          field_table.loc[pd.IndexSlice[:, field, :], :].iterrows()]
 
-        data = dict([d.result() for d in as_completed(self.data)])
+        data = dict([d.result() for d in as_completed(self.data) if d.result() is not None])
         return data if raw else pd.concat(data.values(), 1).sort_index(axis=1)
 
     def fetch(self, code, from_date=None):
@@ -202,78 +206,104 @@ class Fetcher(object):
         return stations.sort_index(), fields.sort_index()
 
 
+def time_irreg(df):
+    """Check time index of DataFrame for irregularities.
 
-def stations_with(stations, **kw):
-    S = set(stations)
-    for k, v in kw.items():
-        S.intersection_update(
-            [s for s in stations for f in s.fields if getattr(f, k) == v])
-    return list(S)
+    :param df: pandas.DataFrame with time index
+    :returns: DataFrame with columns of irregular time intervals before and/or after a given index;
+    list of irregular indexes ocurring in groups; list of 'lonely' irrgular indexes.
+    :rtype: pandas.DataFrame, list of numpy.arrays, numpy.array
 
+    """
+    t = np.array(df.index, dtype='datetime64[m]')
+    dt = np.diff(t).astype(float)
+    # counts distinct elements in dt
+    c = Counter(dt).most_common(1)[0][0]
 
-def mult(df):
-    s = df.columns.get_level_values('station').tolist()
-    for i in set(s):
-        s.remove(i)
-    return s
+    # look for indexes which are != the most common timestep on both sides
+    d = np.r_[np.nan, dt, dt, np.nan].reshape((2,-1))
+    i = (d != c).all(0) # not ok
+    # DataFrame with intervals before and after timestamp
+    f = pd.DataFrame(d[:,i].T, index=df.index[i])
 
-
-def get_interval(stations):
-    iv = pd.Series(index=[s.code for s in stations], name='interval')
-    s = requests.Session()
-    s.headers.update({'Host': 'www.ceazamet.cl'})
-    for st in stations:
-        date = st.first
-        while True:
-            ds = date.strftime('%Y-%m-%d')
-            params = {'s_cod': st.fields[0].sensor_code, 'fi': ds, 'ff': ds}
-            r = s.get(raw_url, params=params)
-            if not r.ok:
-                continue
-            io = csv.reader(StringIO(r.text))
-            try:
-                dt = np.diff(
-                    np.array(
-                        [l[1] for l in io if l[0][0] != '#'][:2],
-                        dtype='datetime64'))[0].astype(int)
-            except:
-                date += timedelta(days=1)
-                print('{} - {}'.format(st.name, date))
-            else:
-                iv[st.code] = dt
-                print('{} - {}'.format(st.name, dt))
-                break
-    return iv
+    # look for groups of not ok indexes
+    p = np.where(i)[0]
+    q = np.where(np.diff(p) != 1)[0]
+    q = np.r_['0', [-1], q, q , [-2]] + 1
+    # groups
+    g = [p[x[0]:x[1]] for x in q.reshape((2, -1)).T if np.diff(x) > 1]
+    # 'lonely' indexes
+    l = np.array(sorted(set(p) - set([x for y in g for x in y])))
+    return f, g, l
 
 
+def binning(df, start_minute, freq, label='end'):
+    """Average raw data from CEAZAMet stations (fetched by CEAZAMet.Downloader.fetch_raw) into true time intervals.
+    Assumptions:
+    1) The (single) predominant time interval between records is taken to be the true interval over which the logger
+    records/averages data.
+    2) The logger's timestamp refers to the end of a 'recording interval'.
+    3) If a binning boundary splits a record interval, the record's average is distributed proportionally between
+    adjacent binning intervals. The max / min values are binned with that binning interval that covers the larger
+    part of the record interval, since it is impossible to tell when the max / min was recorded.
 
-def field_table(stations):
-    D = {}
-    for st in stations:
-        d = {}
-        for F in st.fields:
-            try:
-                f = d[F.field]
-                f[len(f)] = F.sensor_code
-            except:
-                d[F.field] = {0: F.sensor_code}
-        D[st.code] = d
-    return pd.Panel(D)
+    :param df: data to be averaged / binned
+    :type df: pandas.DataFrame with 'avg', 'min', 'max' labels at level 'aggr' in the columns MultiIndex
+    :param start_minute: minute within an hour at which a binning interval starts
+    :param freq: length of binning interval (in minutes)
+    :param label: at what timepoint to label the result: 'start', 'middle' or 'end' (default) of interval
+    :returns: averaged and max / min values of data
+    :rtype: pandas.DataFrame with same columns as input
 
+    """
+    t = np.array(df.index, dtype='datetime64[m]')
+    dt = np.diff(t).astype(float)
+    # counts distinct elements in dt
+    c = Counter(dt).most_common(1)[0][0]
 
-if __name__ == "__main__":
-    import json, jsonpickle
-    # 	from netCDF4 import Dataset
-    # 	from glob import glob
-    # 	stations = get_stations()
-    # 	with open('data/stations.json','w') as f:
-    # 		json.dump(jsonpickle.encode(stations),f)
-    with open('data/stations.json') as f:
-        stations = jsonpickle.decode(json.load(f))
+    print('record interval detected as {:d} minutes'.format(int(c)))
 
-    # Puerto Williams
-    stations = [s for s in stations if s.code != 'CNPW']
+    # compute binning intervals
+    ti = t.astype(int) - c                            # start point of record intervals
+    ts = start_minute + (ti - start_minute) // freq * freq  # same label for intervals of length 'freq' from global origin
+    v = ti + c - ts - freq
+    k = (v > 0)               # record intervals split by end of binning intervals
+    w = v[k].reshape((-1, 1)) # minutes of record intervals falling into next binning interval
+    ts = ts.reshape((-1, 1))
 
-    df = get_field('ts_c', stations)
-    with pd.HDFStore('data/station_data.h5') as store:
-        store['ts_c'] = df
+    # for mean, split record intervals proportionally into adjacent binning intervals
+    ave = df.xs('avg', 1, 'aggr', False)
+    cols = ave.columns
+    a = ave.as_matrix()
+    aft = np.r_['1', a[k] * w / c, ts[k]]
+    a[k] = a[k] * (c - w) / c
+    a = np.r_['1', a, ts]
+    a = np.r_['0', a, aft]
+    ave = pd.DataFrame(a).groupby(a.shape[1] - 1).mean()
+    ave.columns = cols
+
+    def col(x, c):
+        x.columns = pd.MultiIndex.from_tuples(x.columns, names=df.columns.names)
+        return x.xs(c, 1, 'aggr', False)
+
+    # for min and max, use the binning interval with the largest overlap with the record interval
+    ts[v > c/2] = ts[v > c/2] + freq
+    b = df.drop('avg', 1, 'aggr').join(pd.DataFrame(ts, index=df.index, columns=['ts'])).groupby('ts')
+    D = pd.concat((col(b.min(), 'min'), ave, col(b.max(), 'max')), 1)
+
+    lab = pd.Timedelta({'end': freq, 'middle': freq/2, 'start': 0}[label], 'm')
+    D.index = pd.DatetimeIndex(np.array(D.index, dtype='datetime64[m]').astype(datetime)) + lab
+    return D.sort_index(1)
+
+def combine_raw(*args):
+    def key(f, k):
+        d = f[k]
+        return d.columns.get_level_values('station').unique()[0], d
+
+    X = [dict([key(x, k) for k in x.keys()]) for x in args]
+
+    d = {}
+    for k in set.union(*[set(x.keys()) for x in X]):
+        d[k] = pd.concat([x.get(k, None) for x in X], 1)
+
+    return d

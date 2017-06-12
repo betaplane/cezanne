@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import timedelta
 from glob import glob
 from configparser import ConfigParser
-from CEAZAMet import Fetcher, NoNewStationError
+from CEAZAMet import Downloader, NoNewStationError
 # from WRF import WRFOUT
 import WRF
 
@@ -18,11 +18,22 @@ class Data(object):
         base = self.conf['base']['path']
         self._paths = {k: jo(base, v) for k, v in self.conf['paths'].items()}
         self.open('_sta', 'stations.h5')
-        try:
-            self.sta = self._sta['stations']
-            self.flds = self._sta['fields']
-        except:
-            pass
+
+    @property
+    def sta(self):
+        return self._sta['stations']
+
+    @sta.setter
+    def sta(self, value):
+        self._sta['stations'] = value
+
+    @property
+    def flds(self):
+        return self._sta['fields']
+
+    @flds.setter
+    def flds(self, value):
+        self._sta['fields'] = value
 
     def open(self, key, name):
         def gl(s):
@@ -51,8 +62,18 @@ class Data(object):
         return D
         # self._data[key][var] = D
 
-    def update_netcdf(self, df, var, sta=None, dt=-4, **meta):
+    @staticmethod
+    def _dt(df, field=None, sensor=False):
+        if field is not None:
+            df = df.xs(field, 1, 'field')
         t = df.dropna(0, 'all').index[-1].to_pydatetime()
+        if sensor:
+            return t, df.columns.get_level_values('sensor_code').unique()
+        else:
+            return t
+
+    def update_netcdf(self, df, var, sta=None, dt=-4, **meta):
+        t = self._dt(df)
         h = t.replace(hour=meta['hour'])
         if h > t - timedelta(hours=dt-1):
             h = h - timedelta(days=1)
@@ -60,25 +81,46 @@ class Data(object):
         n = self.OUT.netcdf([var], sta=sta)
         return pd.concat((df[:n.index[0] - timedelta(minutes=1)], n), 0)
 
-    def update_ceazamet(self, df, var, typ):
+    def update_ceazamet(self, d, var, typ):
         raw = True if typ=='ceazaraw' else False
-        t = df.dropna(0, 'all').index[-1].to_pydatetime() - timedelta(days=2)
-        self.fetch = Fetcher()
+
+        # make sure we have enough overlap - webservice for averaged data always reports until 23:00h
+        # even if there is not data yet (i.e. NaNs if time is < 23:00h)
+        dt = timedelta(days=2)
+        if raw:
+            t, o = zip(*[self._dt(d[k], var, True) for k in d.keys()])
+            t = max(t) - dt
+            o = [x for y in o for x in y]
+        else:
+            t, o = self._dt(d, var, True) - dt
+
+        self.down = Downloader()
         try:
-            sta, flds = self.fetch.get_stations(self.sta)
+            self.sta, self.flds = self.down.get_stations()
         except NoNewStationError:
             pass
+
+        idx = pd.IndexSlice
+        n = set(self.flds.index.get_level_values('sensor_code')) - set(o) # new fields
+        if len(n):
+            f = self.flds.loc[idx[:, :, list(n)], :]
+            b = self.down.get_field(var, f, raw=raw)
+            if not raw:
+                d = pd.concat((d, b), 1)
+
+        # old fields
+        f = self.flds.loc[idx[:, :, o], :]
+        a = self.down.get_field(var, f, from_date=t.date(), raw=raw)
+
+        dt = timedelta(seconds=1) # to get the indexing right
+        if raw:
+            for k, v in a.items():
+                d[k] = pd.concat((d[k][:v.index[0] - dt], v), 0)
+            if len(n):
+                for k, v in b.items():
+                    d[k] = v
         else:
-            n = set(flds.index.get_level_values('sensor_code')) - set(df.columns.get_level_values('sensor_code'))
-            f = flds.loc[pd.IndexSlice[list(n), var, :], :]
-            b = self.fetch.get_field(var, f, raw=raw)
-            d = pd.concat((d, b), 1)
-            self._sta['stations'] = sta
-            self._sta['fields'] = flds
-            self.sta = sta
-            self.flds = flds
-        a = self.fetch.get_field(var, self.flds, from_date=t.date(), raw=raw)
-        d = pd.concat((df[:a.index[0] - timedelta(seconds=1)], a), 0)
+            d = pd.concat((d[:a.index[0] - dt], a), 0)
         return d
 
     def close(self, key=None):
