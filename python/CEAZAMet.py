@@ -69,29 +69,46 @@ class Downloader(object):
         'c6': 'e_ultima_lectura'
     }
 
-    def get_field(self, field, field_table, from_date=None, raw=False):
-        from_date = self.from_date if from_date is None else from_date
+    def get_field(self, var, var_table, from_date=None, raw=False):
+        """Collect data from CEAZAMet webservice, for one variable type but all stations.
+
+        :param var: variable code to be collected (e.g. 'ta_c')
+        :param var_table: pandas.DataFrame with field metadata as constructed by get_stations()
+        :param from_date: initial date from which onward to request data
+        :param raw: False (default) or True whether raw data should be collected
+        :returns: data for one variable and all stations given by var_table
+        :rtype: pandas.DataFrame or dict with DataFrames if raw==True
+
+        """
         self.data = {}
         def get(f):
+            if from_date is None:
+                if 'last' in f[1]:
+                    day = f[1]['last'].to_pydatetime()
+                    day = day - timedelta(days = 1) if day == day else self.from_date
+                else:
+                    day = self.from_date
+            else:
+                day = from_date
             try:
-                df = self.fetch_raw(f[0][2], from_date) if raw else self.fetch(f[0][2], from_date)
+                df = self.fetch_raw(f[0][2], day) if raw else self.fetch(f[0][2], day)
             except FetchError as fe:
                 print(fe)
             else:
                 i = df.columns.size
                 df.columns = pd.MultiIndex.from_arrays(
                     np.r_[
-                        np.repeat([f[0][0], f[0][1], f[0][2], f[1].elev], i),
+                        np.repeat([f[0][0], f[0][1], f[0][2], f[1]['elev']], i),
                         df.columns
                     ].reshape((-1, i)),
                     names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
                 )
                 print('fetched {} from {}'.format(f[0][2], f[0][0]))
-                return f[0][2], df
+                return f[0][2], df.sort_index(1)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
             self.data = [exe.submit(get, c) for c in
-                         field_table.loc[pd.IndexSlice[:, field, :], :].iterrows()]
+                         var_table.xs(var, 0, 'field', False).iterrows()]
 
         data = dict([d.result() for d in as_completed(self.data) if d.result() is not None])
         return data if raw else pd.concat(data.values(), 1).sort_index(axis=1)
@@ -105,7 +122,7 @@ class Downloader(object):
             'valor_nan': 'nan',
             's_cod': code,
             'fecha_inicio': from_date.strftime('%Y-%m-%d'),
-            'fecha_fin': datetime.utcnow().strftime('%Y-%m-%d')
+            'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d')
             }
         for trial in self.trials:
             r = requests.get(self.url, params=params)
@@ -119,12 +136,12 @@ class Downloader(object):
             except:
                 raise FetchError(r.url)
             else:
-                return d.astype(float)
+                return d.astype(float) # important
 
     def fetch_raw(self, code, from_date=None):
         from_date = self.from_date if from_date is None else from_date
         params = {'fi': from_date.strftime('%Y-%m-%d'),
-                  'ff': datetime.utcnow().strftime('%Y-%m-%d'),
+                  'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'), 
                   's_cod': code}
         for trial in self.trials:
             r = requests.get(self.raw_url, params=params)
@@ -146,7 +163,7 @@ class Downloader(object):
                 cols = [x.lstrip() for x in d.columns][-3:]
                 d = d.iloc[:,1:4]
                 d.columns = cols
-                return d.astype(float)
+                return d.astype(float) # important
 
     def get_stations(self, sta=None):
         for trial in self.trials:

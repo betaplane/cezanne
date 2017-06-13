@@ -63,17 +63,27 @@ class Data(object):
         # self._data[key][var] = D
 
     @staticmethod
-    def _dt(df, field=None, sensor=False):
-        if field is not None:
-            df = df.xs(field, 1, 'field')
-        t = df.dropna(0, 'all').index[-1].to_pydatetime()
-        if sensor:
-            return t, df.columns.get_level_values('sensor_code').unique()
+    def _last(d, field):
+        try:
+            return [
+                (k, d.xs(k, 1, 'sensor_code').dropna(0, 'all').index[-1]) for k in
+                d.xs(field, 1, 'field').columns.get_level_values('sensor_code').unique()
+            ]
+        except:
+            return [None]
+
+    def last(self, d, field):
+        if isinstance(d, pd.DataFrame):
+            l = self._last(d, field)
         else:
-            return t
+            l = [self._last(d[k], field)[0] for k in d.keys()]
+        df = pd.DataFrame.from_dict(dict([x for x in l if x is not None]), orient = 'index')
+        df.columns = ['last']
+        df.index.name = 'sensor_code'
+        return df
 
     def update_netcdf(self, df, var, sta=None, dt=-4, **meta):
-        t = self._dt(df)
+        t = df.dropna(0, 'all').index[-1].to_pydatetime()
         h = t.replace(hour=meta['hour'])
         if h > t - timedelta(hours=dt-1):
             h = h - timedelta(days=1)
@@ -83,45 +93,48 @@ class Data(object):
 
     def update_ceazamet(self, d, var, typ):
         raw = True if typ=='ceazaraw' else False
-
-        # make sure we have enough overlap - webservice for averaged data always reports until 23:00h
-        # even if there is not data yet (i.e. NaNs if time is < 23:00h)
-        dt = timedelta(days=2)
-        if raw:
-            t, o = zip(*[self._dt(d[k], var, True) for k in d.keys()])
-            t = max(t) - dt
-            o = [x for y in o for x in y]
-        else:
-            t, o = self._dt(d, var, True) - dt
+        idx = pd.IndexSlice
 
         self.down = Downloader()
-        try:
-            self.sta, self.flds = self.down.get_stations()
-        except NoNewStationError:
-            pass
+        self.sta, self.flds = self.down.get_stations()
+        last = self.last(d, var)
+        flds = self.flds.join(last, how='outer').sort_index()
 
-        idx = pd.IndexSlice
-        n = set(self.flds.index.get_level_values('sensor_code')) - set(o) # new fields
-        if len(n):
-            f = self.flds.loc[idx[:, :, list(n)], :]
-            b = self.down.get_field(var, f, raw=raw)
+        # new fields
+        n = flds[flds['last'] != flds['last']].xs(var, 0, 'field', False)
+        if len(n) > 0:
+            b = self.down.get_field(var, n, raw=raw)
             if not raw:
-                d = pd.concat((d, b), 1)
+                d = b.combine_first(d)
 
         # old fields
-        f = self.flds.loc[idx[:, :, o], :]
-        a = self.down.get_field(var, f, from_date=t.date(), raw=raw)
+        f = flds.loc[idx[:, :, last.index], :]
+        a = self.down.get_field(var, f, raw=raw)
 
-        dt = timedelta(seconds=1) # to get the indexing right
+        dt = timedelta(seconds=1) # because time slice is inclusive of upper boundary
         if raw:
-            for k, v in a.items():
-                d[k] = pd.concat((d[k][:v.index[0] - dt], v), 0)
-            if len(n):
-                for k, v in b.items():
-                    d[k] = v
+            if isinstance(d, dict):
+                d = {k: v.combine_first(d[k]) for k, v in a.items()}
+            else:
+                kd = dict([(i[2], i[0]) for i in flds[flds['last']==flds['last']].index.tolist()])
+                d = {k: v.combine_first(d[kd[k]]) for k, v in a.items}
+            if len(n) > 0:
+                d.update(b.items())
         else:
-            d = pd.concat((d[:a.index[0] - dt], a), 0)
+            d = a.combine_first(d)
         return d
+
+    @staticmethod
+    def merge(hdf, d):
+        for k, v in d.items():
+            st = v.columns.get_level_values('station').unique()
+            if len(st) != 1:
+                raise Exception('DataFrame with more than one station.')
+            try:
+                hdf[st[0]] = v.combine_first(hdf[st[0]])
+            except KeyError:
+                hdf[st[0]] = v
+
 
     def close(self, key=None):
         if key is None:
@@ -201,3 +214,10 @@ class Data(object):
         for d in self._data.values():
             print('closing {}'.format(d.filename))
             d.close()
+
+def update_meta(d):
+    """Update column headings to newest format."""
+    for k in d.keys():
+        x = d[k]
+        x.columns.names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
+        d[k] = x
