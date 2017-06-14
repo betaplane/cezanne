@@ -1,11 +1,8 @@
 #!/usr/bin/env python
 from os.path import join as jo
-from os import walk
 import pandas as pd
 from datetime import timedelta
-from glob import glob
 from configparser import ConfigParser
-from CEAZAMet import Downloader, NoNewStationError
 # from WRF import WRFOUT
 import WRF
 
@@ -36,6 +33,7 @@ class Data(object):
         self._sta['fields'] = value
 
     def open(self, key, name):
+        from glob import glob
         def gl(s):
             return [f for g in [glob(jo(p, '**', s), recursive=True)
                               for p in self._paths.values()] for f in g]
@@ -92,6 +90,7 @@ class Data(object):
         return pd.concat((df[:n.index[0] - timedelta(minutes=1)], n), 0)
 
     def update_ceazamet(self, d, var, typ):
+        from CEAZAMet import Downloader
         raw = True if typ=='ceazaraw' else False
         idx = pd.IndexSlice
 
@@ -124,6 +123,13 @@ class Data(object):
             d = a.combine_first(d)
         return d
 
+    def ceazamet_get(self, var, raw=False, update_fields=False):
+        from CEAZAMet import Downloader
+        self.down = Downloader()
+        if update_fields:
+            self.sta, self.flds = self.down.get_stations()
+        return self.down.get_field(var, self.flds, raw=raw)
+
     @staticmethod
     def merge(hdf, d):
         for k, v in d.items():
@@ -148,6 +154,7 @@ class Data(object):
             v.close()
 
     def ls(self):
+        from os import walk
         for p in self._paths.values():
             for s in walk(p):
                 print(s[0])

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 class OUT(object):
     max_workers = 16
-    def __init__(self, paths, domain, lead_day, hour, from_date=None):
+    def __init__(self, paths, domain, lead_day, hour, from_date=None, prefix='wrfout'):
         """Initialize WRFOUT file concatenator. Class variable *max_workers*
         controls how many threads are used.
 
@@ -24,7 +24,7 @@ class OUT(object):
         :param from_date: from what date onwards to search
 
         """
-        name = partial(self._name, domain,  lead_day)
+        name = partial(self._name, domain,  lead_day, prefix)
         dirs = []
         for p in paths:
             dirs.extend(sorted(glob(pa.join(p, 'c01*'))))
@@ -37,11 +37,11 @@ class OUT(object):
         print('WRF.OUT initialized with {} files'.format(len(self.files)))
 
     @staticmethod
-    def _name(dom, lead, d):
+    def _name(dom, lead, d, prefix):
         dt = datetime.strptime(pa.split(d)[1], 'c01_%Y%m%d%H')
         f = glob(pa.join(d, '*_{}_*'.format(dom)))
         s = (dt + timedelta(days=lead)).strftime('%Y-%m-%d_%H:%M:%S')
-        return pa.join(d, 'wrfout_{}_{}'.format(dom, s))
+        return pa.join(d, '{}_{}_{}'.format(prefix, dom, s))
 
     @staticmethod
     def _extract(var, fp):

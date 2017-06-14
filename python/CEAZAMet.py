@@ -254,7 +254,7 @@ def time_irreg(df):
     return f, g, l
 
 
-def binning(df, start_minute, freq, label='end'):
+def binning(df, start_minute=0, freq=60, label='end'):
     """Average raw data from CEAZAMet stations (fetched by CEAZAMet.Downloader.fetch_raw) into true time intervals.
     Assumptions:
     1) The (single) predominant time interval between records is taken to be the true interval over which the logger
@@ -281,10 +281,11 @@ def binning(df, start_minute, freq, label='end'):
     print('record interval detected as {:d} minutes'.format(int(c)))
 
     # compute binning intervals
-    ti = t.astype(int) - c                            # start point of record intervals
+    ti = t.astype(int) - c                                  # start point of record intervals
     ts = start_minute + (ti - start_minute) // freq * freq  # same label for intervals of length 'freq' from global origin
     v = ti + c - ts - freq
     k = (v > 0)               # record intervals split by end of binning intervals
+    l = (v <= 0)              # records completely within binning intervals
     w = v[k].reshape((-1, 1)) # minutes of record intervals falling into next binning interval
     ts = ts.reshape((-1, 1))
 
@@ -292,11 +293,12 @@ def binning(df, start_minute, freq, label='end'):
     ave = df.xs('avg', 1, 'aggr', False)
     cols = ave.columns
     a = ave.as_matrix()
-    aft = np.r_['1', a[k] * w / c, ts[k]]
-    a[k] = a[k] * (c - w) / c
-    a = np.r_['1', a, ts]
-    a = np.r_['0', a, aft]
-    ave = pd.DataFrame(a).groupby(a.shape[1] - 1).mean()
+    aft = np.r_['1', a[k] * w, w, ts[k] + freq]
+    bef = np.r_['1', a[k] * (c - w), c - w, ts[k]]
+    a = np.r_['1', a[l] * c, np.ones((sum(l), 1)) * c, ts[l]]
+    a = np.r_['0', a, bef, aft]
+    ave = pd.DataFrame(a).groupby(a.shape[1] - 1).sum()
+    ave = ave.iloc[:, :-1].divide(ave.iloc[:, -1], 0)
     ave.columns = cols
 
     def col(x, c):
@@ -312,15 +314,3 @@ def binning(df, start_minute, freq, label='end'):
     D.index = pd.DatetimeIndex(np.array(D.index, dtype='datetime64[m]').astype(datetime)) + lab
     return D.sort_index(1)
 
-def combine_raw(*args):
-    def key(f, k):
-        d = f[k]
-        return d.columns.get_level_values('station').unique()[0], d
-
-    X = [dict([key(x, k) for k in x.keys()]) for x in args]
-
-    d = {}
-    for k in set.union(*[set(x.keys()) for x in X]):
-        d[k] = pd.concat([x.get(k, None) for x in X], 1)
-
-    return d
