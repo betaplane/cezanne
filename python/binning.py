@@ -118,7 +118,9 @@ def aggregate(df, t, c, start_minute, freq, label):
 
     # for min and max, use the binning interval with the largest overlap with the record interval
     ts[v > c/2] = ts[v > c/2] + freq
-    b = df.drop('avg', 1, 'aggr').join(pd.DataFrame(ts, index=df.index, columns=['ts'])).groupby('ts')
+    b = df.drop('avg', 1, 'aggr')
+    b.columns = b.columns.tolist() # avoid warning due to joining MultiIndex to single index
+    b.join(pd.DataFrame(ts, index=df.index, columns=['ts'])).groupby('ts')
     D = pd.concat((col(b.min(), 'min'), ave, col(b.max(), 'max')), 1)
 
     lab = pd.Timedelta({'end': freq, 'middle': freq/2, 'start': 0}[label], 'm')
