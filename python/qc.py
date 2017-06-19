@@ -24,6 +24,14 @@ class QC(object):
         print('run check {}'.format(name))
 
     def q_by_station(self, check, operation, sta=None):
+        """
+        Return minimum, maximum or average of continuous quality measure (saved in QC.flags, obtained by running check with calibrate == True) by station.
+
+        :param check: what measure in QC.flags to select
+        :param operation: min, max or avg
+        :param sta: data.sta station meta data
+
+        """
         q = {'min': lambda x:x.min('dim_0'),
              'max': lambda x:x.max('dim_0'),
              'avg': lambda x:x.mean('dim_0')}[operation](
@@ -151,11 +159,73 @@ class QC(object):
         plt.show(block=False)
         return ax
 
-    def where(cond):
-        i, j = np.where(cond)
-        k = np.r_[[i], [j]]
-        k.sort()
-        s = set(k[1, :])
+    def where(self, df, aggr='avg', window = '1D', cont = False):
+        if not cont:
+            self.keep = pd.DataFrame()
+            self.reject = pd.DataFrame()
+            self.notes = pd.DataFrame()
+            m = df.as_matrix().flatten()
+            i = np.argsort(m)
+            i, j = np.unravel_index(i[np.isfinite(m[i])][::-1], df.shape)
+            self._where = zip(st.index[i], st.columns[j])
+        while self._where:
+            t, c = next(self._where)
+            dt = pd.Timedelta(window)
+            plt.figure(figsize=(10,5))
+            d = self.data.xs(c, 1, 'sensor_code').xs(aggr, 1, 'aggr')
+            plt.subplot(1, 2, 1)
+            plt.title(d.columns.get_level_values('station')[0])
+            plt.plot(d[t-dt:t+dt].dropna())
+            plt.plot(t, float(d.loc[t]), 'ro')
+            plt.subplot(1, 2, 2)
+            plt.plot(d.dropna())
+            plt.plot(t, float(d.loc[t]), 'ro')
+            print(df.loc[t, c], np.diff(d.loc[:t].index[-2:]).astype('timedelta64[m]'))
+            plt.pause(.1)
+            inp = input('keep ([y]/n)?  ')
+            rec = pd.DataFrame(df.loc[t, c], index = [t], columns = [c])
+            if inp =='' or inp[0] != 'n':
+                self.keep =rec.combine_first(self.keep)
+            if len(inp) > 1:
+                self.notes = pd.DataFrame(inp[1:], index = [t], columns = [c]).combine_first(self.notes)
+            else:
+                self.reject = rec.combine_first(self.reject)
+            if input('continue ([y]/n)?  ') == 'n':
+                self.last = rec
+                break
+            plt.close()
+
+    def where_switch(self):
+        try:
+            r = self.keep.loc[self.last.index[0], self.last.columns]
+            self.keep.loc[self.last.index[0], self.last.columns] = np.nan
+            self.last.combine_first(self.reject)
+            print('moved from keep to reject')
+        except KeyError:
+            r = self.reject.loc[self.last.index[0], self.last.columns]
+            self.reject.loc[self.last.index[0], self.last.columns] = np.nan
+            self.last.combine_first(self.keep)
+            print('moved from reject to keep')
+
+    def save_calibration(self, name, check):
+        with pd.HDFStore(name) as s:
+            for k in ['keep', 'reject', 'notes']:
+                s['/{}/{}'.format(check, k)] = getattr(self, k)
+
+    def plot_where(df, cond, start_from=None):
+        cols = df[cond].dropna(1, 'all')
+        for i, c in enumerate(cols.iteritems()):
+            if start_from is not None and i + 1 < start_from:
+                continue
+            plt.figure()
+            plt.plot(df[c[0]].dropna())
+            plt.plot(c[1], 'ro')
+            plt.title(c[0])
+            plt.pause(.1)
+            print(c[1].dropna())
+            if input('{} of {}, continue ([y]/n)?  '.format(i + 1, cols.shape[1])) == 'n':
+                break
+            plt.close()
 
     def sensor_to_columns(self, s, aggr):
         return self.data.loc[:, pd.IndexSlice[:,:,s,:,aggr]].columns
@@ -173,11 +243,11 @@ class QC(object):
             s = c.get_level_values('sensor_code')[0]
             print('max value {:0.2f} at sensor {} and time {}'.format(m, s, t[0].isoformat()))
 
-            inp = input('plot? [y] / n  ')
+            inp = input('plot ([y]/n)?  ')
             if inp != 'n':
                 ax = self._calplot(t, c)
 
-            inp = input('remove and continue? [n] / y  ')
+            inp = input('remove and continue ([n]/y)?  ')
             if inp == 'y':
                 d.loc[t, c] = np.nan
                 I.append(i)
