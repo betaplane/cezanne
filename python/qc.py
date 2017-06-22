@@ -159,7 +159,7 @@ class QC(object):
         plt.show(block=False)
         return ax
 
-    def where(self, df, aggr='avg', window = '1D', cont = False):
+    def calibration(self, df, aggr = 'avg', window = '1D', cont = False):
         if not cont:
             self.keep = pd.DataFrame()
             self.reject = pd.DataFrame()
@@ -170,18 +170,8 @@ class QC(object):
             self._where = zip(st.index[i], st.columns[j])
         while self._where:
             t, c = next(self._where)
-            dt = pd.Timedelta(window)
-            plt.figure(figsize=(10,5))
-            d = self.data.xs(c, 1, 'sensor_code').xs(aggr, 1, 'aggr')
-            plt.subplot(1, 2, 1)
-            plt.title(d.columns.get_level_values('station')[0])
-            plt.plot(d[t-dt:t+dt].dropna())
-            plt.plot(t, float(d.loc[t]), 'ro')
-            plt.subplot(1, 2, 2)
-            plt.plot(d.dropna())
-            plt.plot(t, float(d.loc[t]), 'ro')
+            self.plot(t, c, aggr, window)
             print(df.loc[t, c], np.diff(d.loc[:t].index[-2:]).astype('timedelta64[m]'))
-            plt.pause(.1)
             inp = input('keep ([y]/n)?  ')
             rec = pd.DataFrame(df.loc[t, c], index = [t], columns = [c])
             if inp =='' or inp[0] != 'n':
@@ -195,7 +185,20 @@ class QC(object):
                 break
             plt.close()
 
-    def where_switch(self):
+    def plot_series(self, t, c, aggr = 'avg', window = '1D'):
+        dt = pd.Timedelta(window)
+        plt.figure(figsize=(10,5))
+        d = self.data.xs(c, 1, 'sensor_code').xs(aggr, 1, 'aggr')
+        plt.subplot(1, 2, 1)
+        plt.title(d.columns.get_level_values('station')[0])
+        plt.plot(d[t-dt:t+dt].dropna())
+        plt.plot(t, float(d.loc[t]), 'ro')
+        plt.subplot(1, 2, 2)
+        plt.plot(d.dropna())
+        plt.plot(t, float(d.loc[t]), 'ro')
+        plt.pause(.1)
+
+    def switch_calibration(self):
         try:
             r = self.keep.loc[self.last.index[0], self.last.columns]
             self.keep.loc[self.last.index[0], self.last.columns] = np.nan
@@ -211,6 +214,21 @@ class QC(object):
         with pd.HDFStore(name) as s:
             for k in ['keep', 'reject', 'notes']:
                 s['/{}/{}'.format(check, k)] = getattr(self, k)
+
+    def load_calibration(self, name, check):
+        with pd.HDFStore(name) as s:
+            for k in ['keep', 'reject', 'notes']:
+                setattr(self, k, s['/{}/{}'.format(check, k)])
+
+    def plot_calibration(self, sta, flds):
+        idx = pd.IndexSlice
+        plt.figure()
+        for k in ['keep', 'reject']:
+            x = getattr(self, k).copy()
+            x.columns = flds.loc[idx[:, :, x.columns], :].index.droplevel('field')
+            x = x.T.stack().to_frame().join(sta['elev'])
+            plt.scatter(x[0], x['elev'])
+
 
     def plot_where(df, cond, start_from=None):
         cols = df[cond].dropna(1, 'all')
