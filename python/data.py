@@ -212,10 +212,15 @@ class Data(object):
 
     def __getitem__(self, value):
         idx = pd.IndexSlice
-        try:
-            return self.flds.loc[idx[value, :, :], :]
-        except:
-            return self.flds.loc[idx[:, value, :], :]
+        for i, x in enumerate([
+                lambda v: self.flds.loc[idx[v, :, :], :],
+                lambda v: self.flds.loc[idx[:, v, :], :],
+                lambda v: self.flds.loc[idx[:, :, v], :]
+        ]):
+            try:
+                return x(value)
+            except:
+                print(i)
 
     def __del__(self):
         for d in self._data.values():

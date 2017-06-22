@@ -52,7 +52,7 @@ class QC(object):
         flags = self.flags.copy()
         flags['dim_1'] = self.flags['dim_1']['sensor_code']
         flags = flags.rename({'dim_0': 'time', 'dim_1': 'sensor_code'})
-        flags.to_netcdf(path)
+        flags.to_dataset(name='flags').to_netcdf(path)
 
     @staticmethod
     def ds_to_dataframe(ds, check):
@@ -123,6 +123,7 @@ class QC(object):
             self._qual(da > DA, 'step_avg')
             self._qual(dx > DX, 'step_max')
 
+    # persistence seems mostly affected by missing values - i.e. few values per interval - low std
     def persistence(self, var, calibrate=False):
         q = self.q[(var, 'persist')]
         g = self.data.groupby(self.data.index.date)
@@ -147,39 +148,39 @@ class QC(object):
     def spatial(self):
         pass
 
-    def _calplot(self, t, c, ax=None):
-        if ax is None:
-            fig, ax = plt.subplots(1)
-        for r, x in self.data[c].iteritems():
-            ax.plot(x.dropna(), label=r)
-        ax.plot(self.data.loc[t, c], 'ro')
-        ax.legend()
-        # ax.set_title(d.columns.get_level_values('station').unique()[0])
-        plt.pause(0.1)
-        plt.show(block=False)
-        return ax
+    def calibration(self, df, aggr = 'avg', sort = 'desc', window = '1D', cont = False, init=False):
+        """Use data produced from calls to test methods with param **calibration = True** to collect some limiting values. The routine steps through the sorted data point by point and asks whether to keep or reject the point (keep here means to keep as potential outlier, reject would indicate a regular point). The results are appended to the arrays QC,keep and QC.reject (they can be written to file by QC.save_calibration()). For each point a plot is shown with the immediate neighborhood (whose width is controlled by param **window**) and the whole time series. 
 
-    def calibration(self, df, aggr = 'avg', window = '1D', cont = False):
-        if not cont:
+        :param df: data from calls to test methods with param **calibration = True**
+        :type df: pandas.DataFrame as returned by call to QC.ds_to_dataframe()
+        :param aggr: what aggregation level to use for the plots (has no other effect)
+        :param sort: whether to step through the data in descending (**desc**, default) or ascending (**asc**) direction
+        :type sort: str 'asc' or 'desc'
+        :param window: window half-width for the detail plot default one day
+        :param cont: whether to continue with a previously stopped step-through
+        :param init: whether to start a step-through from scratch (i.e. initialize the QC.keep and QC.reject arrays)
+
+        """
+        if init or not hasattr(self, 'keep'):
             self.keep = pd.DataFrame()
             self.reject = pd.DataFrame()
-            self.notes = pd.DataFrame()
+        if not cont:
             m = df.as_matrix().flatten()
             i = np.argsort(m)
-            i, j = np.unravel_index(i[np.isfinite(m[i])][::-1], df.shape)
-            self._where = zip(st.index[i], st.columns[j])
+            if sort == 'desc':
+                i = i[::-1]
+            i, j = np.unravel_index(i[np.isfinite(m[i])], df.shape)
+            self._where = zip(df.index[i], df.columns[j])
         while self._where:
             t, c = next(self._where)
-            self.plot(t, c, aggr, window)
+            self.plot_series(t, c, aggr, window)
+            d = self.data.xs(c, 1, 'sensor_code').xs(aggr, 1, 'aggr')
             print(df.loc[t, c], np.diff(d.loc[:t].index[-2:]).astype('timedelta64[m]'))
-            inp = input('keep ([y]/n)?  ')
             rec = pd.DataFrame(df.loc[t, c], index = [t], columns = [c])
-            if inp =='' or inp[0] != 'n':
-                self.keep =rec.combine_first(self.keep)
-            if len(inp) > 1:
-                self.notes = pd.DataFrame(inp[1:], index = [t], columns = [c]).combine_first(self.notes)
-            else:
+            if input('keep ([y]/n)?  ') == 'n':
                 self.reject = rec.combine_first(self.reject)
+            else:
+                self.keep = rec.combine_first(self.keep)
             if input('continue ([y]/n)?  ') == 'n':
                 self.last = rec
                 break
@@ -191,90 +192,50 @@ class QC(object):
         d = self.data.xs(c, 1, 'sensor_code').xs(aggr, 1, 'aggr')
         plt.subplot(1, 2, 1)
         plt.title(d.columns.get_level_values('station')[0])
-        plt.plot(d[t-dt:t+dt].dropna())
+        plt.plot(d[t-dt:t+dt].dropna(), '-x')
         plt.plot(t, float(d.loc[t]), 'ro')
+        plt.gca().set_xlim(t-dt, t+dt)
         plt.subplot(1, 2, 2)
         plt.plot(d.dropna())
         plt.plot(t, float(d.loc[t]), 'ro')
         plt.pause(.1)
 
-    def switch_calibration(self):
+    def switch_calibration(self, t=None, c=None):
+        if t is None:
+            t, c = self.last.index[0], self.last.columns[0]
         try:
-            r = self.keep.loc[self.last.index[0], self.last.columns]
-            self.keep.loc[self.last.index[0], self.last.columns] = np.nan
-            self.last.combine_first(self.reject)
+            r = self.keep.loc[t, c]
+            if np.isnan(r):
+                raise Exception()
+            self.keep.loc[t, c] = np.nan
+            self.reject.loc[t, c] = r
             print('moved from keep to reject')
         except KeyError:
-            r = self.reject.loc[self.last.index[0], self.last.columns]
-            self.reject.loc[self.last.index[0], self.last.columns] = np.nan
-            self.last.combine_first(self.keep)
+            r = self.reject.loc[t, c]
+            if np.isnan(r):
+                raise Exception()
+            self.reject.loc[t, c] = np.nan
+            self.keep.loc[t, c] = r
             print('moved from reject to keep')
 
     def save_calibration(self, name, check):
         with pd.HDFStore(name) as s:
-            for k in ['keep', 'reject', 'notes']:
+            for k in ['keep', 'reject']:
                 s['/{}/{}'.format(check, k)] = getattr(self, k)
 
     def load_calibration(self, name, check):
         with pd.HDFStore(name) as s:
-            for k in ['keep', 'reject', 'notes']:
+            for k in ['keep', 'reject']:
                 setattr(self, k, s['/{}/{}'.format(check, k)])
 
-    def plot_calibration(self, sta, flds):
+    def plot_calibration(self, sta, flds, **kwargs):
         idx = pd.IndexSlice
         plt.figure()
         for k in ['keep', 'reject']:
-            x = getattr(self, k).copy()
+            x = kwargs[k] if k in kwargs else getattr(self, k).copy()
             x.columns = flds.loc[idx[:, :, x.columns], :].index.droplevel('field')
             x = x.T.stack().to_frame().join(sta['elev'])
             plt.scatter(x[0], x['elev'])
-
-
-    def plot_where(df, cond, start_from=None):
-        cols = df[cond].dropna(1, 'all')
-        for i, c in enumerate(cols.iteritems()):
-            if start_from is not None and i + 1 < start_from:
-                continue
-            plt.figure()
-            plt.plot(df[c[0]].dropna())
-            plt.plot(c[1], 'ro')
-            plt.title(c[0])
-            plt.pause(.1)
-            print(c[1].dropna())
-            if input('{} of {}, continue ([y]/n)?  '.format(i + 1, cols.shape[1])) == 'n':
-                break
-            plt.close()
-
-    def sensor_to_columns(self, s, aggr):
-        return self.data.loc[:, pd.IndexSlice[:,:,s,:,aggr]].columns
-
-
-    def global_calibr_range(self, var, limit):
-        d = self.data.copy()
-
-        I, J = [], []
-        while True:
-            m = d.max().max() if limit == 'max' else d.min().min()
-            i, j = np.where(d == m)
-            t = d.index[list(set(i))]
-            c = d.columns[list(set(j))]
-            s = c.get_level_values('sensor_code')[0]
-            print('max value {:0.2f} at sensor {} and time {}'.format(m, s, t[0].isoformat()))
-
-            inp = input('plot ([y]/n)?  ')
-            if inp != 'n':
-                ax = self._calplot(t, c)
-
-            inp = input('remove and continue ([n]/y)?  ')
-            if inp == 'y':
-                d.loc[t, c] = np.nan
-                I.append(i)
-                J.append(j)
-                self.q[(var, 'range', limit)] = m
-            else:
-                break
-        return I, J
-
 
 
 if __name__ == '__main__':
