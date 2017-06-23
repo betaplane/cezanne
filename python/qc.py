@@ -8,14 +8,17 @@ import matplotlib.pyplot as plt
 
 
 class QC(object):
-    max_ts = 60
+    max_ts = 30
+    min_count = 24
+
     def __init__(self, data, qparams):
         self.data = data
         self.q = qparams
 
     def _qual(self, x, name):
-        y = xr.DataArray(x).expand_dims('check')
+        y = xr.DataArray(x).expand_dims('check').rename({'dim_0': 'time'})
         y['check'] = [name]
+        y['time'] = pd.DatetimeIndex(y['time'].values)
         # y = y.astype(float).fillna(0)
         if hasattr(self, 'flags'):
             self.flags = xr.concat((self.flags, y), 'check')
@@ -51,7 +54,7 @@ class QC(object):
     def to_netcdf(self, path):
         flags = self.flags.copy()
         flags['dim_1'] = self.flags['dim_1']['sensor_code']
-        flags = flags.rename({'dim_0': 'time', 'dim_1': 'sensor_code'})
+        flags = flags.rename({'dim_1': 'sensor_code'})
         flags.to_dataset(name='flags').to_netcdf(path)
 
     @staticmethod
@@ -79,7 +82,7 @@ class QC(object):
             self._qual(ma > MA, 'range_max')
 
         # also compute difference between mean and (max - min)
-        self._qual(abs(self.data.xs('avg', 1, 'aggr') - ma + mi), 'range_avg')
+        # self._qual(abs(self.data.xs('avg', 1, 'aggr') - ma + mi), 'range_avg')
 
     # to be applied on a per-sensor basis, due to different time sampling
     # (presumably per-station, but per-sensor makes it simpler to code)
@@ -107,7 +110,8 @@ class QC(object):
         # include dummy 'min' column so as to allow 'apply' operation (needs 3 columns to be returned)
         dx = np.r_['1', dxavg, dxmax.reshape((-1, 1)), np.zeros_like(dxavg)]
         idx = pd.MultiIndex.from_arrays(np.r_[cols, ['avg'], cols, ['max'], cols, ['min']].reshape((3,-1)).T)
-        dxdt = pd.DataFrame(dx / dt, index = x.index[1:][i], columns = idx)
+        # dxdt = pd.DataFrame(dx / dt, index = x.index[1:][i], columns = idx)
+        dxdt = pd.DataFrame(dx, index = x.index[1:][i], columns = idx)
         return dxdt.reindex(y.index)
 
     def step(self, var, calibrate=False):
@@ -115,13 +119,13 @@ class QC(object):
         q = self.q[(var, 'step')]
         dxdt = self.data.groupby(axis=1, level='sensor_code').apply(self._step, max_ts=self.max_ts)
         da, DA = self._align(dxdt.xs('avg', 1, 'aggr'), q['avg'])
-        dx, DX = self._align(dxdt.xs('max', 1, 'aggr'), q['max'])
+        # dx, DX = self._align(dxdt.xs('max', 1, 'aggr'), q['max'])
         if calibrate == True:
             self._qual(da, 'step_avg')
             self._qual(dx, 'step_max')
         else:
             self._qual(da > DA, 'step_avg')
-            self._qual(dx > DX, 'step_max')
+            # self._qual(dx > DX, 'step_max')
 
     # persistence seems mostly affected by missing values - i.e. few values per interval - low std
     def persistence(self, var, calibrate=False):
@@ -129,26 +133,30 @@ class QC(object):
         g = self.data.groupby(self.data.index.date)
         gmax = g.max()
         gmin = g.min()
+        c = g.count().xs('avg', 1, 'aggr')
         dmax = abs(gmax.xs('max', 1, 'aggr') - gmin.xs('min', 1, 'aggr'))
         davg = abs(gmax.xs('avg', 1, 'aggr') - gmin.xs('avg', 1, 'aggr'))
 
         # StD of min / max probably has different properties - for now use only ave
         st, ST = self._align(g.std().xs('avg', 1, 'aggr'), q['std'])
-        dx, DX = self._align(dmax, q['max'])
+        # dx, DX = self._align(dmax, q['max'])
         da, DA = self._align(davg, q['avg'])
+        # ct, ST = self._align(g.count().xs('avg', 1, 'aggr'), q['std'])
+        st1 = st[(st > ST) & (c > self.min_count)]
         if calibrate == True:
-            self._qual(st, 'persist_std')
-            self._qual(dx / st, 'persist_max')
-            self._qual(da / st, 'persist_avg')
+            self._qual(st[(c > self.min_count) & (st > 0)], 'persist_std')
+            # self._qual(ct, 'persist_count')
+            self._qual(dx / st1, 'persist_max')
+            self._qual(da / st1, 'persist_avg')
         else:
-            self._qual(st < ST, 'persist_std')
-            self._qual(dx / st < DX, 'persist_max')
-            self._qual(da / st < DA, 'persist_avg')
+            self._qual(((st < ST) & (c > self.min_count)) | (st == 0), 'persist_std')
+            # self._qual(dx / st1 < DX, 'persist_max')
+            self._qual(da / st1 < DA, 'persist_avg')
 
     def spatial(self):
         pass
 
-    def calibration(self, df, aggr = 'avg', sort = 'desc', window = '1D', cont = False, init=False):
+    def calibration(self, df, aggr = 'avg', sort = 'desc', window = '1D', cont = False, init=False, aux=None):
         """Use data produced from calls to test methods with param **calibration = True** to collect some limiting values. The routine steps through the sorted data point by point and asks whether to keep or reject the point (keep here means to keep as potential outlier, reject would indicate a regular point). The results are appended to the arrays QC,keep and QC.reject (they can be written to file by QC.save_calibration()). For each point a plot is shown with the immediate neighborhood (whose width is controlled by param **window**) and the whole time series. 
 
         :param df: data from calls to test methods with param **calibration = True**
@@ -175,7 +183,10 @@ class QC(object):
             t, c = next(self._where)
             self.plot_series(t, c, aggr, window)
             d = self.data.xs(c, 1, 'sensor_code').xs(aggr, 1, 'aggr')
-            print(df.loc[t, c], np.diff(d.loc[:t].index[-2:]).astype('timedelta64[m]'))
+            if aux is None:
+                print(df.loc[t, c], np.diff(d.loc[:t].dropna().index[-2:]).astype('timedelta64[m]'))
+            else:
+                print(df.loc[t, c], aux.loc[t, c])
             rec = pd.DataFrame(df.loc[t, c], index = [t], columns = [c])
             if input('keep ([y]/n)?  ') == 'n':
                 self.reject = rec.combine_first(self.reject)
@@ -243,18 +254,18 @@ if __name__ == '__main__':
     D = data.Data()
     D.open('r','raw.h5')
 
-    qp = D.sta['elev'].to_frame()
-    i = qp[qp > '2000'].dropna().index
+    qp = D.sta['elev'].astype(float).to_frame()
     qp.columns = [('elev', None, None)]
-    qp[('ta_c', 'range', 'max')] = 40
-    qp.loc[i, ('ta_c', 'range', 'max')] = 30
-    qp[('ta_c', 'range', 'min')] = -25
-    qp[('ta_c', 'step', 'avg')] = 0.1 # per minute
-    qp[('ta_c', 'step', 'max')] = 0.1 # per minute
+    qp[('ta_c', 'range', 'max')] = 38.5
+    qp[('ta_c', 'range', 'min')] = np.minimum(-5, qp.iloc[:,0] * (-0.007367) + 5)
+    qp[('ta_c', 'step', 'avg')] = 10 # absolute
     qp[('ta_c', 'persist', 'std')] = 0.1
-    qp[('ta_c', 'persist', 'max')] = 0.1
-    qp[('ta_c', 'persist', 'avg')] = 0.1
+    qp[('ta_c', 'persist', 'avg')] = 2
 
     qp.columns = pd.MultiIndex.from_tuples(qp.columns)
 
     Q = QC(pd.concat([D.r[k] for k in D.r.keys()], 1), qp)
+    Q.range('ta_c')
+    Q.step('ta_c')
+    Q.persistence('ta_c')
+    Q.to_netcdf('../../data/CEAZAMet/quality_ta_c.nc')

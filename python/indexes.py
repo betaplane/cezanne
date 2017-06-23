@@ -19,7 +19,8 @@ urls = {
     'nino4': 'https://www.esrl.noaa.gov/psd/data/correlation/nina4.data',
     'nino12': 'https://www.esrl.noaa.gov/psd/data/correlation/nina1.data',
     'nino_oni': 'https://www.esrl.noaa.gov/psd/data/correlation/oni.data',
-    'nino_tni': 'https://www.esrl.noaa.gov/psd/data/correlation/tni.data'
+    'nino_tni': 'https://www.esrl.noaa.gov/psd/data/correlation/tni.data',
+    'soi': 'http://www.cpc.ncep.noaa.gov/data/indices/soi'
 }
 
 
