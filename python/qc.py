@@ -211,6 +211,22 @@ class QC(object):
         plt.plot(t, float(d.loc[t]), 'ro')
         plt.pause(.1)
 
+    def plot_flagged(self):
+        d = {}
+        for i, j in np.array(np.where(self.data.xs('quality', 1, 'aggr') == 1)).T:
+            if j in d:
+                d[j].append(i)
+            else:
+                d[j] = [i]
+        for k, v in d.items():
+            plt.figure()
+            x = self.data.xs('avg', 1, 'aggr').iloc[:, k]
+            plt.plot(x.dropna())
+            plt.plot(x.iloc[v], 'ro')
+            plt.title(x.name[0])
+            plt.show()
+
+
     def switch_calibration(self, t=None, c=None):
         if t is None:
             t, c = self.last.index[0], self.last.columns[0]
@@ -248,6 +264,13 @@ class QC(object):
             x = x.T.stack().to_frame().join(sta['elev'])
             plt.scatter(x[0], x['elev'])
 
+    def merge_flags(self, df):
+        idx = pd.IndexSlice
+        c = self.data.columns.droplevel('aggr').unique().to_series()
+        df.columns = pd.MultiIndex.from_tuples([c.loc[idx[:, :, i, :]].values[0] + ('quality',) for i in  df.columns],
+                                               names = self.data.columns.names)
+        return pd.concat((self.data, df), 1).sort_index(1)
+
 
 if __name__ == '__main__':
     import data
@@ -265,7 +288,7 @@ if __name__ == '__main__':
     qp.columns = pd.MultiIndex.from_tuples(qp.columns)
 
     Q = QC(pd.concat([D.r[k] for k in D.r.keys()], 1), qp)
-    Q.range('ta_c')
-    Q.step('ta_c')
-    Q.persistence('ta_c')
-    Q.to_netcdf('../../data/CEAZAMet/quality_ta_c.nc')
+    # Q.range('ta_c')
+    # Q.step('ta_c')
+    # Q.persistence('ta_c')
+    # Q.to_netcdf('../../data/CEAZAMet/quality_ta_c.nc')

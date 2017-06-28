@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import pandas as pd
+import numpy as np
 from io import BytesIO
 from pycurl import Curl
 import re
@@ -68,10 +69,24 @@ def nino(key, buf):
     df.index = pd.DatetimeIndex(['{}-{}'.format(*i) for i in df.index.tolist()])
     return df
 
+def soi(buf):
+    with BytesIO() as bio:
+        bio.writelines([l for l in buf if re.search(b'\d', l)])
+        df = pd.read_fwf(bio, widths = [4] + 12 * [6], header = None, index_col = 0, na_values = -999.9)
+        i = np.where(np.diff(df.index) != 1)[0][0] + 1
+        df1 = df.iloc[:i].stack()
+        df2 = df.iloc[i:].stack()
+        df1.index = pd.DatetimeIndex(['{}-{}'.format(*i) for i in df1.index.tolist()])
+        df2.index = pd.DatetimeIndex(['{}-{}'.format(*i) for i in df2.index.tolist()])
+
 def download(name):
     with pd.HDFStore(name) as f:
         for k, url in urls.items():
             print('downloading {}'.format(k))
             buf = getc(url)
             buf.seek(0)
-            f[k] = {'aao': aao, 'sam': sam, 'nin': nino}[k[:3]](k, buf)
+            if k == 'soi':
+                f['soi'], f['soi_stand'] = soi(buf)
+            else:
+                f[k] = {'aao': aao, 'sam': sam, 'nin': nino}[k[:3]](k, buf)
+            buf.close()
