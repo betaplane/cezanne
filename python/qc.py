@@ -3,9 +3,39 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
+from matplotlib.dates import num2date
 
 # Shafer, Mark A., Christopher A. Fiebrich, Derek S. Arndt, Sherman E. Fredrickson, and Timothy W. Hughes. “Quality Assurance Procedures in the Oklahoma Mesonetwork.” Journal of Atmospheric and Oceanic Technology 17, no. 4 (2000): 474–494.
 
+class Select(object):
+    def __init__(self, ax, data, flags):
+        from matplotlib.widgets import RectangleSelector
+        self._rs = RectangleSelector(ax, self._onselect, drawtype='box', interactive=True)
+        # plt.connect('key_press_event', self._toggle)
+        self.data = data
+        self.flags = flags
+
+    def _toggle(self, e):
+        if e.key == 's':
+            if self._rs.active:
+                self._rs.set_active(False)
+            else:
+                self._rs.set_active(True)
+
+    def _onselect(self, *args):
+        a, b = self._rs.corners[0][:2]
+        d = self.data.loc[num2date(a): num2date(b)]
+        self.index = d.index
+        plt.sca(self._rs.ax)
+        if hasattr(self, 'pl'):
+            self.pl[0].remove()
+        self.pl = plt.plot(d, 'x')
+        plt.draw()
+
+    def redraw(self, data):
+        plt.sca(self._rs.ax)
+        plt.plot(data.xs('avg', 1, 'aggr')[self.data.columns[0]].dropna())
+        plt.draw()
 
 class QC(object):
     max_ts = 30
@@ -48,7 +78,8 @@ class QC(object):
         fl = self.flags.sel(check=check).copy()
         fl['dim_1'] = fl['dim_1']['sensor_code']
         fl = fl.to_dataframe(check).drop('check', 1).unstack()
-        fl.columns = self.flags['dim_1'].to_index()
+        fl.columns = fl.columns.get_level_values('dim_1')
+        # fl.columns = self.flags['dim_1'].to_index()
         return fl
 
     def to_netcdf(self, path):
@@ -211,20 +242,55 @@ class QC(object):
         plt.plot(t, float(d.loc[t]), 'ro')
         plt.pause(.1)
 
-    def plot_flagged(self):
-        d = {}
-        for i, j in np.array(np.where(self.data.xs('quality', 1, 'aggr') == 1)).T:
-            if j in d:
-                d[j].append(i)
-            else:
-                d[j] = [i]
-        for k, v in d.items():
-            plt.figure()
-            x = self.data.xs('avg', 1, 'aggr').iloc[:, k]
-            plt.plot(x.dropna())
-            plt.plot(x.iloc[v], 'ro')
-            plt.title(x.name[0])
-            plt.show()
+
+    def plot_flagged(self, df, axis=0, win=20):
+        ij = np.where(df == 1)
+        b = np.array(ij).T
+        if axis == 0:
+            d = {}
+            self.selectors = []
+            for i, j in b:
+                if j in d:
+                    d[j].append(i)
+                else:
+                    d[j] = [i]
+            for k, v in d.items():
+                plt.figure()
+                x = self.data.xs('avg', 1, 'aggr').xs(df.columns[k], 1, 'sensor_code', False)
+                plt.plot(x.dropna())
+                plt.plot(x.loc[df.index[v]], 'ro')
+                plt.title(x.columns.get_level_values('station').unique())
+                self.selectors.append(Select(plt.gca(), x, df.index[v]))
+                plt.show()
+        else:
+            from sympy.sets.sets import Interval, Union
+            u = Union([Interval(*i) for i in zip(b[:, 0] - win, b[:, 0] + win)])
+            for b in np.array(list(u.boundary), dtype=int).reshape((-1, 2)):
+                plt.figure()
+                d = df.iloc[b[0]:b[1]]
+                x = self.data.xs('avg', 1, 'aggr').loc[d.index]
+                plt.plot(x, '.-')
+                y = x[d.astype(bool)]
+                plt.plot(y, 'xr')
+                s = y.dropna(1, 'all').columns.get_level_values('station').unique().tolist()
+                i, j = np.where(d == 1)
+                s.extend(x.lookup(d.index[i], x.columns[j]).tolist())
+                plt.title(s)
+                plt.show()
+
+    def flag_selected(self):
+        def data(s):
+            if hasattr(s, 'index'):
+                c = s.data.columns.get_level_values('sensor_code')
+                x = self.data.loc[s.index, s.data.columns[0]].copy()
+                self.data.loc[s.index, s.data.columns[0]] = np.nan
+                try:
+                    s.redraw(self.data)
+                except ValueError:
+                    pass
+                return x.dropna(0, 'any')
+        r = pd.concat(([data(s) for s in self.selectors]), 1)
+        self.flagged = r.combine_first(self.flagged) if hasattr(self, 'flagged') else r
 
 
     def switch_calibration(self, t=None, c=None):
@@ -267,7 +333,8 @@ class QC(object):
     def merge_flags(self, df):
         idx = pd.IndexSlice
         c = self.data.columns.droplevel('aggr').unique().to_series()
-        df.columns = pd.MultiIndex.from_tuples([c.loc[idx[:, :, i, :]].values[0] + ('quality',) for i in  df.columns],
+        df.columns = pd.MultiIndex.from_tuples([c.loc[idx[:, :, i, :]].values[0] + ('qflag',)
+                                                for i in  df.columns],
                                                names = self.data.columns.names)
         return pd.concat((self.data, df), 1).sort_index(1)
 
