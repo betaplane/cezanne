@@ -204,6 +204,15 @@ class Data(object):
         return {k: self.compare(file_a[k], file_b[k])
                 for k in set(file_a.keys()).intersection(file_b.keys())}
 
+    def distances(self):
+        from pyproj import Geod
+        g = Geod(ellps='WGS84')
+        d = pd.DataFrame()
+        for i, a in self.sta.iterrows():
+            for j, b in self.sta.iterrows():
+                d.loc[i, j] = g.inv(float(a.lon), float(a.lat), float(b.lon), float(b.lat))[2]
+        return d
+
     def __getattr__(self, name):
         try:
             return self._data[name]

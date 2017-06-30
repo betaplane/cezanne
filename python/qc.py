@@ -23,13 +23,15 @@ class Select(object):
                 self._rs.set_active(True)
 
     def _onselect(self, *args):
-        a, b = self._rs.corners[0][:2]
-        d = self.data.loc[num2date(a): num2date(b)]
-        self.index = d.index
+        a, b = sorted(self._rs.corners[0][:2])
+        c, d = sorted(self._rs.corners[1][1:3])
+        x = self.data.loc[num2date(a): num2date(b)]
+        x = x[(x > c) & (x < d)].dropna()
+        self.index = x.index
         plt.sca(self._rs.ax)
         if hasattr(self, 'pl'):
             self.pl[0].remove()
-        self.pl = plt.plot(d, 'x')
+        self.pl = plt.plot(x, 'x')
         plt.draw()
 
     def redraw(self, data):
@@ -87,6 +89,11 @@ class QC(object):
         flags['dim_1'] = self.flags['dim_1']['sensor_code']
         flags = flags.rename({'dim_1': 'sensor_code'})
         flags.to_dataset(name='flags').to_netcdf(path)
+
+    def write_data(self, path):
+        with pd.HDFStore(path) as f:
+            for s in self.data.columns.get_level_values('station').unique():
+                f[s] = self.data.xs(s, 1, 'station', False) # important: don't drop 'station'
 
     @staticmethod
     def ds_to_dataframe(ds, check):
@@ -184,8 +191,15 @@ class QC(object):
             # self._qual(dx / st1 < DX, 'persist_max')
             self._qual(da / st1 < DA, 'persist_avg')
 
-    def spatial(self):
-        pass
+    # Note: doesn't work - too heterogeneous area. Regression would be better.
+    # Also, needs binned data to work with (temporal overlap).
+    def spatial(self, aggr, dist):
+        d = self.data.xs(aggr, 1, 'aggr')
+        w = np.exp(- (dist / dist.mean().mean()) ** 2).replace(1, 0)
+        d, w = d.align(w, axis=1, level='sensor_code')
+        w.fillna(0, inplace=True)
+        x = d.fillna(0).dot(w.T) / d.notnull().astype(float).dot(w.T)
+
 
     def calibration(self, df, aggr = 'avg', sort = 'desc', window = '1D', cont = False, init=False, aux=None):
         """Use data produced from calls to test methods with param **calibration = True** to collect some limiting values. The routine steps through the sorted data point by point and asks whether to keep or reject the point (keep here means to keep as potential outlier, reject would indicate a regular point). The results are appended to the arrays QC,keep and QC.reject (they can be written to file by QC.save_calibration()). For each point a plot is shown with the immediate neighborhood (whose width is controlled by param **window**) and the whole time series. 
@@ -243,23 +257,28 @@ class QC(object):
         plt.pause(.1)
 
 
-    def plot_flagged(self, df, axis=0, win=20):
+    def plot_flagged(self, df, axis=0, sensor=None, win=40):
+        if sensor is not None:
+            df = df[sensor]
         ij = np.where(df == 1)
         b = np.array(ij).T
         if axis == 0:
             d = {}
             self.selectors = []
-            for i, j in b:
-                if j in d:
-                    d[j].append(i)
-                else:
-                    d[j] = [i]
+            if sensor is None:
+                for i, j in b:
+                    if j in d:
+                        d[df.columns[j]].append(i)
+                    else:
+                        d[df.columns[j]] = [i]
+            else:
+                d[sensor] = ij[0]
             for k, v in d.items():
                 plt.figure()
-                x = self.data.xs('avg', 1, 'aggr').xs(df.columns[k], 1, 'sensor_code', False)
+                x = self.data.xs('avg', 1, 'aggr').xs(k, 1, 'sensor_code', False)
                 plt.plot(x.dropna())
                 plt.plot(x.loc[df.index[v]], 'ro')
-                plt.title(x.columns.get_level_values('station').unique())
+                plt.title(x.columns.get_level_values('station')[0])
                 self.selectors.append(Select(plt.gca(), x, df.index[v]))
                 plt.show()
         else:
@@ -269,12 +288,19 @@ class QC(object):
                 plt.figure()
                 d = df.iloc[b[0]:b[1]]
                 x = self.data.xs('avg', 1, 'aggr').loc[d.index]
-                plt.plot(x, '.-')
-                y = x[d.astype(bool)]
+                for k, c in x.iteritems():
+                    plt.plot(c.dropna(), '.-', label=k[0])
+                plt.legend()
+                if sensor is None:
+                    i, j = np.where(d == 1)
+                    y = x[d.astype(bool)]
+                    s = x.lookup(d.index[i], x.columns[j]).tolist()
+                else:
+                    i = np.where(d == 1)[0]
+                    y = x.xs(d.name, 1, 'sensor_code')[d.astype(bool)]
+                    s = y.iloc[:,0].tolist()
+                s.insert(0, y.dropna(1, 'all').columns.get_level_values('station').unique().tolist())
                 plt.plot(y, 'xr')
-                s = y.dropna(1, 'all').columns.get_level_values('station').unique().tolist()
-                i, j = np.where(d == 1)
-                s.extend(x.lookup(d.index[i], x.columns[j]).tolist())
                 plt.title(s)
                 plt.show()
 
@@ -282,7 +308,8 @@ class QC(object):
         def data(s):
             if hasattr(s, 'index'):
                 c = s.data.columns.get_level_values('sensor_code')
-                x = self.data.loc[s.index, s.data.columns[0]].copy()
+                # use of xs here so that column labels are preserved
+                x = self.data.xs(c[0], 1, 'sensor_code', False).loc[s.index].copy()
                 self.data.loc[s.index, s.data.columns[0]] = np.nan
                 try:
                     s.redraw(self.data)
@@ -342,12 +369,15 @@ class QC(object):
 if __name__ == '__main__':
     import data
     D = data.Data()
-    D.open('r','raw.h5')
+    D.open('r','s_raw.h5')
 
     qp = D.sta['elev'].astype(float).to_frame()
     qp.columns = [('elev', None, None)]
     qp[('ta_c', 'range', 'max')] = 38.5
-    qp[('ta_c', 'range', 'min')] = np.minimum(-5, qp.iloc[:,0] * (-0.007367) + 5)
+    qp[('ta_c', 'range', 'min')] = np.minimum(-5.5, qp.iloc[:,0] * (-0.007367) + 5)
+    # CNPW - Puerto Williams
+    qp.loc['CNPW', ('ta_c', 'range', 'max')] = 30
+    qp.loc['CNPW', ('ta_c', 'range', 'min')] = -12
     qp[('ta_c', 'step', 'avg')] = 10 # absolute
     qp[('ta_c', 'persist', 'std')] = 0.1
     qp[('ta_c', 'persist', 'avg')] = 2

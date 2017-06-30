@@ -120,8 +120,8 @@ def aggregate(df, t, c, start_minute, freq, label):
     ts[v > c/2] = ts[v > c/2] + freq
     b = df.drop('avg', 1, 'aggr')
     b.columns = b.columns.tolist() # avoid warning due to joining MultiIndex to single index
-    b.join(pd.DataFrame(ts, index=df.index, columns=['ts'])).groupby('ts')
-    D = pd.concat((col(b.min(), 'min'), ave, col(b.max(), 'max')), 1)
+    g = b.join(pd.DataFrame(ts, index=df.index, columns=['ts'])).groupby('ts')
+    D = pd.concat((col(g.min(), 'min'), ave, col(g.max(), 'max')), 1)
 
     lab = pd.Timedelta({'end': freq, 'middle': freq/2, 'start': 0}[label], 'm')
     D.index = pd.DatetimeIndex(np.array(D.index, dtype='datetime64[m]').astype(datetime)) + lab
