@@ -69,6 +69,32 @@ class Downloader(object):
         'c6': 'e_ultima_lectura'
     }
 
+    def _get(self, f, from_date, raw):
+        if from_date is None:
+            if 'last' in f[1]:
+                day = f[1]['last'].to_pydatetime()
+                day = day - timedelta(days = 1) if day == day else self.from_date
+            else:
+                day = self.from_date
+        else:
+            day = from_date
+        try:
+            df = self.fetch_raw(f[0][2], day) if raw else self.fetch(f[0][2], day)
+        except FetchError as fe:
+            print(fe)
+        else:
+            i = df.columns.size
+            df.columns = pd.MultiIndex.from_arrays(
+                np.r_[
+                    np.repeat([f[0][0], f[0][1], f[0][2], f[1]['elev']], i),
+                    df.columns
+                ].reshape((-1, i)),
+                names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
+            )
+            print('fetched {} from {}'.format(f[0][2], f[0][0]))
+            return f[0][2], df.sort_index(1)
+
+
     def get_field(self, var, var_table, from_date=None, raw=False):
         """Collect data from CEAZAMet webservice, for one variable type but all stations.
 
@@ -80,38 +106,19 @@ class Downloader(object):
         :rtype: pandas.DataFrame or dict with DataFrames if raw==True
 
         """
-        self.data = {}
-        def get(f):
-            if from_date is None:
-                if 'last' in f[1]:
-                    day = f[1]['last'].to_pydatetime()
-                    day = day - timedelta(days = 1) if day == day else self.from_date
-                else:
-                    day = self.from_date
-            else:
-                day = from_date
-            try:
-                df = self.fetch_raw(f[0][2], day) if raw else self.fetch(f[0][2], day)
-            except FetchError as fe:
-                print(fe)
-            else:
-                i = df.columns.size
-                df.columns = pd.MultiIndex.from_arrays(
-                    np.r_[
-                        np.repeat([f[0][0], f[0][1], f[0][2], f[1]['elev']], i),
-                        df.columns
-                    ].reshape((-1, i)),
-                    names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
-                )
-                print('fetched {} from {}'.format(f[0][2], f[0][0]))
-                return f[0][2], df.sort_index(1)
-
         with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
-            self.data = [exe.submit(get, c) for c in
+            self.data = [exe.submit(self._get, c, from_date=from_date, raw=raw) for c in
                          var_table.xs(var, 0, 'field', False).iterrows()]
 
         data = dict([d.result() for d in as_completed(self.data) if d.result() is not None])
         return data if raw else pd.concat(data.values(), 1).sort_index(axis=1)
+
+    def get_fields_by_station(self, station, var_table, from_date=None, raw=False):
+        with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
+            self.data = [exe.submit(self._get, c, from_date=from_date, raw=raw) for c in
+                         var_table.xs(station, 0, 'station', False).iterrows()]
+        data = [d.result()[1] for d in as_completed(self.data) if d.result() is not None]
+        return pd.concat(data, 1).sort_index(1)
 
     def fetch(self, code, from_date=None):
         from_date = self.from_date if from_date is None else from_date

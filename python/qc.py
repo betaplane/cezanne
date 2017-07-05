@@ -191,10 +191,25 @@ class QC(object):
             # self._qual(dx / st1 < DX, 'persist_max')
             self._qual(da / st1 < DA, 'persist_avg')
 
+    def distances(dist):
+        dm = dist.mean()
+        i = self.data.columns.get_level_values('station').intersection(dm[dm < 5e5].index)
+        return dist.loc[i, i]
+
+    def bin(self, index):
+        import binning
+        return pd.concat([binning.bin(self.data.xs(i, 1, 'station', False).dropna(0,'all')) for i in index], 1)
+
     # Note: doesn't work - too heterogeneous area. Regression would be better.
     # Also, needs binned data to work with (temporal overlap).
     def spatial(self, aggr, dist):
-        d = self.data.xs(aggr, 1, 'aggr')
+        dist = self.distances(dist)
+        d = self.bin(dist.index).xs(aggr, 1, 'aggr')
+        d = d.fillna() - d.mean()
+        def reg(c, x):
+            X = x.drop(c.name, 1)
+            r = np.linalg.lstsq(X, c)[0]
+            return X.dot(r.reshape((-1, 1)))
         w = np.exp(- (dist / dist.mean().mean()) ** 2).replace(1, 0)
         d, w = d.align(w, axis=1, level='sensor_code')
         w.fillna(0, inplace=True)

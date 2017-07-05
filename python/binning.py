@@ -133,4 +133,4 @@ def aggregate(df, t, c, start_minute, freq, label):
 # 2) the datalogger samples all variables at the same times
 @bin.register(pd.HDFStore)
 def bin_store(d, *args, **kwargs):
-    return pd.concat([binning(d[k], *args, **kwargs) for k in d.keys()], axis=1)
+    return pd.concat([bin(d[k], *args, **kwargs) for k in d.keys()], axis=1)
