@@ -93,7 +93,7 @@ class QC(object):
     def write_data(self, path):
         with pd.HDFStore(path) as f:
             for s in self.data.columns.get_level_values('station').unique():
-                f[s] = self.data.xs(s, 1, 'station', False) # important: don't drop 'station'
+                f[s] = self.data.xs(s, 1, 'station', False).dropna(0, 'all') # important: don't drop 'station'
 
     @staticmethod
     def ds_to_dataframe(ds, check):
@@ -196,24 +196,29 @@ class QC(object):
         i = self.data.columns.get_level_values('station').intersection(dm[dm < 5e5].index)
         return dist.loc[i, i]
 
-    def bin(self, index):
+    def bin(self, var):
         import binning
-        return pd.concat([binning.bin(self.data.xs(i, 1, 'station', False).dropna(0,'all')) for i in index], 1)
+        x = self.data.xs(var, 1, 'field', False)
+        self.binned = pd.concat([binning.bin(x.xs(i, 1, 'station', False).dropna(0,'all'))
+                                 for i in self.data.columns.get_level_values('station').unique()], 1)
 
-    # Note: doesn't work - too heterogeneous area. Regression would be better.
-    # Also, needs binned data to work with (temporal overlap).
-    def spatial(self, aggr, dist):
-        dist = self.distances(dist)
-        d = self.bin(dist.index).xs(aggr, 1, 'aggr')
-        d = d.fillna() - d.mean()
-        def reg(c, x):
-            X = x.drop(c.name, 1)
-            r = np.linalg.lstsq(X, c)[0]
-            return X.dot(r.reshape((-1, 1)))
-        w = np.exp(- (dist / dist.mean().mean()) ** 2).replace(1, 0)
-        d, w = d.align(w, axis=1, level='sensor_code')
-        w.fillna(0, inplace=True)
-        x = d.fillna(0).dot(w.T) / d.notnull().astype(float).dot(w.T)
+    def spatial(self, var, calibrate=False, sensor=None):
+        aggr = 'avg'
+        import spatial as sp
+        from sklearn.cluster import AffinityPropagation
+        B = sp.Blocks(AffinityPropagation)
+        X = self.binned.xs(aggr, 1, 'aggr', False)
+        def reg(c, y):
+            print(c)
+            y = y.dropna()
+            return B.regress(y, X.drop(c, 1).loc[y.index])
+        if sensor is None:
+            self.R = pd.concat([reg(*cy) for cy in X.iteritems()], 1)
+            self._qual(abs(X - self.R) > 2 * X.std(), 'spatial')
+        else:
+            y = X.xs(sensor, 1, 'sensor_code', False).iloc[:,0].dropna()
+            x = X.drop(y.name, 1).loc[y.index]
+            self.R = B.regress(y, x)
 
 
     def calibration(self, df, aggr = 'avg', sort = 'desc', window = '1D', cont = False, init=False, aux=None):
@@ -273,6 +278,7 @@ class QC(object):
 
 
     def plot_flagged(self, df, axis=0, sensor=None, win=40):
+        aggr = 'avg'
         if sensor is not None:
             df = df[sensor]
         ij = np.where(df == 1)
@@ -282,16 +288,19 @@ class QC(object):
             self.selectors = []
             if sensor is None:
                 for i, j in b:
-                    if j in d:
-                        d[df.columns[j]].append(i)
+                    k = df.columns[j]
+                    if k in d:
+                        d[k].append(i)
                     else:
-                        d[df.columns[j]] = [i]
+                        d[k] = [i]
             else:
                 d[sensor] = ij[0]
             for k, v in d.items():
                 plt.figure()
-                x = self.data.xs('avg', 1, 'aggr').xs(k, 1, 'sensor_code', False)
+                x = self.data.xs(aggr, 1, 'aggr').xs(k, 1, 'sensor_code', False)
                 plt.plot(x.dropna())
+                if hasattr(self, 'R'):
+                    plt.plot(self.R.xs(k, 1, 'sensor_code'))
                 plt.plot(x.loc[df.index[v]], 'ro')
                 plt.title(x.columns.get_level_values('station')[0])
                 self.selectors.append(Select(plt.gca(), x, df.index[v]))
@@ -302,7 +311,7 @@ class QC(object):
             for b in np.array(list(u.boundary), dtype=int).reshape((-1, 2)):
                 plt.figure()
                 d = df.iloc[b[0]:b[1]]
-                x = self.data.xs('avg', 1, 'aggr').loc[d.index]
+                x = self.data.xs(aggr, 1, 'aggr').loc[d.index]
                 for k, c in x.iteritems():
                     plt.plot(c.dropna(), '.-', label=k[0])
                 plt.legend()
@@ -383,8 +392,8 @@ class QC(object):
 
 if __name__ == '__main__':
     import data
-    D = data.Data()
-    D.open('r','s_raw.h5')
+    # D = data.Data()
+    # D.open('r','s_raw.h5')
 
     qp = D.sta['elev'].astype(float).to_frame()
     qp.columns = [('elev', None, None)]

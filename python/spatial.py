@@ -2,73 +2,96 @@
 import numpy as np
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.cluster import AffinityPropagation
 
 
-def distance_weighted_ave(data, dist):
+def distance_weighted_ave(x, dist):
+    dm = dist.mean()
+    i = dm[dm < 5e5].index
+    dist = dist.loc[i, i]
     w = np.exp(- (dist / dist.mean().mean()) ** 2).replace(1, 0)
-    d, w = data.align(w, axis=1, level='station')
+    d, w = x.align(w, axis=1, level='station')
     w.fillna(0, inplace=True)
-    d = (d - d.mean()) / d.std()
-    return d.fillna(0).dot(w.T) / d.notnull().astype(float).dot(w.T)
+    n = d.std()
+    d = (d - d.mean()) / n
+    v = d.fillna(0).dot(w.T) / d.notnull().astype(float).dot(w.T)
+    return v.mul(n, axis=1, level='station')
 
-def tree_blocks(data, min_samples_leaf=1000):
-    t = np.array(data.index, dtype='datetime64[m]', ndmin=2).astype(float).T
-    tr = DecisionTreeClassifier(min_samples_leaf=min_samples_leaf)
-    def tree(c):
-        return tr.fit(t, c.notnull().astype(float)).predict(t)
-    return indexer(data.apply(tree, 0).values)
+class Blocks(object):
+    def __init__(self, cluster_obj, **kwargs):
+        """
+        Example usage:
+        B = Blocks(DecisionTreeClassifier, min_samples_leaf = 1000)
+        B = Blocks(AffinityPropagation)
+        B = Blocks(AffinityPropagation, preference = -4)
 
-def block_indexes(data):
-    return [data[data == np.array(i).reshape((1, -1))].dropna(0, 'any').index
-            for i in set([tuple(r) for r in data.values])]
+        B.compute(x)
+        B.regress(y)
+        """
+        self.cl = cluster_obj(**kwargs)
 
-def block_predictors(data, block_dict):
-    return [X.iloc[i, np.array(c, dtype=bool)].dropna(1, 'all')
-            for c, i in block_dict.items()]
-
-def regression(x, y):
-    x0 = x.fillna(0)
-    b = np.linalg.lstsq(x1, y.loc[x.index])[0]
-    return x0.dot(b.reshape((-1, 1)))
-
-def affinity_blocks(data, check=False):
-    from sklearn.cluster import AffinityPropagation
-    af = AffinityPropagation()
-    n = data.notnull().astype(int)
-    k, v = zip(*indexer(n.values).items())
-    l = af.fit_predict(k)
-    if check:
-        b = pd.DataFrame(columns = n.columns)
-        for i, j in zip(v, l):
-            J = af.cluster_centers_[j:j+1, :].repeat(len(i), 0)
-            b = b.append(pd.DataFrame(J, columns=n.columns, index=n.index[i]))
-        return b
-    else:
+    @staticmethod
+    def indexer(notnull):
         d = {}
-        for i, j in zip(v, l):
-            J = tuple(af.cluster_centers_[j, :])
+        for i, r in enumerate(notnull):
             try:
-                d[J].extend(i)
+                d[tuple(r)].append(i)
             except KeyError:
-                d[J] = i
+                d[tuple(r)] = [i]
         return d
 
-def blocks_regression(X, y, blocks):
-    def reg(c, i):
-        x = X.iloc[i, np.array(c, dtype=bool)].dropna(1, 'all')
-        xa = x.dropna(0, 'any')
-        print(len(x), len(xa), sum(c))
-        return regression(x, y)
-    return pd.concat([reg(*ci) for ci in blocks.items()]).sort_index()
+    def compute(self, x):
+        self.X = x
+        n = x.notnull().astype(int)
+        if isinstance(self.cl, DecisionTreeClassifier):
+            t = np.array(x.index, dtype='datetime64[m]', ndmin=2).astype(float).T
+            self.dict = self.indexer(n.apply(lambda c: self.cl.fit(t, c).predict(t), 0).values)
+        else:
+            k, v = zip(*self.indexer(n.values).items())
+            self.z = zip(v, self.cl.fit_predict(k))
+            self.dict = {}
+            for i, j in self.z:
+                J = tuple(self.cl.cluster_centers_[j, :])
+                try:
+                    self.dict[J].extend(i)
+                except KeyError:
+                    self.dict[J] = i
+        self.blocks = [x.iloc[i, np.array(c, dtype=bool)].dropna(1, 'all')
+                    for c, i in self.dict.items()]
 
-def indexer(notnull):
-    d = {}
-    for i, r in enumerate(notnull):
-        try:
-            d[tuple(r)].append(i)
-        except KeyError:
-            d[tuple(r)] = [i]
-    return d
+    def check(self):
+        """Returns a pandas.DataFrame of same shape as original data, with clustered 1-0 arrangement corresponding to original missing value matrix."""
+        b = pd.DataFrame(columns = self.X.columns)
+        for k, v in self.dict.items():
+            J = np.array(k, ndmin=2).repeat(len(v), 0)
+            b = b.append(pd.DataFrame(J, columns=self.X.columns, index=self.X.index[v]))
+        return b
+
+    def regression(self, x, y):
+        x0 = x.fillna(0)
+        x0[1] = 1
+        b = np.linalg.lstsq(x0, y.loc[x.index].values.flatten())[0]
+        self.b.append(pd.Series(b[:-1], index=x.columns))
+        self.c.append(len(x))
+        return x0.dot(b.reshape((-1, 1)))
+
+    def regress(self, y, x=None, blocks=True):
+        y = y.dropna()
+        if x is not None:
+            self.compute(x.loc[y.index])
+        self.b = []
+        self.c = []
+        if blocks:
+            r = pd.concat([self.regression(b, y) for b in self.blocks]).sort_index()
+        else:
+            r = self.regression(pd.concat(self.blocks, 1).sort_index(), y)
+        r = pd.DataFrame(r)
+        if isinstance(y, pd.Series):
+            r.columns = pd.MultiIndex.from_tuples([y.name], names = x.columns.names)
+        else:
+            r.columns = y.columns
+        return r
+
 
 if __name__ == "__main__":
     import binning, data
@@ -81,9 +104,9 @@ if __name__ == "__main__":
     y = X.xs('3', 1, 'station', False).iloc[:,0].dropna()
     x = X.drop(y.name, 1).loc[y.index]
 
-    b = tree_blocks(x)
-    a = block_predictors(x, b)
-    a0 = pd.concat(a, 1).fillna(0)
-    r1 = np.linalg.lstsq(a0, y)
-    r2 = pd.concat([regression(c, y) for c in a], 0).sort_index()
-    r3 = affinity_regression(x, y)
+    # b = tree_blocks(x)
+    # a = block_predictors(x, b)
+    # a0 = pd.concat(a, 1).fillna(0)
+    # r1 = np.linalg.lstsq(a0, y)
+    # r2 = pd.concat([regression(c, y) for c in a], 0).sort_index()
+    # r3 = affinity_regression(x, y)

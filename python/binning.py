@@ -75,17 +75,22 @@ def bin(df, start_minute=0, freq=60, label='end', min_samples_leaf=1000):
 
     # here the actual binning routine is called separately for each 'class' of record intervals
     y = pd.concat([aggregate(df[cl==c], t[cl==c], c, start_minute, freq, label)
-                      for c in s], axis=1, keys=s)
+                      for c in s], axis=1, keys=s, names=['intvl'])
 
-    cols = df.columns.tolist()
+    # this averages over binning periods where different sampling intervals might coincide -
+    # mostly hypothetical, not sure if it occurs
+    idx = pd.IndexSlice
+    cols = y.columns.droplevel('intvl').unique().to_series()
+    aggr = y.columns.get_level_values('aggr').unique()
     x = pd.concat([{
         'avg': lambda x: x.mean(1, level='sensor_code'),
         'min': lambda x: x.min(1, level='sensor_code'),
         'max': lambda x: x.max(1, level='sensor_code'),
-    }[a[-1]](y.xs(a[-1], 1, 'aggr')) for a in cols], axis=1, keys = cols)
-    x.columns = x.columns.droplevel('sensor_code')
-    x.columns.names = df.columns.names
-    return x
+    }[a](y.xs(a, 1, 'aggr')) for a in aggr], axis=1, keys = aggr)
+    x.columns = pd.MultiIndex.from_tuples([cols.loc[idx[:,:,s,:,a]][0]
+                                           for a, s in x.columns.tolist()],
+                                          names = df.columns.names)
+    return x.sort_index(1)
 
 
 def aggregate(df, t, c, start_minute, freq, label):
@@ -125,7 +130,7 @@ def aggregate(df, t, c, start_minute, freq, label):
 
     lab = pd.Timedelta({'end': freq, 'middle': freq/2, 'start': 0}[label], 'm')
     D.index = pd.DatetimeIndex(np.array(D.index, dtype='datetime64[m]').astype(datetime)) + lab
-    return D.sort_index(1)
+    return D
 
 # wrapper so that bin() can be called with a pandas.HDFStore as first argument
 # Note: this is presumed to work for the case that
