@@ -41,13 +41,13 @@ class LS(object):
         self._f = f[f!=0]
         w = 2 * np.pi * self._f
         w2 = 2 * w
-        t = np.r_['1,2', self._y.index].T
-        wt = t * w2
-        tau = 1 / w2 * np.arctan2(np.sum(np.sin(wt), 0), np.sum(np.cos(wt), 0))
-        tp = t - tau
-        self._F0 = 2**-.5 * np.exp(-1j * w * (self._tf - tau))
+        t = self._y.index.values.reshape((-1,1)) # nObs x 1
+        wt = t * w2                              # nObs x nFreqs
+        tau = 1 / w2 * np.arctan2(np.sum(np.sin(wt), 0), np.sum(np.cos(wt), 0)) # nFreqs x 0
+        tp = t - tau # nObs x nFreqs
+        self._F0 = 2**-.5 * np.exp(-1j * w * (self._tf - tau)) # nFreqs x 0
         # self._F0 = 2**-.5
-        wtp = tp * w
+        wtp = tp * w # nObs x nFreqs
         self._cos = pd.DataFrame(np.cos(wtp), index=self._y.index)
         self._sin = pd.DataFrame(np.sin(wtp), index=self._y.index)
         self._cross = t * self._sin * self._cos
