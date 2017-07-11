@@ -42,7 +42,7 @@ xr = xg.q - b['b0'] - b['b1'] * xg.r
 
 # something is off with the LombScargle - shift and inversion
 import fourier as fou
-qm = midx(q.groupby((q.index.year,q.index.month))).mean()
+qm = midx(q.groupby((q.index.year,q.index.month)).mean())
 
 f = fnp.fft.fftfreq(len(qm),1/12)
 ls = fou.LS(qm)

@@ -166,6 +166,12 @@ class LS(object):
         XY = (G.iloc[0] * np.conj(G.iloc[1])).mean(1)
         return np.abs(XY)**2 / (np.mean(G.iloc[0].abs()**2, 1) * np.mean(G.iloc[1].abs()**2, 1))
 
+    def fftfreq(self):
+        N = len(self._y)
+        Tp = (self._y.index[-1] - self._y.index[0]) * N / (N - 1)
+        w0 = 2 * np.pi / Tp
+        return w0 * np.arange(N)
+
 
 
 if __name__=="__main__":
