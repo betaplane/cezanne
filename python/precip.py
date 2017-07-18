@@ -5,12 +5,21 @@ import xarray as xr
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from functools import partial
+from datetime import datetime
 import helpers as hh
 import data
 
 D = data.Data()
 D.open('d','station_data.h5')
 ra = D.d['ppa_mm'].xs('prom', 1, 'aggr')
+r = D.d['pp_mm'].xs('prom', 1, 'aggr')
+a = pd.read_csv('../../data/CEAZAMet/Marion/LaLaguna_hourly_precipitations.csv', sep=';')
+b = pd.read_csv('../../data/CEAZAMet/Marion/Tapado_hourly_precipitations.csv', sep=';')
+c = pd.read_csv('../../data/CEAZAMet/Marion/LlanoHuanta_hourly_precipitations.csv', sep=';')
+m = ['year', 'month', 'day', 'hour']
+for d in [a, b, c]:
+    d.index = [datetime(*i.loc[m].astype(int)) for j, i in d.iterrows()]
+    d.drop(m, 1, inplace=True).replace(-9999, np.nan)
 
 def clean(x):
     d = np.diff(ra.values, 1, 0)
