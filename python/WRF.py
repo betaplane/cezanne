@@ -81,7 +81,7 @@ class OUT(object):
         print(timer() - start)
         return ds
 
-
+# no timezone correction!
 class lead(object):
     max_workers = 16
     def __init__(self, paths, domain, prefix='wrfout'):
