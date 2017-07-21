@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from functools import partial
 from datetime import datetime
+from shapely.geometry import LinearRing, MultiPoint
 import helpers as hh
 import data
 
@@ -71,5 +72,54 @@ run = partial(run_base, x, r, 6, [.1])
 frames = np.arange('2016-10-11T09','2017-07-16T09',dtype='datetime64[h]')
 # Frames = np.arange('2017-07-01T13','2017-07-02T13',dtype='datetime64[h]')
 
-an = FuncAnimation(plt.gcf(), run, frames, interval=200, repeat=False)
-an.save('test.mp4',writer='avconv', codec='libx264')
+# an = FuncAnimation(plt.gcf(), run, frames, interval=200, repeat=False)
+# an.save('test.mp4',writer='avconv', codec='libx264')
+
+
+with xr.open_dataset('../../data/WRF/3d/geo_em.d03.nc') as d3:
+    lm = d3['LANDMASK'].squeeze().load()
+    lon, lat = d3['XLONG_C'].squeeze().load(), d3['XLAT_C'].squeeze().load()
+
+x = ds['RAINNC'].isel(Time = np.arange(24, 145, 24))
+x = xr.concat((x.isel(Time = 0), x.diff('Time')), 'Time')
+x = x.reindex(start=x.start[x.start.argsort()])
+
+def cells(lon, lat, mask=None):
+    s = lon.shape
+    if mask is None:
+        def ll(i, j):
+            return np.r_[lon[i:i+s[0]-1, j:j+s[1]-1], lat[i:i+s[0]-1, j:j+s[1]-1]].reshape((2, -1)).T
+        k = np.r_[ll(0, 0), ll(1, 0), ll(1, 1), ll(0, 1)].reshape((4, -1, 2)).transpose(1, 0, 2)
+    else:
+        def ll(i, j):
+            return np.r_[lon.isel_points(south_north_stag=i, west_east_stag=j),
+                         lat.isel_points(south_north_stag=i, west_east_stag=j)].reshape((2,-1)).T
+        i, j = np.where(mask)
+        k = np.r_[ll(i, j), ll(i+1, j), ll(i+1, j+1), ll(i, j+1)].reshape((4, -1, 2)).transpose(1,0,2)
+    lr = [Polygon(LinearRing(a)) for a in k]
+    mp = MultiPoint(sta[['lon', 'lat']].values)
+    c = [l for l, r in enumerate(lr) if np.any([r.contains(p) for p in mp])]
+    return np.unravel_index(c, (s[0]-1, s[1]-1)) if mask is None else (i[c], j[c])
+
+
+def offset_daily(x, delta='-36h'):
+    """
+    Offset hourly observations to match the "days" in the WRF simulations, whose runs starts at 8:00 local time (previously 20:00). The default of -36h results in the date corresponding to the end 
+    """
+    y = x.copy()
+    y.index += pd.Timedelta(delta)
+    return y.resample('D').mean() * 24
+
+rm = offset_daily(r).resample('MS').mean().mean(1)
+i, j = cells(lon, lat)
+xs = x.isel_points(south_north=i, west_east=j).mean('points')
+
+def loss(obs, mod, offset='MS', lead_day=0):
+    o = obs.resample(offset).mean().mean(1)
+    m = mod.isel(Time=lead_day).resample(offset, 'start', how='mean').to_series()
+    m.index += pd.Timedelta(lead_day+1, 'd')
+    return pd.concat((o, m), 1, keys=['obs', 'mod']).dropna(0, 'any')
+
+lx = loss(r*24, xs)
+
+

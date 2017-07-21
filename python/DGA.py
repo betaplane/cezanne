@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 import pandas as pd
+import xarray as xr
+import numpy as np
 from shapely.geometry import Polygon, MultiPoint
 
 d3 = xr.open_dataset('../../data/WRF/3d/geo_em.d03.nc')
