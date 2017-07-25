@@ -112,17 +112,18 @@ class lead(object):
                 self.dirs.remove(d)
                 if (i + 1) % 50 == 0:
                     self.x.to_netcdf(path)
-        self.x.to_netcdf(path)
+        self.x.reindex(start = self.x.start[self.x.start.argsort()]).to_netcdf(path)
 
     @staticmethod
     def by_sim(var, s, d):
         with xr.open_mfdataset(pa.join(d, s)) as ds:
             x = ds[var]
+            x = x.reindex(Time = np.argsort(x.XTIME.load()))
             print('using: {}'.format(ds.START_DATE))
             x.coords['timestep'] = ('Time', np.arange(len(x.Time)))
             x.swap_dims({'Time': 'timestep'})
             x.expand_dims('start')
-            x['start'] = pd.Timestamp(datetime.strptime(ds.START_DATE, '%Y-%m-%d_%H:%M:%S'))
+            x['start'] = x.XTIME.values.min()
             return d, x.load()
 
 

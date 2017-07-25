@@ -1,161 +1,67 @@
 #!/usr/bin/env python
-import gdal
-import pandas as pd
+from simplekml import Kml, Style
+from helpers import nearest
+from shapely.geometry import Polygon, Point, MultiPoint, LinearRing
 import numpy as np
-from mpl_toolkits import basemap
-from scipy.interpolate import splrep, splev
 
 
-class angle(object):
-    def __init__(self, gdalDS):
-        self._geo = gdalDS.GetGeoTransform()
-        self.map = basemap.Basemap(
-            projection = 'merc',
-            llcrnrlon = self._geo[0],
-            llcrnrlat = self._geo[3] - gdalDS.RasterYSize * self._geo[5],
-            urcrnrlon = self._geo[0] + gdalDS.RasterXSize * self._geo[1],
-            urcrnrlat = self._geo[3]
-            )
-        self._i = np.arange(gdalDS.RasterXSize, dtype=np.int)
-        self._j = np.arange(gdalDS.RasterYSize, dtype=np.int)
-        self.z = gdalDS.GetRasterBand(1).ReadAsArray()
-        lon, lat = np.meshgrid(self._i + .5, self._j + .5)
-        # self._geo[5] is already negative
-        self._xy = self.map(self._geo[0] + lon * self._geo[1], self._geo[3] + lat * self._geo[5])
+def kml(name, lon, lat, code=None, nc=None):
+    if nc is not None:
+        x = nc.variables['XLONG_M'][0,:,:]
+        y = nc.variables['XLAT_M'][0,:,:]
+        xc = nc.variables['XLONG_C'][0,:,:]
+        yc = nc.variables['XLAT_C'][0,:,:]
+
+    k = Kml()
+    z = zip(name, lon, lat) if code is None else zip(name, lon, lat, code)
+    for s in z:
+        p = k.newpoint(name = s[3] if len(s)==4 else s[0], coords = [s[1:3]])
+        p.style.iconstyle.icon.href = "http://maps.google.com/mapfiles/kml/paddle/red-circle.png"
+        p.style.balloonstyle.text = s[0]
+        if nc is not None:
+            i,j,d = nearest(x, y, s[1], s[2])
+            coords = [
+                (xc[i,j],yc[i,j]),
+                (xc[i,j+1],yc[i,j]),
+                (xc[i,j+1],yc[i+1,j]),
+                (xc[i,j],yc[i+1,j]),
+                (xc[i,j],yc[i,j])
+            ]
+            if Polygon(coords).contains(Point(*s[1:3])):
+                l = k.newlinestring(coords = [s[1:3], (x[i, j], y[i, j])])
+                r = k.newlinestring(coords=coords)
+    return k
 
 
-    def set_station(self, station):
-        self.station_coords(station, get=False)
-        sx, sy = self.map(station.lon, station.lat)
-        try:
-            z = self.z[self.sj, self.si]
-        except:
-            raise Exception('{} outside map boundaries'.format(station.name))
-        self.dz = z - station.elev
-        print('{}: elevation difference grid - station: {:.0f} m'.format(station.name, self.dz))
-        self.dist = ((self._xy[0] - sx)**2 + (self._xy[1] - sy)**2)**.5
-        self.angle1 = np.arctan((self.z - z) / self.dist)
-        self.angle2 = np.arctan((self.z - station.elev) / self.dist)
+def cells(grid_lon, grid_lat, lon, lat, mask=None):
+    """Get grid indexes corresponding to lat/lon points, using shapely polygons.
 
-    def station_coords(self, station=None, get=True):
-        if station is not None:
-            self.si = int((station.lon - self._geo[0]) // self._geo[1])
-            self.sj = int((station.lat - self._geo[3]) // self._geo[5])
-            if (self.si < 0) or (self.sj < 0) or (self.si >= self._i[-1]) or (self.sj >= self._j[-1]):
-                raise Exception('{} outside map boundaries'.format(station.name))
-        if get:
-            return self.sj, self.si
+    :param grid_lon: grid of corner longitudes ('LONG_C' in geo_em... file)
+    :param grid_lat: grid of corner latitudes ('LAT_C' in geo_em... file)
+    :param lon: array of point longitudes
+    :param lat: array of point latitudes
+    :param mask: 1-0 mask of grid points to be taken into account (e.g. land mask)
+    :returns: i, j arrays of grid cell indexes
 
-
-    def window(self, dx, x=None, y=None):
-        try:
-            if len(x.shape) > 1:
-                return x[self.sj-dx: self._y+dx+1, self.si-dx: self.si+dx+1]
-            else:
-                return x[self.si-dx: self.si+dx+1]
-                return y[self.sj-dx: self._y+dx+1]
-        except:
-            pass
-
-    # line drawing algorithm
-    # https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
-    def path(self, a):
-        """
-        Compute a path in pixel coordinates going through the station location (self.si, self.sj)
-        at angle 'a' from east (normal math convention).
-        :param a: Angle from east in radians.
-        :returns: i, j vectors containing the pixel coordinates.
-        """
-        sa = np.sin(a)
-        ca = np.cos(a)
-        if ca == 0:
-            i = np.ones(len(self._j), dtype=np.int) * self.si
-            return i, self._j
-        if sa == 0:
-            j = np.ones(len(self._i), dtype=np.int) * self.sj
-            return self._i, j
-        else:
-            ta = abs(np.tan(a))
-            # remember y is positive south
-            # x > y
-            if ta < 1:
-                j = np.round(-np.sign(sa) * ta * self._i).astype(int)
-                # shift so that line goes through station pixel
-                j += self.sj - j[self.si]
-                ix = (j >= 0) & (j <= self._j[-1])
-                return self._i[ix], j[ix]
-            # y > x
-            else:
-                i = np.round(-np.sign(ca) * abs(ca / sa) * self._j).astype(int)
-                i += self.si - i[self.sj]
-                ix = (i >= 0) & (i <= self._i[-1])
-                return i[ix], self._j[ix]
-
-    def max_alt(self, ang, dn):
-        i, j = self.path(ang)
-        d = self.dist[j, i] # remember i, j reversed
-        n = np.argmin(d)
-        def ang_dist(angle):
-            a = angle[j,i]
-            m1 = np.argmax(a[n+1+dn:])
-            m2 = np.argmax(a[:n-dn])
-            if ang < np.pi/8:
-                return (a[n+1+dn+m1], a[m2], d[n+1+dn+m1], d[m2])
-            else:
-                return (a[m2], a[n+1+dn+m1], d[m2], d[n+1+dn+m1])
-        return np.array([ang_dist(a) for a in [self.angle1, self.angle2]]).flatten()
-
-    def circle(self, res, station=None, from_north=True, dx=2):
-        """
-        Compute the elevation angle of mountains surrounding a station in a circle starting from north,
-        counter-clockwise. Simple planar geometry is used, no atmospheric refraction.
-        :param res: Resolution of full circle (360 -> 1 deg)
-        :param from_north: If set to False, use the usual mathematical convention and start circle in east.
-        :param station: If, given, set the station first.
-        :param dx: Number of pixels to exclude immediately surrounding the station. Leads to less grid artefacts.
-        :returns: DataFrame with radial angles (from north/east) as index and columns 'alt' (elevation angle)
-        and 'dist' (distance from station at which maximum elevation angle is found).
-        """
-        if station is not None:
-            try:
-                print('Setting station {}.'.format(station.name))
-                self.set_station(station)
-            except Exception as excp:
-                print(excp)
-                return pd.DataFrame()
-
-        da = 2*np.pi / res * np.arange(res/2)
-        c = np.array([self.max_alt(a, dx) for a in da]).T.flatten()
-        return pd.DataFrame(
-            c.reshape((4, res)).T,
-            columns=['alt_grid', 'dist_grid', 'alt_st', 'dist_st'],
-            index=np.r_[da,da+np.pi]
-        )
-
-def spline(x, s=.1):
-    rep = splrep(x.index, x, s=s, per=True)
-    return splev(x.index, rep)
-
-def sun_block(Rso, shading):
-    rep = splrep(shading.index, shading, s=.05, per=True)
-    return Rso.apply(lambda x: x.Rso * (np.sin(splev(x.az, rep)) < x.mu), 1)
-
-
-
-
-if __name__ == "__main__":
-    # ds = gdal.Open('../../data/geo/merged.tif')
-    D = pd.HDFStore('../../data/tables/station_data_new.h5', 'r')
-    sta = D['sta']
-    st = sta.loc['5']
-
-    # A = angle(ds)
-    # c = A.circle(360, st)
-    # circles = [(c, A.circle(360, st)) for c, st in sta.iterrows()]
-    # P = pd.Panel(dict([a for a in circles]))
-    R = pd.HDFStore('../../data/tables/radiation.h5')
-    # R['shading'] = P
-    # R.close()
-    sha = R['shading']
-
-
+    """
+    s = np.array(grid_lon.shape) - 1
+    if mask is None:
+        def ll(i, j):
+            return np.r_[grid_lon[i:i+s[0], j:j+s[1]], grid_lat[i:i+s[0], j:j+s[1]]].reshape((2, -1)).T
+        k = np.r_[ll(0, 0), ll(1, 0), ll(1, 1), ll(0, 1)].reshape((4, -1, 2)).transpose(1, 0, 2)
+    else:
+        def ll(i, j):
+            return np.r_[grid_lon.isel_points(south_north_stag=i, west_east_stag=j),
+                         grid_lat.isel_points(south_north_stag=i, west_east_stag=j)].reshape((2,-1)).T
+        i, j = np.where(mask)
+        k = np.r_[ll(i, j), ll(i+1, j), ll(i+1, j+1), ll(i, j+1)].reshape((4, -1, 2)).transpose(1,0,2)
+    lr = [Polygon(LinearRing(a)) for a in k]
+    mp = MultiPoint(list(zip(lon, lat)))
+    c = [[l for l, r in enumerate(lr) if r.contains(p)] for p in mp]
+    l = np.array([len(r)==0 for r in c])
+    c = [r[0] for r in c if len(r)>0]
+    if mask is None:
+        i, j = np.unravel_index(c, s)
+        return (i, j, l)
+    else:
+        return (i[c], j[c], l)
