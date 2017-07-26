@@ -2,8 +2,10 @@
 import matplotlib.pyplot as plt
 from matplotlib import cm, colors
 from mpl_toolkits.basemap import Basemap
+from functools import singledispatch
 import pandas as pd
 import numpy as np
+import xarray as xr
 import helpers as hh
 
 
@@ -91,7 +93,7 @@ def map_plot(df, sta, Map=None, vmin=None, vmax=None):
     fig.show()
     return fig, cb
 
-
+@singledispatch
 def affine(x, y):
     m, n = x.shape
     j, i = np.mgrid[:m, :n]
@@ -106,6 +108,10 @@ def affine(x, y):
         return A.dot(coords) + np.r_[[b]].T
 
     return to_grid
+
+@affine.register(xr.DataArray)
+def _(x, y):
+    return affine(x.values, y.values)
 
 
 if __name__ == "__main__":

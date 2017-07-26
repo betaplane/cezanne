@@ -81,7 +81,6 @@ class OUT(object):
         print(timer() - start)
         return ds
 
-# no timezone correction!
 class lead(object):
     max_workers = 16
     def __init__(self, paths, domain, prefix='wrfout'):
@@ -101,8 +100,8 @@ class lead(object):
         self.dirs = [d for d in dirs if pa.isdir(d)]
 
 
-    def concat(self, var, path):
-        sim = partial(self.by_sim, var, self._s)
+    def concat(self, var, path, dt=-4):
+        sim = partial(self.by_sim, var, self._s, dt)
         x = sim(self.dirs.pop(0))[1]
         self.x = xr.concat((self.x, x), 'start') if hasattr(self, 'x') else x
         with ThreadPoolExecutor(max_workers = self.max_workers) as exe:
@@ -115,13 +114,14 @@ class lead(object):
         self.x.reindex(start = self.x.start[self.x.start.argsort()]).to_netcdf(path)
 
     @staticmethod
-    def by_sim(var, s, d):
+    def by_sim(var, s, dt, d):
         with xr.open_mfdataset(pa.join(d, s)) as ds:
+            ds['XTIME'] = ds.XTIME + np.timedelta64(dt, 'h')
             x = ds[var]
             x = x.reindex(Time = np.argsort(x.XTIME.load()))
             print('using: {}'.format(ds.START_DATE))
-            x.coords['timestep'] = ('Time', np.arange(len(x.Time)))
-            x.swap_dims({'Time': 'timestep'})
+            # x.coords['timestep'] = ('Time', np.arange(len(x.Time)))
+            # x.swap_dims({'Time': 'timestep'})
             x.expand_dims('start')
             x['start'] = x.XTIME.values.min()
             return d, x.load()
