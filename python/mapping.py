@@ -9,6 +9,23 @@ import xarray as xr
 import helpers as hh
 
 
+def cartopy_params(params):
+    return {
+        'central_longitude': params['lon_0'],
+        'central_latitude':  params['lat_0'],
+        'standard_parallels':  (params['lat_1'], params['lat_2']),
+    }
+
+def proj_params(file, proj='lcc'):
+    return {
+        'lon_0': file.CEN_LON,
+        'lat_0': file.CEN_LAT,
+        'lat_1': file.TRUELAT1,
+        'lat_2': file.TRUELAT2,
+        'proj': proj
+    }
+
+
 def matts(file, width=None, height=None):
     return {
         'lat_0':

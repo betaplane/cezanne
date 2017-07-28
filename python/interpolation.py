@@ -2,8 +2,8 @@
 import numpy as np
 import pandas as pd
 from scipy import interpolate as ip
-from mapping import basemap, affine, matts
-from mpl_toolkits.basemap import Basemap as bmap
+from mapping import basemap, affine, proj_params
+from pyproj import Proj
 from functools import singledispatch
 import helpers as hh
 import xarray as xr
@@ -113,42 +113,25 @@ def nc_interp(nc,
     else:
         return grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
 
-@singledispatch
-def xr_interp(fn,
-              var,
-              stations,
-              time=True,
-              method='linear',
-              Map=None,
-              dt=-4):
-    with xr.open_dataset(fn) as ds:
-        m = bmap(projection='lcc', **matts(ds)) if Map is None else Map
-        ij = m(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
-        v = ds[var]
-        lon, lat, timev = hh.coord_names(v, 'lon', 'lat', 'time')
-        xy = m(hh.g2d(v.coords[lon]), hh.g2d(v.coords[lat].data))
-        x = np.array(v).squeeze()
-        if time:
-            t = ds[timev] + np.timedelta64(dt, 'h')
-            df = grid_interp(xy, x, ij, stations.index, t, method=method)
-        else:
-            df = grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
-    return (df, m) if map is None else df
 
-@xr_interp.register(xr.DataArray)
-def _(v, stations, time=True, method='linear', Map=None, matts=None, dt=-4):
-    m = bmap(projection='lcc', **matts) if Map is None else Map
-    ij = m(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
-    lon, lat, timev = hh.coord_names(v, 'lon', 'lat', 'time')
-    xy = m(hh.g2d(v.coords[lon]), hh.g2d(v.coords[lat].data))
+@singledispatch
+def xr_interp(v, proj_params, stations, time=True, method='linear',  dt=-4):
+    p = Proj(**proj_params)
+    ij = p(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
+    lon, lat, tv = hh.coord_names(v, 'lon', 'lat', 'time')
+    xy = p(hh.g2d(v.coords[lon]), hh.g2d(v.coords[lat].data))
     x = np.array(v).squeeze()
     if time:
-        t = ds[timev] + np.timedelta64(dt, 'h')
+        t = ds[tv] + np.timedelta64(dt, 'h')
         df = grid_interp(xy, x, ij, stations.index, t, method=method)
     else:
         df = grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
-    return (df, m) if Map is None else df
+    return df
 
+@xr_interp.register(str)
+def _(fn, var, *args, **kwargs):
+    with xr.open_dataset(fn) as ds:
+        return xr_interp(ds[var], proj_params(ds), *args, **kwargs)
 
 # Below are some implementations of interpolations of 3D fields
 # to 1D vertical profiles. I have compared the results to simplified
