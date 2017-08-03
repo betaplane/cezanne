@@ -9,6 +9,7 @@ import iris.coord_categorisation
 from datetime import datetime
 
 
+
 iris.FUTURE.netcdf_promote = True
 iris.FUTURE.cell_datetime_objects = True
 
@@ -42,8 +43,21 @@ def daily_sum(cube):
     c.remove_coord('time')
     return c
 
+def xtr(cube, hour):
+    iris.coord_categorisation.add_day_of_year(cube, 'time', 'day')
+    iris.coord_categorisation.add_year(cube, 'time', 'year')
+    iris.coord_categorisation.add_hour(cube, 'time', 'hour')
+    return cube
 
-c = iris.load('../../data/fnl/ppt/gdas1.fnl0p25.f06.nc', 'Total precipitation')[0]
+def time(co):
+    return co.units.num2date(co.points).astype('datetime64')
+
+c6 = xtr(iris.load('../../data/fnl/ppt/gdas1.fnl0p25.f06.nc', 'Total precipitation')[0])
+c9 = xtr(iris.load('../../data/fnl/ppt/gdas1.fnl0p25.f09.nc', 'Total precipitation')[0])
+c0 = (c6.extract(iris.Constraint(hour = 0)) + c9.extract(iris.Constraint(hour = 0))).collapsed('time', iris.analysis.MEAN)
+c1 = (c6.extract(iris.Constraint(hour = 12)) + c9.extract(iris.Constraint(hour = 12))).collapsed('time', iris.analysis.MEAN)
+
+
 # c0 = {i: c.extract(iris.Constraint(time = iris.time.PartialDateTime(hour = i))) for i in [0, 6, 12, 18]}
 cs = c.aggregated_by('day', iris.analysis.SUM)
 
