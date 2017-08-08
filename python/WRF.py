@@ -127,13 +127,13 @@ class lead(object):
             return d, x.load()
 
 
-def run_lead(paths):
+def run_lead(paths, var):
     l = lead(paths, 'd03')
     i = 0
     while len(l.dirs) > 0:
-        fn = 'RAINNC{}.nc'.format(i)
+        fn = '{}{}.nc'.format(var, i)
         try:
-            l.concat('RAINNC', fn)
+            l.concat(var, fn)
         except:
             l.x.to_netcdf(fn)
             del l.x

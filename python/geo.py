@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-from simplekml import Kml, Style
-from helpers import nearest
 from shapely.geometry import Polygon, Point, MultiPoint, LinearRing
 import numpy as np
 
 
 def kml(name, lon, lat, code=None, nc=None):
+    from simplekml import Kml, Style
+    from helpers import nearest
     if nc is not None:
         x = nc.variables['XLONG_M'][0,:,:]
         y = nc.variables['XLAT_M'][0,:,:]
@@ -65,3 +65,14 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
         return (i, j, l)
     else:
         return (i[c], j[c], l)
+
+
+def domain_bounds(fn, test=None):
+    import xarray as xr
+    with xr.open_dataset(fn) as ds:
+        coords = zip(ds.corner_lons[-4:], ds.corner_lats[-4:])
+        p = Polygon(LinearRing(coords))
+    if test is None:
+        return p
+    else:
+        return [p.contains(i) for i in MultiPoint(test)]
