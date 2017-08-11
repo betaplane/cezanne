@@ -1,6 +1,8 @@
 #!/usr/bin/env python
-from shapely.geometry import Polygon, Point, MultiPoint, LinearRing
 import numpy as np
+from xarray import DataArray, open_dataset
+from shapely.geometry import Polygon, Point, MultiPoint, LinearRing
+from functools import singledispatch
 
 
 def kml(name, lon, lat, code=None, nc=None):
@@ -58,21 +60,56 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
     lr = [Polygon(LinearRing(a)) for a in k]
     mp = MultiPoint(list(zip(lon, lat)))
     c = [[l for l, r in enumerate(lr) if r.contains(p)] for p in mp]
-    l = np.array([len(r)==0 for r in c])
     c = [r[0] for r in c if len(r)>0]
-    if mask is None:
-        i, j = np.unravel_index(c, s)
-        return (i, j, l)
-    else:
-        return (i[c], j[c], l)
+    return np.unravel_index(c, s) if mask is None else (i[c], j[c])
 
-
-def domain_bounds(fn, test=None):
-    import xarray as xr
-    with xr.open_dataset(fn) as ds:
-        coords = zip(ds.corner_lons[-4:], ds.corner_lats[-4:])
-        p = Polygon(LinearRing(coords))
+@singledispatch
+def domain_bounds(ds, test=None):
+    coords = zip(ds.corner_lons[-4:], ds.corner_lats[-4:])
+    p = Polygon(LinearRing(coords))
     if test is None:
         return p
     else:
         return [p.contains(i) for i in MultiPoint(test)]
+
+@domain_bounds.register(str)
+def _(fn, test=None):
+    with open_dataset(fn) as ds:
+        return domain_bounds(ds, test)
+
+def cartopy_params(params):
+    return {
+        'central_longitude': params['lon_0'],
+        'central_latitude':  params['lat_0'],
+        'standard_parallels':  (params['lat_1'], params['lat_2']),
+    }
+
+def proj_params(file, proj='lcc'):
+    return {
+        'lon_0': file.CEN_LON,
+        'lat_0': file.CEN_LAT,
+        'lat_1': file.TRUELAT1,
+        'lat_2': file.TRUELAT2,
+        'proj': proj
+    }
+
+
+@singledispatch
+def affine(x, y):
+    m, n = x.shape
+    j, i = np.mgrid[:m, :n]
+
+    C = np.linalg.lstsq(
+        np.r_[[x.flatten()], [y.flatten()], np.ones((1, m * n))].T,
+        np.r_[[i.flatten()], [j.flatten()], np.ones((1, m * n))].T)[0].T
+    b = C[:2, 2]
+    A = C[:2, :2]
+
+    def to_grid(coords):
+        return A.dot(coords) + np.r_[[b]].T
+
+    return to_grid
+
+@affine.register(DataArray)
+def _(x, y):
+    return affine(x.values, y.values)

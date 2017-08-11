@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from scipy import interpolate as ip
-from mapping import basemap, affine, proj_params
+from geo import affine, proj_params
 from pyproj import Proj
 from functools import singledispatch
 import helpers as hh
