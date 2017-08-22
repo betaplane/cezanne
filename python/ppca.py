@@ -46,13 +46,24 @@ class dpca(pca_base):
 
 # http://bayespy.org/en/latest/examples/pca.html
 
+# Ilin, Alexander, and Tapani Raiko. 2010. “Practical Approaches to Principal Component Analysis in the Presence of Missing Values.” Journal of Machine Learning Research 11 (Jul): 1957–2000.
+
+# NOTE: PPCA (probabilistic PCA) would not put a prior on PC means and variances, amounting to less regularization - can be solved with standard EM.
+
+# NOTE: to be in line with (Ilin and Raiko 2010), one would probably have to include an explicit model for the bias vector ('m'), which in the VBPCA *or* PPCA formulation with *missing* data is *not* equivalent to the bias of the observations.
+
 class vbpca(pca_base):
     def __call__(self, d=None):
         # dimensionality of principal subspace
         d = len(self.Y.x) if d is None else d
 
         # principal components ('latent variables')
-        X = GaussianARD(0, 1, plates=(1, len(self.T.time)), shape=(d, ))
+        X = GaussianARD(0, 1, plates=(1, len(self.Y.time)), shape=(d, ))
+
+        # "plates" share a distribution, whereas "shape" refers to independent nodes
+
+        # ARD (automatic relevance determination) refers to putting a shared prior on the variance of the PC vectors (here: alpha). This amounts to automatic selection of the regularization paramter in ridge regression. If evidence of a component's relevance is weak, its variance tends to zero. See Ilin and Raiko (2010, sec 3.3); Hastie, sec. 10.9.1.
+        # http://scikit-learn.org/stable/modules/linear_model.html#automatic-relevance-determination-ard
 
         # prior over precision of loading matrix
         # NOTE: if this was a non-constant (learned) distribution, it would have to be
@@ -64,7 +75,7 @@ class vbpca(pca_base):
 
         # observations
         F = SumMultiply('d,d->', X, W)
-        tau = Gamma(1e-5, 1e-5)
+        tau = Gamma(1e-5, 1e-5) # but why do we need this?
         Y = GaussianARD(F, tau)
         Y.observe(self.Y)
 
@@ -87,3 +98,21 @@ class vbpca(pca_base):
         self.W = xr.DataArray(w[:, i], coords = [('x', self.Y.indexes['x']), ('d', np.arange(d))])
         self.X = xr.DataArray(x[:, i], coords = [('time', self.Y.indexes['time']), ('d', np.arange(d))])
 
+import pymc3 as pm
+
+class mcpca(pca_base):
+    def __call__(self, d=None):
+        d = len(self.Y.x) if d is None else d
+        self.model = pm.Model()
+
+        with self.model:
+            X = pm.Normal('X', mu = 0, tau = 1, shape = (d, len(self.Y.time)))
+            alpha = pm.Gamma('alpha', alpha = 1e-5, beta = 1e-5, shape = d)
+            W = pm.Normal('W', mu = 0, tau = alpha, shape = (len(self.Y.x), d),
+                          testval = np.random.randn(len(self.Y.x), d))
+            F = pm.math.dot(W, X)
+            tau = pm.Gamma('tau', alpha = 1e-5, beta = 1e-5)
+            Y = pm.Normal('Y', mu = F, tau = tau, observed = self.Y)
+
+            # self.trace = pm.sample(1000, tune = 500)
+            self.map = pm.find_MAP()
