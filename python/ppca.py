@@ -4,7 +4,7 @@ mpl.use('qt5agg')
 import matplotlib.pyplot as plt
 import xarray as xr
 import numpy as np
-from bayespy.nodes import GaussianARD, Gamma, SumMultiply
+from bayespy.nodes import GaussianARD, Gamma, SumMultiply, Add, Gaussian
 from bayespy.inference import VB
 from bayespy.inference.vmp.transformations import RotateGaussianARD, RotationOptimizer
 
@@ -19,8 +19,8 @@ class pca_base(object):
     def __init__(self, Y, mask):
         s = lambda x: x.stack(x = ('lat', 'lon'))
         self.ym = Y.mean('time')
-        y = ((Y - self.ym) / Y.std('time'))
-        self.Y = s(y).sel(x = s(mask).values.astype(bool).flatten()).transpose('x', 'time')
+        Y = ((Y - self.ym) / Y.std('time'))
+        self.Y = s(Y).sel(x = s(mask).values.astype(bool).flatten()).transpose('x', 'time')
 
     def plot(self, d=10):
         fig, axs = plt.subplots(d, 2)
@@ -32,8 +32,15 @@ class pca_base(object):
         plt.show()
 
     def err(self, d):
-        self.recon = self.X.sel(d=slice(None, d)).values.dot(self.W.sel(d=slice(None, d)).transpose('d', 'x'))
+        X = self.X.sel(d = slice(None, d)).transpose('time', 'd').values
+        W = self.W.sel(d = slice(None, d)).transpose('d', 'x').values
+        self.recon = X.dot(W)
         return ((self.Y.transpose('time', 'x') - self.recon) ** 2).mean().compute()
+
+    def sort(self):
+        i = np.argsort((self.W ** 2).sum('x'))[::-1]
+        self.W = self.W.isel(d = i)
+        self.X = self.X.isel(d = i)
 
 class dpca(pca_base):
     def __call__(self, d=None):
@@ -73,14 +80,19 @@ class vbpca(pca_base):
         # loadings matrix
         W = GaussianARD(0, alpha, plates=(len(self.Y.x), 1), shape=(d, ))
 
+        vm = Gamma(1e-5, 1e-5)
+        # mu = Gaussian(25, 1e-5, plates=(len(self.Y.x), ))
+        M = GaussianARD(0, vm, plates=(len(self.Y.x), 1))
+
         # observations
         F = SumMultiply('d,d->', X, W)
-        tau = Gamma(1e-5, 1e-5) # but why do we need this?
-        Y = GaussianARD(F, tau)
+        G = Add(F, M)
+        tau = Gamma(1e-5, 1e-5) # this is the observation noise
+        Y = GaussianARD(G, tau)
         Y.observe(self.Y)
 
         # inference
-        Q = VB(Y, X, W, alpha, tau)
+        Q = VB(Y, X, W, M, alpha, tau, vm)
         W.initialize_from_random()
 
         # rotations at each iteration to speed up convergence
@@ -94,14 +106,16 @@ class vbpca(pca_base):
         # get first moments of posterior (means)
         w = W.get_moments()[0].squeeze()
         x = X.get_moments()[0].squeeze()
+        m = M.get_moments()[0].squeeze()
         i = np.argsort(np.diag(w.T.dot(w)))[::-1]
         self.W = xr.DataArray(w[:, i], coords = [('x', self.Y.indexes['x']), ('d', np.arange(d))])
         self.X = xr.DataArray(x[:, i], coords = [('time', self.Y.indexes['time']), ('d', np.arange(d))])
+        self.m = xr.DataArray(m, coords = [('x', self.Y.indexes['x'])])
 
-import pymc3 as pm
-
+# http://pymc-devs.github.io/pymc3/index.html
 class mcpca(pca_base):
-    def __call__(self, d=None):
+    def construct(self, d=None):
+        import pymc3 as pm
         d = len(self.Y.x) if d is None else d
         self.model = pm.Model()
 
@@ -115,4 +129,88 @@ class mcpca(pca_base):
             Y = pm.Normal('Y', mu = F, tau = tau, observed = self.Y)
 
             # self.trace = pm.sample(1000, tune = 500)
-            self.map = pm.find_MAP()
+            # self.map = pm.find_MAP()
+
+    def vb(self):
+        self.fit = pm.fit(model = self.model, method = 'advi')
+        s = self.fit.sample(1000)
+        w = s.get_values('W')
+        x = s.get_values('X')
+        self.extract(w, x)
+
+    def mcmc(self):
+        self.trace = pm.sample(1000, tune = 500)
+        w = self.trace['W'].mean(0)
+        x = self.trace['X'].mean(0)
+        self.extract(w, x)
+
+    def extract(self, w, x):
+        d = np.arange(w.shape[-1])
+        i = np.argsort(np.diag(w.T.dot(w)))[::-1]
+        self.W = xr.DataArray(w[:, i], coords=[('x', self.Y.indexes['x']), ('d', d)])
+        self.X = xr.DataArray(x[i, :], coords=[('d', d), ('time', self.Y.indexes['time'])])
+
+
+import pystan as ps
+import pandas as pd
+
+# http://pystan.readthedocs.io/en/latest/index.html
+class stan(pca_base):
+    def read(self, filename=None, d=None):
+        d = self.d if d is None else d
+        filename = self.filename if filename is None else filename
+        with open(filename) as f:
+            while True:
+                l = next(f)
+                if l[0] == '#':
+                    continue
+                else:
+                    break
+            self.columns = l.split(',')
+
+        cx = [i for i, j in enumerate(self.columns) if j[0] == "X"]
+        cw = [i for i, j in enumerate(self.columns) if j[0] == "W"]
+
+        w = pd.read_csv(filename, skiprows=7, usecols=cw, header=None).mean(0).values
+        x = pd.read_csv(filename, skiprows=7, usecols=cx, header=None).mean(0).values 
+        self.W = xr.DataArray(w.reshape((d, -1)),
+                         coords=[('d', np.arange(d)), ('x', self.Y.indexes['x'])])
+        self.X = xr.DataArray(x.reshape((-1, d)),
+                         coords=[('time', self.Y.indexes['time']), ('d', np.arange(d))])
+
+    def to_netcdf(self, name):
+        ds = xr.Dataset({'W': self.W.unstack('x'), 'X': self.X})
+        ds.to_netcdf(name)
+
+    def construct(self, code):
+        self.model = ps.StanModel(model_code = code)
+        self.data = {'n': len(self.Y.time), 'x': len(self.Y.x), 'd': d, 'Y': self.Y.values}
+
+    def vb(self, d, sample_file):
+        self.d = d
+        self.fit = self.model.vb(data = self.data, sample_file = sample_file)
+        self.filename = self.fit['args']['sample_file'].decode()
+
+code = """
+data {
+    int<lower=1> n;
+    int<lower=1> x;
+    int<lower=1> d;
+    matrix[x, n] Y;
+}
+parameters {
+    matrix[x, d] W;
+    matrix[d, n] X;
+    vector<lower=0>[d] alpha;
+    real<lower=0> tau;
+}
+model {
+    alpha ~ gamma(1e-5, 1e-5);
+    tau ~ gamma(1e-5, 1e-5);
+    to_vector(X) ~ normal(0, 1);
+    for (i in 1:x)
+        W[i] ~ normal(0, alpha);
+    to_vector(Y) ~ normal(to_vector(W * X), tau);
+}
+        """
+# sm = ps.StanModel(model_code=code)
