@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from timeit import default_timer as timer
 from collections import Counter
 
 # url = 'http://192.168.5.2/ws/pop_ws.php'		# from inside

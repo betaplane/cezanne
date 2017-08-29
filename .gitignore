@@ -1,6 +1,7 @@
 /4jupy/
 /5jupy/
 /root/
+**/build/
 __pycache__/
 *.pdf
 *.[rR][dD]a*
@@ -15,3 +16,5 @@ __pycache__/
 *.cfg
 *.mp4
 *.jnl
+*.zip
+*.csv

@@ -7,6 +7,7 @@ import numpy as np
 from bayespy.nodes import GaussianARD, Gamma, SumMultiply, Add, Gaussian
 from bayespy.inference import VB
 from bayespy.inference.vmp.transformations import RotateGaussianARD, RotationOptimizer
+from timeit import default_timer as timer
 
 # https://www.esrl.noaa.gov/psd/data/gridded/data.noaa.oisst.v2.highres.html
 
@@ -25,9 +26,9 @@ class pca_base(object):
     def plot(self, d=10):
         fig, axs = plt.subplots(d, 2)
         W = self.W.unstack('x')
-        for i in range(d):
-            axs[i, 0].plot(self.X.sel(d = i))
-            p = axs[i, 1].imshow(W.sel(d = i))
+        for i, d in enumerate((self.W ** 2).sum('x').argsort().values[::-1]):
+            axs[i, 0].plot(self.X.isel(d = d))
+            p = axs[i, 1].imshow(W.isel(d = d))
             plt.colorbar(p, ax = axs[i, 1])
         plt.show()
 
@@ -41,6 +42,15 @@ class pca_base(object):
         i = np.argsort((self.W ** 2).sum('x'))[::-1]
         self.W = self.W.isel(d = i)
         self.X = self.X.isel(d = i)
+
+    def rotate(self):
+        v, U = np.linalg.eigh(self.X.values.T.dot(self.X))
+        Dx = np.diag(v ** .5)
+        v, V = np.linalg.eigh(Dx.dot(U.T).dot(self.W).dot(self.W.T).dot(U).dot(Dx))
+        W = self.W.values.T.dot(U).dot(Dx).dot(V)
+        X = V.T.dot(np.diag(v ** -.5)).dot(U.T).dot(self.X.T)
+        self.W = xr.DataArray(W.T, coords = self.W.coords)
+        self.X = xr.DataArray(X.T, coords = self.X.coords)
 
 class dpca(pca_base):
     def __call__(self, d=None):
@@ -156,7 +166,26 @@ import pandas as pd
 
 # http://pystan.readthedocs.io/en/latest/index.html
 class stan(pca_base):
-    def read(self, filename=None, d=None):
+    def __init__(self, *args, model=None):
+        super(stan, self).__init__(*args)
+        if model is not None:
+            self.model = model
+
+    def read_csv(self, filename=None, d=None, vars={'X': 'X', 'W': 'W'}):
+        import MyStan
+        d = self.d if d is None else d
+        filename = self.filename if filename is None else filename
+        x = MyStan.read(filename, vars['X']).mean(0)
+        w = MyStan.read(filename, vars['W']).mean(0)
+        self.reshape(w, x, d)
+
+    def reshape(self, w, x, d):
+        self.W = xr.DataArray(w.reshape((d, -1)),
+                         coords=[('d', np.arange(d)), ('x', self.Y.indexes['x'])])
+        self.X = xr.DataArray(x.reshape((-1, d)),
+                         coords=[('time', self.Y.indexes['time']), ('d', np.arange(d))])
+
+    def read(self, filename=None, d=None, vars={'X': 'X', 'Y': 'Y'}):
         d = self.d if d is None else d
         filename = self.filename if filename is None else filename
         with open(filename) as f:
@@ -168,8 +197,8 @@ class stan(pca_base):
                     break
             self.columns = l.split(',')
 
-        cx = [i for i, j in enumerate(self.columns) if j[0] == "X"]
-        cw = [i for i, j in enumerate(self.columns) if j[0] == "W"]
+        cx = [i for i, j in enumerate(self.columns) if j[0] == vars['X']]
+        cw = [i for i, j in enumerate(self.columns) if j[0] == vars['W']]
 
         w = pd.read_csv(filename, skiprows=7, usecols=cw, header=None).mean(0).values
         x = pd.read_csv(filename, skiprows=7, usecols=cx, header=None).mean(0).values 
@@ -184,19 +213,31 @@ class stan(pca_base):
 
     def construct(self, code):
         self.model = ps.StanModel(model_code = code)
-        self.data = {'n': len(self.Y.time), 'x': len(self.Y.x), 'd': d, 'Y': self.Y.values}
+
+    @property
+    def data(self):
+        Y = self.Y.values.flatten('F') # apparently stan does it the Fortran way round
+        i =  np.where(~np.isnan(Y))[0]
+        s = self.Y.shape
+        # remember, stan is 1-indexed
+        return {'x': s[0], 'n': s[1], 'Y': Y[i], 'obs': i + 1, 'n_obs': len(i)}
 
     def vb(self, d, sample_file):
-        self.d = d
-        self.fit = self.model.vb(data = self.data, sample_file = sample_file)
+        data = self.data
+        data['d'] = d
+        start = timer()
+        self.fit = self.model.vb(data = data, sample_file = sample_file)
+        print(timer() - start)
         self.filename = self.fit['args']['sample_file'].decode()
 
-code = """
+code_basic = """
 data {
     int<lower=1> n;
     int<lower=1> x;
     int<lower=1> d;
-    matrix[x, n] Y;
+    int<lower=1> n_obs;
+    vector[n_obs] Y;
+    int<lower=1, upper=n*x> obs[n_obs];
 }
 parameters {
     matrix[x, d] W;
@@ -210,7 +251,73 @@ model {
     to_vector(X) ~ normal(0, 1);
     for (i in 1:x)
         W[i] ~ normal(0, alpha);
-    to_vector(Y) ~ normal(to_vector(W * X), tau);
+    Y ~ normal(to_vector(W * X)[obs], tau);
+}
+        """
+# sm = ps.StanModel(model_code=code_basic)
+
+stan_mean = """
+data {
+    int<lower=1> n;
+    int<lower=1> x;
+    int<lower=1> d;
+    int<lower=1> n_obs;
+    vector[n_obs] Y;
+    int<lower=1, upper=n*x> obs[n_obs];
+}
+parameters {
+    matrix[x, d] W;
+    matrix[d, n] X;
+    vector[x] m;
+    vector<lower=0>[x] vm;
+    vector[x] mu;
+    vector<lower=0>[d] alpha;
+    real<lower=0> tau;
+}
+model {
+    alpha ~ gamma(1e-5, 1e-5);
+    tau ~ gamma(1e-5, 1e-5);
+    vm ~ gamma(1e-5, 1e-5);
+    mu ~ normal(0, 1e-5);
+    m ~ normal(mu, vm);
+    to_vector(X) ~ normal(0, 1);
+    for (i in 1:x)
+        W[i] ~ normal(0, alpha);
+    Y ~ normal(to_vector(W * X + rep_matrix(m, n))[obs], tau);
+}
+        """
+# sm = ps.StanModel(model_code=stan_mean)
+
+code_rotated = """
+data {
+    int<lower=1> n;
+    int<lower=1> x;
+    int<lower=1> d;
+    matrix[x, n] Y;
+}
+parameters {
+    matrix[x, d] W;
+    matrix[d, n] X;
+    vector<lower=0>[d] alpha;
+    real<lower=0> tau;
+}
+transformed parameters {
+    cov_matrix[d] xx = tcrossprod(X);
+    vector<lower=0>[d] l = sqrt(eigenvalues_sym(xx));
+    matrix[d, d] U = eigenvectors_sym(xx);
+    cov_matrix[d] Dx = diag_matrix(l);
+    cov_matrix[d] Dx_inv = diag_matrix(inv(l));
+    matrix[d, d] V = eigenvectors_sym(Dx * U' * crossprod(W) * U * Dx);
+    matrix[x, d] Wo = W * U * Dx * V;
+    matrix[d, n] Xo = V' * Dx_inv * U' * X;
+}
+model {
+    alpha ~ gamma(1e-5, 1e-5);
+    tau ~ gamma(1e-5, 1e-5);
+    to_vector(X) ~ normal(0, 1);
+    for (i in 1:x)
+        W[i] ~ normal(0, alpha);
+    to_vector(Y) ~ normal(to_vector(Wo * Xo), tau);
 }
         """
 # sm = ps.StanModel(model_code=code)
