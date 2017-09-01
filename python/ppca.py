@@ -4,7 +4,7 @@ mpl.use('qt5agg')
 import matplotlib.pyplot as plt
 import xarray as xr
 import numpy as np
-from bayespy.nodes import GaussianARD, Gamma, SumMultiply, Add, Gaussian
+from bayespy.nodes import GaussianARD, Gamma, SumMultiply, Add, GaussianGamma
 from bayespy.inference import VB
 from bayespy.inference.vmp.transformations import RotateGaussianARD, RotationOptimizer
 from timeit import default_timer as timer
@@ -17,11 +17,14 @@ sst = ds['sst'].resample('MS', 'time', how='mean')
 y, m = [x.sel(lon=slice(145, 295), lat=slice(10, -35)) for x in [sst, lm]]
 
 class pca_base(object):
-    def __init__(self, Y, mask):
+    def __init__(self, Y, mask, mean=True, std=True):
         s = lambda x: x.stack(x = ('lat', 'lon'))
-        self.ym = Y.mean('time')
-        Y = ((Y - self.ym) / Y.std('time'))
+        if mean:
+            Y = Y - Y.mean('time')
+        if std:
+            Y = Y / Y.std('time')
         self.Y = s(Y).sel(x = s(mask).values.astype(bool).flatten()).transpose('x', 'time')
+        self.d, self.n = self.Y.shape
 
     def plot(self, d=10):
         fig, axs = plt.subplots(d, 2)
@@ -90,9 +93,9 @@ class vbpca(pca_base):
         # loadings matrix
         W = GaussianARD(0, alpha, plates=(len(self.Y.x), 1), shape=(d, ))
 
-        vm = Gamma(1e-5, 1e-5)
+        ma = GaussianGamma(0, 1e-5, 1e-5, 1e-5, plates=(len(self.Y.x), 1))
         # mu = Gaussian(25, 1e-5, plates=(len(self.Y.x), ))
-        M = GaussianARD(0, vm, plates=(len(self.Y.x), 1))
+        M = GaussianARD(ma, 1, plates=(len(self.Y.x), 1))
 
         # observations
         F = SumMultiply('d,d->', X, W)
@@ -185,6 +188,9 @@ class stan(pca_base):
         self.X = xr.DataArray(x.reshape((-1, d)),
                          coords=[('time', self.Y.indexes['time']), ('d', np.arange(d))])
 
+    def space(self, x):
+        return xr.DataArray(x, coords=[('x', self.Y.indexes['x'])]).unstack('x')
+
     def read(self, filename=None, d=None, vars={'X': 'X', 'Y': 'Y'}):
         d = self.d if d is None else d
         filename = self.filename if filename is None else filename
@@ -270,7 +276,7 @@ parameters {
     matrix[d, n] X;
     vector[x] m;
     vector<lower=0>[x] vm;
-    vector[x] mu;
+ //   vector[x] mu;
     vector<lower=0>[d] alpha;
     real<lower=0> tau;
 }
@@ -278,8 +284,8 @@ model {
     alpha ~ gamma(1e-5, 1e-5);
     tau ~ gamma(1e-5, 1e-5);
     vm ~ gamma(1e-5, 1e-5);
-    mu ~ normal(0, 1e-5);
-    m ~ normal(mu, vm);
+//    mu ~ normal(0, 1e-5);
+    m ~ normal(0, vm);
     to_vector(X) ~ normal(0, 1);
     for (i in 1:x)
         W[i] ~ normal(0, alpha);
@@ -321,3 +327,30 @@ model {
 }
         """
 # sm = ps.StanModel(model_code=code)
+
+
+import edward as ed
+import tensorflow as tf
+
+class edpca(pca_base):
+    def __call__(self, k=None):
+        if k is None:
+            k = self.d
+
+        Z = ed.models.Normal(tf.zeros((k, self.n)), tf.ones((k, self.n)))
+        W = ed.models.Normal(tf.zeros((self.d, k)), tf.ones((self.d, k)))
+        X = ed.models.Normal(tf.matmul(W, Z), tf.ones((self.d, self.n)))
+
+        self.qw = ed.models.Normal(tf.Variable(tf.random_normal((self.d, k))),
+                              tf.nn.softplus(tf.Variable(tf.random_normal((self.d, k)))))
+        self.qz = ed.models.Normal(tf.Variable(tf.random_normal((k, self.n))),
+                              tf.nn.softplus(tf.Variable(tf.random_normal((k, self.n)))))
+
+        self.inference = ed.KLqp({W: self.qw, Z: self.qz}, data={X: self.Y.values})
+        self.inference.run(n_iter=500, n_print=50, n_samples=10)
+
+        s = ed.get_session()
+        self.W = xr.DataArray(s.run(self.qw.mean()),
+                              coords=[('x', self.Y.indexes['x']), ('k', np.arange(k))])
+        self.X = xr.DataArray(s.run(self.qz.mean()),
+                              coords=[('k', np.arange(k)), ('time', self.Y.indexes['time'])])
