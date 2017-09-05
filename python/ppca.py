@@ -93,19 +93,19 @@ class vbpca(pca_base):
         # loadings matrix
         W = GaussianARD(0, alpha, plates=(len(self.Y.x), 1), shape=(d, ))
 
-        ma = GaussianGamma(0, 1e-5, 1e-5, 1e-5, plates=(len(self.Y.x), 1))
+        # ma = GaussianGamma(0, 1e-5, 1e-5, 1e-5, plates=(len(self.Y.x), 1))
         # mu = Gaussian(25, 1e-5, plates=(len(self.Y.x), ))
-        M = GaussianARD(ma, 1, plates=(len(self.Y.x), 1))
+        # M = GaussianARD(ma, 1, plates=(len(self.Y.x), 1))
 
         # observations
         F = SumMultiply('d,d->', X, W)
-        G = Add(F, M)
+        # G = Add(F, M)
         tau = Gamma(1e-5, 1e-5) # this is the observation noise
-        Y = GaussianARD(G, tau)
+        Y = GaussianARD(F, tau)
         Y.observe(self.Y)
 
         # inference
-        Q = VB(Y, X, W, M, alpha, tau, vm)
+        Q = VB(Y, X, W, alpha, tau)
         W.initialize_from_random()
 
         # rotations at each iteration to speed up convergence
@@ -119,11 +119,12 @@ class vbpca(pca_base):
         # get first moments of posterior (means)
         w = W.get_moments()[0].squeeze()
         x = X.get_moments()[0].squeeze()
-        m = M.get_moments()[0].squeeze()
+        # m = M.get_moments()[0].squeeze()
         i = np.argsort(np.diag(w.T.dot(w)))[::-1]
         self.W = xr.DataArray(w[:, i], coords = [('x', self.Y.indexes['x']), ('d', np.arange(d))])
         self.X = xr.DataArray(x[:, i], coords = [('time', self.Y.indexes['time']), ('d', np.arange(d))])
-        self.m = xr.DataArray(m, coords = [('x', self.Y.indexes['x'])])
+        # self.m = xr.DataArray(m, coords = [('x', self.Y.indexes['x'])])
+        self.tau = tau.get_moments()[0].squeeze()
 
 # http://pymc-devs.github.io/pymc3/index.html
 class mcpca(pca_base):
@@ -332,25 +333,36 @@ model {
 import edward as ed
 import tensorflow as tf
 
+# https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
+
 class edpca(pca_base):
-    def __call__(self, k=None):
+    def __call__(self, k=None, n_iter=500):
         if k is None:
             k = self.d
 
-        Z = ed.models.Normal(tf.zeros((k, self.n)), tf.ones((k, self.n)))
+        # tau = tf.Variable(1, dtype=tf.float32)
+        mm = tf.Variable(tf.random_normal((self.d, 1)) + self.Y.mean('time').values.reshape((-1, 1)))
+        vm = tf.Variable(1.0)
+        s = ed.models.Gamma(1e-5, 1e-5)
         W = ed.models.Normal(tf.zeros((self.d, k)), tf.ones((self.d, k)))
-        X = ed.models.Normal(tf.matmul(W, Z), tf.ones((self.d, self.n)))
+        Z = ed.models.Normal(tf.zeros((k, self.n)), tf.ones((k, self.n)))
+        m = ed.models.Normal(mm, vm * tf.ones((self.d, 1)))
+        X = ed.models.Normal(tf.matmul(W, Z) + m, tf.ones((self.d, self.n)) * tf.pow(s, tf.constant(-0.5)))
 
         self.qw = ed.models.Normal(tf.Variable(tf.random_normal((self.d, k))),
                               tf.nn.softplus(tf.Variable(tf.random_normal((self.d, k)))))
         self.qz = ed.models.Normal(tf.Variable(tf.random_normal((k, self.n))),
                               tf.nn.softplus(tf.Variable(tf.random_normal((k, self.n)))))
+        self.s = ed.models.TransformedDistribution(
+            ed.models.NormalWithSoftplusScale(tf.Variable(0.0), tf.Variable(1.0)),
+            bijector = tf.contrib.distributions.bijectors.Exp())
+        self.m = ed.models.Normal(mm, tf.nn.softplus(tf.random_normal((self.d, 1))))
 
-        self.inference = ed.KLqp({W: self.qw, Z: self.qz}, data={X: self.Y.values})
-        self.inference.run(n_iter=500, n_print=50, n_samples=10)
+        self.inference = ed.KLqp({W: self.qw, Z: self.qz, s: self.s, m: self.m}, data={X: self.Y.values})
+        self.out = self.inference.run(n_iter=n_iter)
 
         s = ed.get_session()
         self.W = xr.DataArray(s.run(self.qw.mean()),
-                              coords=[('x', self.Y.indexes['x']), ('k', np.arange(k))])
+                              coords=[('x', self.Y.indexes['x']), ('d', np.arange(k))])
         self.X = xr.DataArray(s.run(self.qz.mean()),
-                              coords=[('k', np.arange(k)), ('time', self.Y.indexes['time'])])
+                              coords=[('d', np.arange(k)), ('time', self.Y.indexes['time'])])
