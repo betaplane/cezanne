@@ -47,13 +47,13 @@ class pca_base(object):
         self.X = self.X.isel(d = i)
 
     def rotate(self):
-        v, U = np.linalg.eigh(self.X.values.T.dot(self.X))
+        X = self.X.transpose('d', 'time')
+        W = self.W.transpose('x', 'd')
+        v, U = np.linalg.eigh(X.values.dot(X.T))
         Dx = np.diag(v ** .5)
-        v, V = np.linalg.eigh(Dx.dot(U.T).dot(self.W).dot(self.W.T).dot(U).dot(Dx))
-        W = self.W.values.T.dot(U).dot(Dx).dot(V)
-        X = V.T.dot(np.diag(v ** -.5)).dot(U.T).dot(self.X.T)
-        self.W = xr.DataArray(W.T, coords = self.W.coords)
-        self.X = xr.DataArray(X.T, coords = self.X.coords)
+        v, V = np.linalg.eigh(Dx.dot(U.T).dot(W.T).dot(W).dot(U).dot(Dx))
+        self.W = xr.DataArray(W.values.dot(U).dot(Dx).dot(V), coords = W.coords)
+        self.X = xr.DataArray(V.T.dot(np.diag(v ** -.5)).dot(U.T).dot(X), coords = X.coords)
 
 class dpca(pca_base):
     def __call__(self, d=None):
@@ -336,18 +336,20 @@ import tensorflow as tf
 # https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
 
 class edpca(pca_base):
-    def __call__(self, k=None, n_iter=500):
+    def __init__(self, *args, k=None):
+        super(edpca, self).__init__(*args)
         if k is None:
             k = self.d
 
-        # tau = tf.Variable(1, dtype=tf.float32)
+        Y = self.Y.values.flatten()
+        i = np.where(~np.isnan(Y))[0]
+
         mm = tf.Variable(tf.random_normal((self.d, 1)) + self.Y.mean('time').values.reshape((-1, 1)))
         vm = tf.Variable(1.0)
+        m = ed.models.Normal(mm, vm * tf.ones((self.d, 1)))
         s = ed.models.Gamma(1e-5, 1e-5)
         W = ed.models.Normal(tf.zeros((self.d, k)), tf.ones((self.d, k)))
         Z = ed.models.Normal(tf.zeros((k, self.n)), tf.ones((k, self.n)))
-        m = ed.models.Normal(mm, vm * tf.ones((self.d, 1)))
-        X = ed.models.Normal(tf.matmul(W, Z) + m, tf.ones((self.d, self.n)) * tf.pow(s, tf.constant(-0.5)))
 
         self.qw = ed.models.Normal(tf.Variable(tf.random_normal((self.d, k))),
                               tf.nn.softplus(tf.Variable(tf.random_normal((self.d, k)))))
@@ -358,7 +360,97 @@ class edpca(pca_base):
             bijector = tf.contrib.distributions.bijectors.Exp())
         self.m = ed.models.Normal(mm, tf.nn.softplus(tf.random_normal((self.d, 1))))
 
+        # x = tf.gather(tf.reshape(tf.matmul(W, Z) + m, [-1]), i)
+        # X = ed.models.Normal(x, tf.ones(len(i)) * tf.pow(s, tf.constant(-0.5)))
+        # self.inference = ed.KLqp({W: self.qw, Z: self.qz, s: self.s, m: self.m}, data={X: Y[i]})
+
+        X = ed.models.Normal(tf.matmul(W, Z) + m, tf.ones((self.d, self.n)) * tf.pow(s, tf.constant(-0.5)))
         self.inference = ed.KLqp({W: self.qw, Z: self.qz, s: self.s, m: self.m}, data={X: self.Y.values})
+
+    def __call__(self, n_iter):
+        self.out = self.inference.run(n_iter=n_iter)
+        self.extract()
+
+
+
+    def extract(self, k=10):
+        s = ed.get_session()
+        self.W = xr.DataArray(s.run(self.qw.mean()),
+                              coords=[('x', self.Y.indexes['x']), ('d', np.arange(k))])
+        self.X = xr.DataArray(s.run(self.qz.mean()),
+                              coords=[('d', np.arange(k)), ('time', self.Y.indexes['time'])])
+
+
+class edvar(edpca):
+    def __init__(self, *args, k=None):
+        pca_base.__init__(self, *args)
+        if k is None:
+            k = self.d
+
+        self.W = ed.models.Normal(tf.zeros((self.d, k)), tf.ones((self.d, k)))
+        self.Z = ed.models.Normal(tf.zeros((k, self.n)), tf.ones((k, self.n)))
+
+        X = ed.models.Normal(tf.matmul(W, Z), tf.ones((self.d, self.n)))
+
+        self.qw = ed.models.Normal(tf.Variable(tf.random_normal((self.d, k))),
+                              tf.nn.softplus(tf.Variable(tf.random_normal((self.d, k)))))
+        self.qz = ed.models.Normal(tf.Variable(tf.random_normal((k, self.n))),
+                              tf.nn.softplus(tf.Variable(tf.random_normal((k, self.n)))))
+
+        self.inference = ed.KLqp({}, data={X: self.Y.values})
+
+    def inference(self, n_iter):
+        self.inference.initialize()
+        tf.global_variables_initializer().run()
+        for n in range(n_iter):
+            upd = self.inference.update({self.W: self.qw, self.Z: self.qz})
+            Z = self.qz.mean()
+            W = self.qw.mean()
+            u, U = tf.self_adjoint_eig(tf.matmul(Z, transpose_b=True))
+            Dx = tf.diag(tf.pow(u, .5))
+            Ux = tf.matmul(U, Dx)
+            v, V = tf.self_adjoint_eig(
+                tf.matmul(
+                    tf.matmul(Ux,
+                              tf.matmul(W, W, transpose_a=True),
+                              transpose_a=True),
+                    Ux)
+            )
+            Wu = tf.matmul(tf.matmul(W, Ux), V)
+            Zu = tf.matmul(
+                tf.matmul(
+                    tf.matmul(V, tf.diag(tf.pow(u, -.5)), transpose_a=True),
+                    U, transpose_b=True), Z)
+            if n%10==0:
+                self.inference.print_progress(upd)
+        self.inference.finalize()
+
+        
+class edmpca(pca_base):
+    def __call__(self, k=None, n_iter=500):
+        if k is None:
+            k = self.d
+
+        Y = self.Y.values.flatten()
+        i = np.where(~np.isnan(Y))[0]
+
+        W = ed.models.Normal(tf.zeros((self.d, k)), tf.ones((self.d, k)))
+        Z = ed.models.Normal(tf.zeros((k, self.n)), tf.ones((k, self.n)))
+
+        x = tf.gather(tf.reshape(tf.matmul(W, Z), [-1]), i)
+        X = ed.models.Normal(x, tf.ones(len(i)))
+
+        self.qw = ed.models.Normal(tf.Variable(tf.random_normal((self.d, k))),
+                              tf.nn.softplus(tf.Variable(tf.random_normal((self.d, k)))))
+        self.qz = ed.models.Normal(tf.Variable(tf.random_normal((k, self.n))),
+                              tf.nn.softplus(tf.Variable(tf.random_normal((k, self.n)))))
+
+        # Xobs = tf.gather(tf.reshape(X, [-1]), i)
+        # self.x = ed.models.NormalWithSoftplusScale(tf.Variable(tf.random_normal((self.d, self.n))),
+        #                                            tf.Variable(tf.random_normal((self.d, self.n))))
+
+        # self.inference = ed.KLqp({W: self.qw, Z: self.qz, X: self.x}, data={Xobs: Y[i]})
+        self.inference = ed.KLqp({W: self.qw, Z: self.qz}, data={X: Y[i]})
         self.out = self.inference.run(n_iter=n_iter)
 
         s = ed.get_session()

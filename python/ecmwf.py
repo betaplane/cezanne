@@ -25,21 +25,21 @@ server = ECMWFDataServer()
 # })
 
 # https://software.ecmwf.int/wiki/pages/viewpage.action?pageId=56658233
-server.retrieve({
-    'stream'    : "oper",
-    'levtype'   : "sfc",
-    'param'     : "228", # ppt
-    'dataset'   : "interim",
-    'step'      : "12", # ppt is accumulated, so we request 12h forcast at 00h and 12h to cover whole day
-    'grid'      : "0.75/0.75",
-    'area'      : "10/-180/-90/-60",
-    'time'      : "00/12",
-    'date'      : "1979-01-01/to/2016-12-31",
-    'type'      : "fc", # forecast
-    'class'     : "ei",
-    'format'    : "netcdf",
-    'target'    : "ERA-ppt.nc"
-})
+# server.retrieve({
+#     'stream'    : "oper",
+#     'levtype'   : "sfc",
+#     'param'     : "228", # ppt
+#     'dataset'   : "interim",
+#     'step'      : "12", # ppt is accumulated, so we request 12h forcast at 00h and 12h to cover whole day
+#     'grid'      : "0.75/0.75",
+#     'area'      : "10/-180/-90/-60",
+#     'time'      : "00/12",
+#     'date'      : "1979-01-01/to/2016-12-31",
+#     'type'      : "fc", # forecast
+#     'class'     : "ei",
+#     'format'    : "netcdf",
+#     'target'    : "ERA-ppt.nc"
+# })
 
 # server.retrieve({
 #     'stream'    : "oper",
@@ -56,4 +56,67 @@ server.retrieve({
 #     'class'     : "ei",
 #     'format'    : "netcdf",
 #     'target'    : "ERA-interim.nc"
+# })
+
+# Antarctica
+# server.retrieve({
+#     'stream'    : "oper",
+#     'levtype'   : "sfc",
+#     'param'     : "228", # ppt
+#     'dataset'   : "interim",
+#     'step'      : "12", # ppt is accumulated, so we request 12h forcast at 00h and 12h to cover whole day
+#     'grid'      : "0.75/0.75",
+#     'area'      : "0/-180/-90/180", # North West South East
+#     'time'      : "00/12",
+#     'date'      : "1979-01-01/to/2017-08-31",
+#     'type'      : "fc", # forecast
+#     'class'     : "ei",
+#     'target'    : "ERA-ppt-SH.grb"
+# })
+
+# server.retrieve({
+#     'stream'    : "oper",
+#     'levtype'   : "pl",
+#     'levelist'  : "500",
+#     'param'     : "129", # geopotential height
+#     'dataset'   : "interim",
+#     'step'      : "0",
+#     'grid'      : "0.75/0.75",
+#     'area'      : "0/-180/-90/180", # North West South East
+#     'time'      : "00/06/12/18",
+#     'date'      : "1979-01-01/to/2017-08-31",
+#     'type'      : "an",
+#     'class'     : "ei",
+#     'target'    : "ERA-GP500-SH.grb"
+# })
+
+for p, n in [('165', 'U'), ('166', 'V')]:
+    server.retrieve({
+        'stream'    : "oper",
+        'levtype'   : "sfc",
+        'param'     : p,
+        'dataset'   : "interim",
+        'step'      : "0",
+        'grid'      : "0.75/0.75",
+        'area'      : "0/-180/-90/180", # North West South East
+        'time'      : "00/06/12/18",
+        'date'      : "1979-01-01/to/2017-08-31",
+        'type'      : "an",
+        'class'     : "ei",
+        'target'    : "ERA-{}-SH.grb".format(n)
+    })
+
+# server.retrieve({
+#     'stream'    : "oper",
+#     'levtype'   : "sfc",
+#     'param'     : "182", # evaporation
+#     'dataset'   : "interim",
+#     'step'      : "12",
+#     'grid'      : "0.75/0.75",
+#     'area'      : "0/-180/-90/180", # North West South East
+#     'time'      : "00/12",
+#     'date'      : "1979-01-01/to/2017-08-31",
+#     'type'      : "fc", # forecast
+#     'class'     : "ei",
+#     'target'    : "ERA-eva-SH.grb"
 # })
