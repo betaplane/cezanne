@@ -90,21 +90,21 @@ server = ECMWFDataServer()
 #     'target'    : "ERA-GP500-SH.grb"
 # })
 
-for p, n in [('165', 'U'), ('166', 'V')]:
-    server.retrieve({
-        'stream'    : "oper",
-        'levtype'   : "sfc",
-        'param'     : p,
-        'dataset'   : "interim",
-        'step'      : "0",
-        'grid'      : "0.75/0.75",
-        'area'      : "0/-180/-90/180", # North West South East
-        'time'      : "00/06/12/18",
-        'date'      : "1979-01-01/to/2017-08-31",
-        'type'      : "an",
-        'class'     : "ei",
-        'target'    : "ERA-{}-SH.grb".format(n)
-    })
+# for p, n in [('165', 'U'), ('166', 'V')]:
+#     server.retrieve({
+#         'stream'    : "oper",
+#         'levtype'   : "sfc",
+#         'param'     : p,
+#         'dataset'   : "interim",
+#         'step'      : "0",
+#         'grid'      : "0.75/0.75",
+#         'area'      : "0/-180/-90/180", # North West South East
+#         'time'      : "00/06/12/18",
+#         'date'      : "1979-01-01/to/2017-08-31",
+#         'type'      : "an",
+#         'class'     : "ei",
+#         'target'    : "ERA-{}-SH.grb".format(n)
+#     })
 
 # server.retrieve({
 #     'stream'    : "oper",
@@ -120,3 +120,49 @@ for p, n in [('165', 'U'), ('166', 'V')]:
 #     'class'     : "ei",
 #     'target'    : "ERA-eva-SH.grb"
 # })
+
+
+# server.retrieve({
+#     'stream'    : "oper",
+#     'levtype'   : "sfc",
+#     'param'     : "84.162", # vertical integral of moisture divergence
+#     'dataset'   : "interim",
+#     'step'      : "0",
+#     'grid'      : "0.75/0.75",
+#     'area'      : "0/-180/-90/180", # North West South East
+#     'time'      : "00/06/12/18",
+#     'date'      : "1979-01-01/to/2017-08-31",
+#     'type'      : "an",
+#     'class'     : "ei",
+#     'target'    : "ERA-mdiv-SH.grb"
+# })
+
+server.retrieve({
+    'stream'    : "oper",
+    'levtype'   : "sfc",
+    'param'     : "167/31.128/84.162", # 2m temperature, sea ice, vert int of moist div 
+    'dataset'   : "interim",
+    'step'      : "0",
+    'grid'      : "0.75/0.75",
+    'area'      : "0/-180/-90/180",
+    'time'      : "00/06/12/18",
+    'date'      : "1979-01-01/to/2017-08-31",
+    'type'      : "an", # analysis
+    'class'     : "ei",
+    'target'    : "ERA-T2_ice_mdiv-SH.grb"
+})
+
+server.retrieve({
+    'stream'    : "oper",
+    'levtype'   : "sfc",
+    'param'     : "232.128", # instantaneous moisture flus
+    'dataset'   : "interim",
+    'step'      : "12",
+    'grid'      : "0.75/0.75",
+    'area'      : "0/-180/-90/180", # North West South East
+    'time'      : "00/12",
+    'date'      : "1979-01-01/to/2017-08-31",
+    'type'      : "fc",
+    'class'     : "ei",
+    'target'    : "ERA-mflux-SH.grb"
+})
