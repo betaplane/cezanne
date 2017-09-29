@@ -137,20 +137,20 @@ server = ECMWFDataServer()
 #     'target'    : "ERA-mdiv-SH.grb"
 # })
 
-server.retrieve({
-    'stream'    : "oper",
-    'levtype'   : "sfc",
-    'param'     : "167/31.128/84.162", # 2m temperature, sea ice, vert int of moist div 
-    'dataset'   : "interim",
-    'step'      : "0",
-    'grid'      : "0.75/0.75",
-    'area'      : "0/-180/-90/180",
-    'time'      : "00/06/12/18",
-    'date'      : "1979-01-01/to/2017-08-31",
-    'type'      : "an", # analysis
-    'class'     : "ei",
-    'target'    : "ERA-T2_ice_mdiv-SH.grb"
-})
+# server.retrieve({
+#     'stream'    : "oper",
+#     'levtype'   : "sfc",
+#     'param'     : "167/31.128/84.162", # 2m temperature, sea ice, vert int of moist div 
+#     'dataset'   : "interim",
+#     'step'      : "0",
+#     'grid'      : "0.75/0.75",
+#     'area'      : "0/-180/-90/180",
+#     'time'      : "00/06/12/18",
+#     'date'      : "1979-01-01/to/2017-08-31",
+#     'type'      : "an", # analysis
+#     'class'     : "ei",
+#     'target'    : "ERA-T2_ice_mdiv-SH.grb"
+# })
 
 server.retrieve({
     'stream'    : "oper",
@@ -166,3 +166,4 @@ server.retrieve({
     'class'     : "ei",
     'target'    : "ERA-mflux-SH.grb"
 })
+https://stream.ecmwf.int/data/atls01/data/data03/scratch/_mars-atls01-98f536083ae965b31b0d04811be6f4c6-YYLRAM.grib

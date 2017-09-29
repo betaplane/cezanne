@@ -40,6 +40,7 @@ def stations(url):
         body.unwrap()
 
     t = pd.read_html(str(s.find('table')), index_col=0, header=0)[0][['Name', 'Latitude', 'Longitude', 'Height']]
+    t.index.name = 'id'
 
     def parse_num(x):
         num, ext = float(x[:-1]), x[-1]
