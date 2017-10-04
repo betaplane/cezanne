@@ -119,7 +119,7 @@ def xr_interp(v, proj_params, stations, time=True, method='linear',  dt=-4):
     p = Proj(**proj_params)
     ij = p(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
     lon, lat, tv = hh.coord_names(v, 'lon', 'lat', 'time')
-    xy = p(hh.g2d(v.coords[lon]), hh.g2d(v.coords[lat].data))
+    xy = p(hh.g2d(v.coords[lon]), hh.g2d(v.coords[lat]))
     x = np.array(v).squeeze()
     if time:
         t = ds[tv] + np.timedelta64(dt, 'h')
