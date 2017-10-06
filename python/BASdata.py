@@ -7,30 +7,37 @@ urls = {
     'sfc': "https://legacy.bas.ac.uk/met/READER/surface/stationpt.html",
     'sfc_wind': "https://legacy.bas.ac.uk/met/READER/surface/stationwind.html",
     'aws': "https://legacy.bas.ac.uk/met/READER/aws/awspt.html",
-    'aws_wind': "https://legacy.bas.ac.uk/met/READER/aws/awswind.html"
+    'aws_wind': "https://legacy.bas.ac.uk/met/READER/aws/awswind.html",
+    'ua': "https://legacy.bas.ac.uk/met/READER/upper_air/uath.html",
+    'ua_wind': "https://legacy.bas.ac.uk/met/READER/upper_air/uawind.html"
 }
 
-def data(url):
-    sta = stations(url).reset_index()
-    sta.index = sta['Name']
+def data(url, href=re.compile('(.*\.){3}'), take=[2, 1]):
+    sta = stations(url).drop_duplicates()
     r = requests.get(url)
     s = BeautifulSoup(r.text, 'html5lib')
     dname = os.path.dirname(url)
 
     data = []
-    for l in s.find_all(href=re.compile('All|\d\d')):
+    for l in s.find_all(href=href):
         h = l.attrs['href'].split('.')
+        col = sta[sta.Name.str.contains(h[0], case=False)].index.tolist()
+        if len(col) > 1:
+            col = sta[sta.Name == h[0]].index.tolist()
+            if len(col) > 1:
+                raise Exception('multiple matches for station name')
+        col.extend([h[i] for i in take])
         a = requests.get(os.path.join(dname, l.attrs['href']))
         txt = BeautifulSoup(a.text, 'html5lib').find(href=re.compile('txt'))
         try:
             url = os.path.join(dname, txt.attrs['href'])
             d = pd.read_csv(url, index_col=0, header=None, skiprows=1, na_values='-', delim_whitespace=True).stack().to_frame()
             d.index = pd.DatetimeIndex(['{}-{}'.format(y, m) for y, m in d.index.tolist()])
-            d.columns = pd.MultiIndex.from_tuples([(sta.loc[h[0], 'id'], h[1], h[2])])
+            d.columns = pd.MultiIndex.from_tuples([col])
         except:
             print('error:', h[:3])
         else:
-            print(h[:3])
+            print(h)
             data.append(d)
     return pd.concat(data, 1)
 

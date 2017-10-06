@@ -152,18 +152,33 @@ server = ECMWFDataServer()
 #     'target'    : "ERA-T2_ice_mdiv-SH.grb"
 # })
 
+# server.retrieve({
+#     'stream'    : "oper",
+#     'levtype'   : "sfc",
+#     'param'     : "232.128", # instantaneous moisture flus
+#     'dataset'   : "interim",
+#     'step'      : "12",
+#     'grid'      : "0.75/0.75",
+#     'area'      : "0/-180/-90/180", # North West South East
+#     'time'      : "00/12",
+#     'date'      : "1979-01-01/to/2017-08-31",
+#     'type'      : "fc",
+#     'class'     : "ei",
+#     'target'    : "ERA-mflux-SH.grb"
+# })
+
 server.retrieve({
     'stream'    : "oper",
     'levtype'   : "sfc",
-    'param'     : "232.128", # instantaneous moisture flus
+    'param'     : "134.128", # surface pressure
     'dataset'   : "interim",
-    'step'      : "12",
+    'step'      : "0",
     'grid'      : "0.75/0.75",
-    'area'      : "0/-180/-90/180", # North West South East
-    'time'      : "00/12",
+    'area'      : "0/-180/-90/180",
+    'time'      : "00/06/12/18",
     'date'      : "1979-01-01/to/2017-08-31",
-    'type'      : "fc",
+    'type'      : "an", # analysis
     'class'     : "ei",
-    'target'    : "ERA-mflux-SH.grb"
+    'target'    : "ERA-SP-SH.grb"
 })
-https://stream.ecmwf.int/data/atls01/data/data03/scratch/_mars-atls01-98f536083ae965b31b0d04811be6f4c6-YYLRAM.grib
+https://stream.ecmwf.int/data/atls02/data/data01/scratch/_mars-atls02-95e2cf679cd58ee9b4db4dd119a05a8d-1lNib4.grib

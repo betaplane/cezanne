@@ -1,6 +1,9 @@
 /4jupy/
 /5jupy/
 /root/
+_build
+_static
+_templates
 **/build/
 __pycache__/
 *.pdf
