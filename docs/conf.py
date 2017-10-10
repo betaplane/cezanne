@@ -20,6 +20,16 @@
 import os
 import sys
 sys.path.insert(0, os.path.abspath('../'))
+from unittest.mock import MagicMock
+
+# http://docs.readthedocs.io/en/latest/faq.html#i-get-import-errors-on-libraries-that-depend-on-c-modules
+class Mock(MagicMock):
+    @classmethod
+    def __getattr__(cls, name):
+        return MagicMock()
+
+MOCK_MODULES = ['pycurl']
+sys.modules.update((name, Mock()) for name in MOCK_MODULES)
 
 
 # -- General configuration ------------------------------------------------
