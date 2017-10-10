@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 import requests, csv
 from io import StringIO
-from dateutil.parser import parse
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np

@@ -7,7 +7,7 @@ import numpy as np
 import xarray as xr
 
 base_url = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/'
-
+#https://www.ncdc.noaa.gov/cdo-web/webservices/ncdcwebservices
 
 def parse_stations(record):
     rec = record.copy()
@@ -49,8 +49,12 @@ def get(endpoint, parser=None, **params):
     else:
         return pd.concat([parser(r) for r in results], 0)
 
-class NCDC(object):
-    widths = np.r_[[11, 4, 2, 4], np.array([5, 1, 1, 1], ndmin=2).repeat(31, 0).flatten()]
+class GHCND(object):
+    """
+Class to read in NCEI (National Centers for Environmental Information, formerly National Climatic Data Center, NCDC) `Global Historical Climatology Network - Daily (GHCND) <ftp://ftp.ncdc.noaa.gov/pub/data/ghcn/daily/>`_ data from tar archive containing all station data.
+    """
+    ghcnd_widths = np.r_[[11, 4, 2, 4], np.array([5, 1, 1, 1], ndmin=2).repeat(31, 0).flatten()]
+    station_cols = [(0, 11), (12, 20), (21, 30), (31, 37), (38, 40), (41, 71), (72, 75), (76, 79), (80, 85)]
 
     def __init__(self, filename):
         self.tf = tarfile.open(filename)
@@ -70,6 +74,12 @@ class NCDC(object):
         data = data.sel(time=data.sel(flag='value').notnull().squeeze())
         data['time'] = ('time', pd.DatetimeIndex(['{}-{}'.format(*d) for d in data.time.values]))
         return data.isel(time = data.time.argsort())
+
+    @classmethod
+    def read_stations(cls, filename):
+        sta = pd.read_fwf(filename, header=None, colspecs=cls.station_cols)
+        sta.columns = ['id', 'lat', 'lon', 'elev', 'state', 'name', 'GSN flag', 'HCN/CRN flag', 'WMO id']
+        return sta
 
     def __del__(self):
         self.tf.close()
