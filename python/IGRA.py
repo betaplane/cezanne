@@ -100,7 +100,7 @@ def parse(string, var=None):
 
 class Monthly(object):
     """
-Some methods to parse monthly IGRA files (ending in '-mly.txt') collected into a class.
+Some methods to parse monthly `IGRA (Integrated Global Radiosonde Archive) <https://www1.ncdc.noaa.gov/pub/data/igra/>`_ files (ending in '-mly.txt') collected into a class.
     """
     num = re.compile('(\d+)')
     name = re.compile('([^_]+)_(\d+)')
@@ -116,7 +116,7 @@ Some methods to parse monthly IGRA files (ending in '-mly.txt') collected into a
 
     @classmethod
     def txt_to_xarray(cls, filename, stations, numeric=True, zip=None):
-        """Return xarray.DataArray from `IGRA (Integrated Global Radiosonde Archive) <https://www1.ncdc.noaa.gov/pub/data/igra/>`_ monthly data files. See also :meth:`tar_to_xarray`.
+        """Return xarray.DataArray from IGRA monthly data files. See also :meth:`tar_to_xarray`.
 
         :param filename: name of regular text file or zipped file (need to give *zip* argument too)
         :param stations: list of station ids (full string) to extract
