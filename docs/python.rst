@@ -1,5 +1,5 @@
 Python
 ======
 
-.. automodule:: python.IGRA
+.. automodule:: python.datamod.IGRA
                 :members:
