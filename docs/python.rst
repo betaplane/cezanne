@@ -1,8 +1,10 @@
 Python
 ======
 
-.. automodule:: python.datamod.IGRA
-   :members:
+.. toctree::
+   :maxdepth: 2
 
-.. automodule:: python.datamod.NCDC
+   data
+
+.. automodule:: python.helpers
    :members:

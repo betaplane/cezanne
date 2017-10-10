@@ -28,7 +28,7 @@ class Mock(MagicMock):
     def __getattr__(cls, name):
         return MagicMock()
 
-MOCK_MODULES = ['pycurl']
+MOCK_MODULES = ['pycurl', 'pandas', 'xarray', 'numpy']
 sys.modules.update((name, Mock()) for name in MOCK_MODULES)
 
 
@@ -191,5 +191,6 @@ intersphinx_mapping = {
     'python': ('https://docs.python.org/', None),
     'np': ('http://docs.scipy.org/doc/numpy/', None),
     'xr': ('http://xarray.pydata.org/en/stable', None),
-    'pd': ('http://pandas.pydata.org/pandas-docs/stable/', None)
+    'pd': ('http://pandas.pydata.org/pandas-docs/stable/', None),
+    'mpl': ('http://matplotlib.org/', None)
 }

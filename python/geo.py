@@ -63,6 +63,21 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
     c = [r[0] for r in c if len(r)>0]
     return np.unravel_index(c, s) if mask is None else (i[c], j[c])
 
+
+def nearest(grid_lon, grid_lat, lon, lat):
+    from pyproj import Geod
+    from functools import partial
+    inv = partial(Geod(ellps='WGS84').inv, lon, lat)
+
+    def dist(x, y):
+        return inv(x, y)[2]
+
+    dv = np.vectorize(dist)
+    d = dv(grid_lon, grid_lat)
+    lat_idx, lon_idx = np.unravel_index(np.argmin(d), grid_lon.shape)
+    return lat_idx, lon_idx, d[lat_idx, lon_idx]
+
+
 @singledispatch
 def domain_bounds(ds, test=None):
     coords = zip(ds.corner_lons[-4:], ds.corner_lats[-4:])
@@ -113,3 +128,25 @@ def affine(x, y):
 @affine.register(DataArray)
 def _(x, y):
     return affine(x.values, y.values)
+
+
+class box(object):
+    def __init__(self, *x):
+        self.x1, self.x2 = sorted(x[:2])
+        self.y1, self.y2 = sorted(x[2:])
+
+    @property
+    def rect(self):
+        return [(self.x1, self.x1, self.x2, self.x2, self.x1), (self.y1, self.y2, self.y2, self.y1, self.y1)]
+
+    def isel(self, x):
+        i = np.where((x.lon >= min(self.x1, self.x2)) & (x.lon <= max(self.x1, self.x2)))[0]
+        j = np.where((x.lat >= min(self.y1, self.y2)) & (x.lat <= max(self.y1, self.y2)))[0]
+        return x.isel(lon=i, lat=j)
+
+    def inside(self, lon, lat):
+        return (self.x1 <= lon <= self.x2) & (self.y1 <= lat <= self.y2)
+
+    def stations(self, stations, lon, lat):
+        sta = stations[[lon, lat]]
+        return sta.loc[[self.inside(*st) for st in sta.as_matrix()]]
