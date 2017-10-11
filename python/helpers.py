@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 from datetime import tzinfo, timedelta
-from dateutil.parser import parse
 import numpy as np
 import pandas as pd
 import os, re

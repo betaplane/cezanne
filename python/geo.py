@@ -150,3 +150,19 @@ class box(object):
     def stations(self, stations, lon, lat):
         sta = stations[[lon, lat]]
         return sta.loc[[self.inside(*st) for st in sta.as_matrix()]]
+
+
+class GeoBase(object):
+    """
+A class to hold transformations from two Latitude/Longitue dimensions on a :class:`xr.DataArray` to a single dimension (e.g. for regression purposes).
+    """
+    def __init__(self, Y, mask=None, mean=False, std=False):
+        s = lambda x: x.stack(space = ('lat', 'lon'))
+        if mean:
+            Y = Y - Y.mean('time')
+        if std:
+            Y = Y / Y.std('time')
+        self.Y = Y.stack(space = ('lat', 'lon')).transpose('time', 'space')
+        if mask is not None: # check if this is even necessary if masked values are nan and stack() is used
+            self.Y = self.Y.sel(space = s(mask).values.astype(bool).flatten())
+        self.N, self.D = self.Y.shape
