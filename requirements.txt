@@ -3,3 +3,5 @@ pandas==0.20.3
 pycurl==7.43.0
 xarray==0.9.6
 beautifulsoup4==4.6.0
+Cartopy==0.15.1
+Shapely==1.6.1
