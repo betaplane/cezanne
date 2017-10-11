@@ -28,7 +28,7 @@ class Mock(MagicMock):
     def __getattr__(cls, name):
         return MagicMock()
 
-MOCK_MODULES = ['pycurl', 'pandas', 'xarray', 'numpy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely']
+MOCK_MODULES = ['pycurl', 'pandas', 'xarray', 'numpy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry']
 sys.modules.update((name, Mock()) for name in MOCK_MODULES)
 
 
