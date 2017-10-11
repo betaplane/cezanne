@@ -6,5 +6,20 @@ Python
 
    data
 
+Helpers
+-------
+             
 .. automodule:: python.helpers
+   :members:
+
+Geo
+---
+
+.. automodule:: python.geo
+   :members:
+
+Plotting
+--------
+
+.. automodule:: python.plots
    :members:
