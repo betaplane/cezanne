@@ -165,7 +165,7 @@ Some methods to parse monthly `IGRA (Integrated Global Radiosonde Archive) <http
 
     @classmethod
     def read_stations(cls, filename, **kwargs):
-        """Parse `station-list <https://www1.ncdc.noaa.gov/pub/data/igra/https://www1.ncdc.noaa.gov/pub/data/igra/igra2-station-list.txt>`_ file from `IGRA <https://www1.ncdc.noaa.gov/pub/data/igra/https://www1.ncdc.noaa.gov/pub/data/igra/>`_.
+        """Parse `station-list <https://www1.ncdc.noaa.gov/pub/data/igra/igra2-station-list.txt>`_ file from `IGRA <https://www1.ncdc.noaa.gov/pub/data/igra/>`_.
 
         :param filename: file to parse.
         :rtype: :class:`pandas.DataFrame`
