@@ -61,11 +61,15 @@ Class to read in NCEI (National Centers for Environmental Information, formerly 
         self.members = self.tf.getmembers()
 
     def find(self, s):
-        return [m for m in self.members if re.search(s, m.name)]
+        info = [m for m in self.members if re.search(s, m.name)]
+        if len(info)==1:
+            return info[0]
+        raise Exception('Multiple files found.')
 
     def data(self, info):
+        info = info if isinstance(info, tarfile.TarInfo) else self.find(str(info))
         bio = BytesIO(self.tf.extractfile(info).read())
-        df = pd.read_fwf(bio, header=None, widths=self.widths, na_values='-9999')
+        df = pd.read_fwf(bio, header=None, widths=self.ghcnd_widths, na_values='-9999')
         rows = pd.MultiIndex.from_arrays((['{}-{}'.format(*d) for i, d in df[[1, 2]].iterrows()], df[3]),
                                     names=['months', 'field'])
         data = xr.concat([xr.DataArray(df.iloc[:, i::4], coords=[('rows', rows), ('days', range(1, 32))]) 

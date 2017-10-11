@@ -145,17 +145,23 @@ Some methods to parse monthly `IGRA (Integrated Global Radiosonde Archive) <http
 
     @classmethod
     def tar_to_xarray(cls, *args, tar='all', **kwargs):
-        """Wrapper around :meth:`txt_to_xarray` for tarfiles, with same arguments plus *tar*.
+        """Wrapper around :meth:`txt_to_xarray` for tarfiles, with same arguments but `zip` replaced with `tar`.
 
-        :param tar: If 'all', extract all files in archive, otherwise this should be the name of the individual file to extract from the tar archive.
-        :rtype: :class:`xarray.DataArray`
+        :param tar: If 'all', extract all files in archive, if a :obj:`str`, extract the file with this precise name, and if a compiled :mod:`regular expression<re>`, search the tarfile for members that match.
+        :rtype: :class:`xarray.DataArray` or :class:`Monthly` instance if `tar` is a regular expression (so that an attribute `members` can be attached with saves the result from calling :meth:`~tarfile.TarFile.getmembers` on the opened :class:`tarfile.TarFile`)
 
         """
         with tarfile.open(args[0]) as tarf:
             if tar == 'all':
                 return xr.merge([cls._untar(tarf, m, *args[1:], **kwargs) for m in tarf.getmembers()])
-            else:
+            elif isinstance(tar, str):
                 return cls.txt_to_xarray(BytesIO(tarf.extractfile(tar).read()), *args[1:], **kwargs)
+            else:
+                self = cls()
+                self.members = tarf.getmembers()
+                self.data = xr.merge([self._untar(tarf, m, *args[1:], **kwargs)
+                                      for m in self.members if tar.search(m.name)])
+                return self
 
     @classmethod
     def read_stations(cls, filename, **kwargs):

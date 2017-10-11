@@ -203,8 +203,9 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
     :type label: :obj:`bool`
     :param color: mapping from color values to row indexes whose labels should be printed in the given color
     :type color: :obj:`dict` {color spec: [row indexes]}
-    :returns: 
-    :rtype: 
+
+    :Keyword Arguments:
+        Same as for call to :func:`matplotlib.figure.subplots_adjust` / :class:`matplotlib.figure.SubplotParams`
 
     """
     import matplotlib.pyplot as plt
