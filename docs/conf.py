@@ -31,7 +31,7 @@ from unittest.mock import MagicMock
 # MOCK_MODULES = ['pycurl', 'pandas', 'xarray', 'numpy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry']
 # sys.modules.update((name, Mock()) for name in MOCK_MODULES)
 
-autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'matplotlib', 'cartopy', 'shapely']
+autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'matplotlib', 'cartopy', 'shapely', 'shapely.geometry']
 
 # -- General configuration ------------------------------------------------
 
