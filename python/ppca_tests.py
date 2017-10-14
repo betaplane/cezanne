@@ -2,9 +2,10 @@
 import matplotlib.pyplot as plt
 import xarray as xr
 import numpy as np
-# import tensorflow as tf
-# import edward as ed
+import tensorflow as tf
+import edward as ed
 import bayespy as bp
+import bayespy.inference.vmp.transformations as bpt
 
 # N number of examples ('time')
 # D dimension of example ('space')
@@ -59,7 +60,7 @@ class PCA(object):
         print('reconstruction errors: ', err)
         return self
 
-        # Note: this simplified rotation applies only to probabilistic PCA, which already has some of the scalings built in.
+    # Note: this simplified rotation applies only to probabilistic PCA, which already has some of the scalings built in.
     def rotate(self):
         e, v = np.linalg.eigh(self.w.T.dot(self.w))
         w_rot = self.w.dot(v)
@@ -127,7 +128,7 @@ class probPCA(PCA):
             pass
 
 class vbPCA(PCA):
-    def __init__(self, x1, K, n_iter):
+    def __init__(self, x1, K, n_iter, rotate=False):
         D, N = x1.shape
         z = bp.nodes.GaussianARD(0, 1, plates=(1, N), shape=(K, ))
         alpha = bp.nodes.Gamma(1e-5, 1e-5, plates=(K, ))
@@ -136,6 +137,13 @@ class vbPCA(PCA):
         x = bp.nodes.GaussianARD(bp.nodes.SumMultiply('d,d->', z, w), tau)
         x.observe(x1)
         q = bp.inference.VB(x, z, w, alpha, tau)
+
+        if rotate:
+            rot_z = bpt.RotateGaussianARD(z)
+            rot_w = bpt.RotateGaussianARD(w, alpha)
+            R = bpt.RotationOptimizer(rot_z, rot_w, K)
+            q.set_callback(R.rotate)
+
         w.initialize_from_random()
         q.update(repeat=n_iter)
 
