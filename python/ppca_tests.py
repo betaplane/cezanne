@@ -2,20 +2,23 @@
 import matplotlib.pyplot as plt
 import xarray as xr
 import numpy as np
-import tensorflow as tf
-import edward as ed
+# import tensorflow as tf
+# import edward as ed
 import bayespy as bp
 
 # N number of examples ('time')
 # D dimension of example ('space')
 # K number of principal components
 
-def whitened_test_data(N=5000, D=5, K=5, s=1):
+def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
     w = np.random.normal(0, 1, (D, K))
     z = np.random.normal(0, 1, (K, N))
     x = w.dot(z)
     p = detPCA(x, K)
-    return x, x + np.random.normal(0, s, (D, N)), p.w, p.z
+    mask = np.zeros(x.shape).flatten()
+    mask[np.random.randint(0, len(mask), round(missing * len(mask)))] = 1
+    x1 = np.ma.masked_array(x.flatten(), mask).reshape(x.shape)
+    return x, x1 + np.random.normal(0, s, (D, N)), p.w, p.z
 
 
 def tf_rotate(w, z):
