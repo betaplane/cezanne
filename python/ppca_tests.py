@@ -93,18 +93,19 @@ class probPCA(PCA):
             s = tf.Variable(noise[1], dtype=tf.float32)
             s_print = s
         elif noise == 'full':
-            # g = ed.models.Gamma(1e-5, 1e-5)
-            ig = ed.models.InverseGamma(1e-5, 1e-5)
-            # s = g**-.5 #tf.pow(g, -0.5)
-            qg = ed.models.TransformedDistribution(
-                ed.models.NormalWithSoftplusScale(tf.Variable(0.), tf.Variable(1.)),
-                bijector=tf.contrib.distributions.bijectors.Exp())
-            # KL.update({g: qg})
+            g = ed.models.Gamma(1e-5, 1e-5)
+            # ig = ed.models.InverseGamma(1e-5, 1e-5)
+            s = tf.pow(g, tf.constant(-0.5))
+            qg = ed.models.GammaWithSoftplusConcentrationRate(
+                tf.Variable(tf.random_normal((), 30, 1)), tf.Variable(tf.random_normal((), 1, 1)))
+            # qg = ed.models.TransformedDistribution(
+            #     ed.models.NormalWithSoftplusScale(tf.Variable(0.), tf.Variable(1.)),
+            #     bijector=tf.contrib.distributions.bijectors.Exp())
             # qg = ed.models.InverseGammaWithSoftplusConcentrationRate(
             #     tf.Variable(tf.random_normal(shape=())), tf.Variable(tf.random_normal(shape=())))
-            KL.update({ig: qg})
-            s = tf.sqrt(ig)
-            # s_print = qg.mean()
+            KL.update({g: qg})
+            # s = tf.sqrt(ig)
+            s_print = qg.mean()
         else: # if noise is a simple number
             s = tf.constant(noise)
             s_print = s
@@ -114,7 +115,7 @@ class probPCA(PCA):
         inference = ed.KLqp(KL, data={X: x1})
         # edward doesn't seem to have context manager here, but it also doesn't seem
         # necessary to have a session if one uses .eval()
-        out = inference.run(n_iter=n_iter)
+        out = inference.run(n_iter=n_iter, n_samples=10)
         # y = tf.matmul(qw.mean(), qz.mean()).eval()
 
         sess = ed.get_session()
