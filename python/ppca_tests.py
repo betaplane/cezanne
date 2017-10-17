@@ -39,7 +39,7 @@ class PCA(object):
         (w, z) = self.rotate() if rotate else (self.w, self.z)
         x = w.dot(z)
 
-        # here we scale and sign the pc's and W matrix to facilitate compariso with the originals
+        # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
         # Note: in deterministic PCA, e will be an array of ones, s.t. potentially the sorting (i) may be undetermined and mess things up.
         if not isinstance(self, detPCA):
             e = (w ** 2).sum(0)**.5
@@ -89,33 +89,34 @@ class probPCA(PCA):
 
         KL = {W: QW, Z: QZ}
 
-        if hasattr(noise, '__iter__') and noise[0] == 'point':
-            s = tf.Variable(noise[1], dtype=tf.float32)
-            s_print = s
-        elif noise == 'full':
-            g = ed.models.Gamma(1e-5, 1e-5)
-            # ig = ed.models.InverseGamma(1e-5, 1e-5)
-            s = tf.pow(g, tf.constant(-0.5))
-            qg = ed.models.GammaWithSoftplusConcentrationRate(
-                tf.Variable(tf.random_normal((), 30, 1)), tf.Variable(tf.random_normal((), 1, 1)))
-            # qg = ed.models.TransformedDistribution(
-            #     ed.models.NormalWithSoftplusScale(tf.Variable(0.), tf.Variable(1.)),
-            #     bijector=tf.contrib.distributions.bijectors.Exp())
-            # qg = ed.models.InverseGammaWithSoftplusConcentrationRate(
-            #     tf.Variable(tf.random_normal(shape=())), tf.Variable(tf.random_normal(shape=())))
-            KL.update({g: qg})
-            # s = tf.sqrt(ig)
-            s_print = qg.mean()
+        if hasattr(noise, '__iter__'):
+            if noise[0] == 'point':
+                s = tf.Variable(noise[1], dtype=tf.float32)
+                s_print = s
+            elif noise[0] == 'full':
+                g = ed.models.InverseGamma(1e-5, 1e-5)
+                # ig = ed.models.InverseGamma(1e-5, 1e-5)
+                # qg = ed.models.InverseGammaWithSoftplusConcentrationRate(
+                #     tf.Variable(noise[1]), tf.Variable(noise[2]))
+                # s_print = tf.Variable(noise[1])
+                qg = ed.models.TransformedDistribution(
+                    ed.models.NormalWithSoftplusScale(tf.Variable(noise[1]), tf.Variable(noise[2])),
+                    bijector=tf.contrib.distributions.bijectors.Exp())
+                # qg = ed.models.InverseGammaWithSoftplusConcentrationRate(
+                #     tf.Variable(tf.random_normal(shape=())), tf.Variable(tf.random_normal(shape=())))
+                s = g**-.5
+                s_print = tf.exp(qg.distribution.mean())**-.5
+                KL.update({g: qg})
         else: # if noise is a simple number
             s = tf.constant(noise)
             s_print = s
 
         X = ed.models.Normal(tf.matmul(W, Z), s * tf.ones((D, N)))
 
-        inference = ed.KLqp(KL, data={X: x1})
+        self.inference = ed.KLqp(KL, data={X: x1})
         # edward doesn't seem to have context manager here, but it also doesn't seem
         # necessary to have a session if one uses .eval()
-        out = inference.run(n_iter=n_iter, n_samples=10)
+        self.out = self.inference.run(n_iter=n_iter, n_samples=10)
         # y = tf.matmul(qw.mean(), qz.mean()).eval()
 
         sess = ed.get_session()
@@ -136,7 +137,7 @@ class vbPCA(PCA):
         w = bp.nodes.GaussianARD(0, alpha, plates=(D, 1), shape=(K, ))
         tau = bp.nodes.Gamma(1e-5, 1e-5)
         x = bp.nodes.GaussianARD(bp.nodes.SumMultiply('d,d->', z, w), tau)
-        x.observe(x1)
+        x.observe(x1, mask=~x1.mask)
         q = bp.inference.VB(x, z, w, alpha, tau)
 
         if rotate:
@@ -150,6 +151,7 @@ class vbPCA(PCA):
 
         self.w = w.get_moments()[0].squeeze()
         self.z = z.get_moments()[0].squeeze().T
+        self.tau = tau
 
         print('alphas: ', alpha.get_moments()[0])
         print('estimated noise: ', tau.get_moments()[0])
