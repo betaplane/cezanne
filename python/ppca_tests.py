@@ -52,7 +52,7 @@ class PCA(object):
         self.w_rot = w
 
         err = {
-            'noise': np.abs(x1 - x).sum(),
+            'noise': np.abs(self.x1 - x).sum(),
             'clean': np.abs(x0 - x).sum(),
             'W': np.abs(w0[:, :w.shape[1]] - w).sum(),
             'Z': np.abs(z0[:z.shape[0], :] - z).sum()
@@ -70,68 +70,87 @@ class PCA(object):
 
 class detPCA(PCA):
     def __init__(self, x1, K=5):
+        self.x1 = x1
         self.e, v = np.linalg.eigh(np.cov(x1))
         self.w = v[:, np.argsort(self.e)[::-1][:K]]
         self.z = self.w.T.dot(x1)
 
 
 class probPCA(PCA):
+    @staticmethod
+    def lognormal():
+        return ed.models.TransformedDistribution(
+            ed.models.Normal(
+                # since we use this for variance-like variables
+                tf.nn.softplus(tf.Variable(tf.random_normal(()))),
+                tf.nn.softplus(tf.Variable(tf.random_normal(())))
+            ), bijector = tf.contrib.distributions.bijectors.Exp(),
+            name = 'LogNormal'
+        )
+
+    @staticmethod
+    def lognormalmean(ds):
+        xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
+        return xmu * xvar ** .5
+
+    @staticmethod
+    def lognormalvariance(ds):
+        xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
+        return xmu ** 2 * xvar * (xvar - 1)
+
     def __init__(self, x1, K=5, n_iter=500, noise=1.0):
         self.x1 = x1
         D, N = x1.shape
         W = ed.models.Normal(tf.zeros((D, K)), tf.ones((D, K)))
         Z = ed.models.Normal(tf.zeros((K, N)), tf.ones((K, N)))
 
-        QW = ed.models.NormalWithSoftplusScale(tf.Variable(tf.random_normal(W.shape)),
-                              tf.Variable(tf.random_normal(W.shape)))
-        QZ = ed.models.NormalWithSoftplusScale(tf.Variable(tf.random_normal(Z.shape)),
-                              tf.Variable(tf.random_normal(Z.shape)))
+        # somewhat skeptical about the NormalWithSoftplusScale method (the GammaWithSoftplusConcentrationRate resulted in negative concentration for some reason)
+        QW = ed.models.Normal(tf.Variable(tf.random_normal(W.shape)),
+                             tf.nn.softplus(tf.Variable(tf.random_normal(W.shape))))
+        QZ = ed.models.Normal(tf.Variable(tf.random_normal(Z.shape)),
+                              tf.nn.softplus(tf.Variable(tf.random_normal(Z.shape))))
 
         KL = {W: QW, Z: QZ}
 
-        if hasattr(noise, '__iter__'):
-            if noise[0] == 'point':
-                s = tf.Variable(noise[1], dtype=tf.float32)
-                s_print = s
-            elif noise[0] == 'full':
-                g = ed.models.InverseGamma(1e-5, 1e-5)
-                # ig = ed.models.InverseGamma(1e-5, 1e-5)
-                # qg = ed.models.InverseGammaWithSoftplusConcentrationRate(
-                #     tf.Variable(noise[1]), tf.Variable(noise[2]))
-                # s_print = tf.Variable(noise[1])
-                qg = ed.models.TransformedDistribution(
-                    ed.models.NormalWithSoftplusScale(tf.Variable(noise[1]), tf.Variable(noise[2])),
-                    bijector=tf.contrib.distributions.bijectors.Exp())
-                # qg = ed.models.InverseGammaWithSoftplusConcentrationRate(
-                #     tf.Variable(tf.random_normal(shape=())), tf.Variable(tf.random_normal(shape=())))
-                s = g**-.5
-                s_print = tf.exp(qg.distribution.mean())**-.5
-                KL.update({g: qg})
+        if hasattr(noise, '__iter__') and noise[0] == 'point':
+                tau = tf.Variable(noise[1], dtype=tf.float32)
+                tau_print = tau
+                self.tau = tau
+        elif noise == 'full':
+            # the black-box KLqp algorithm used by Edward (score function gradient) doesn't deal well with Gamma and Dirichlet:
+            # https://github.com/blei-lab/edward/issues/389
+            # https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
+            s = ed.models.Gamma(1e-5, 1e-5)
+            qs = self.lognormal()
+            tau = s ** -.5
+            tau_print = self.lognormalmean(qs.distribution)
+            KL.update({s: qs})
+            self.tau = qs
         else: # if noise is a simple number
-            s = tf.constant(noise)
-            s_print = s
+            tau = tf.constant(noise)
+            tau_print = tau
 
-        X = ed.models.Normal(tf.matmul(W, Z), s * tf.ones((D, N)))
+        X = ed.models.Normal(tf.matmul(W, Z), tau * tf.ones((D, N)))
+        # this should be the version with X modeled with full covariances
+        # self.tau = tf.Variable(tf.random_normal((D, D)))
+        # X = ed.models.MultivariateNormalTriL(
+        #     tf.matrix_transpose(tf.matmul(W, Z)), self.tau)
 
         self.inference = ed.KLqp(KL, data={X: x1})
-        # edward doesn't seem to have context manager here, but it also doesn't seem
-        # necessary to have a session if one uses .eval()
         self.out = self.inference.run(n_iter=n_iter, n_samples=10)
-        # y = tf.matmul(qw.mean(), qz.mean()).eval()
 
         sess = ed.get_session()
         self.w, self.z = sess.run([QW.mean(), QZ.mean()])
-        # rotate(QW.mean().eval(), QZ.mean().eval())
-        # self.x = w.dot(z)
 
         try:
-            print('estimated/exact noise: ', s_print.eval())
+            print('estimated/exact noise: ', tau_print.eval())
         except:
             pass
 
 class vbPCA(PCA):
     def __init__(self, x1, K, n_iter, rotate=False):
         D, N = x1.shape
+        self.x1 = x1
         z = bp.nodes.GaussianARD(0, 1, plates=(1, N), shape=(K, ))
         alpha = bp.nodes.Gamma(1e-5, 1e-5, plates=(K, ))
         w = bp.nodes.GaussianARD(0, alpha, plates=(D, 1), shape=(K, ))
@@ -159,4 +178,5 @@ class vbPCA(PCA):
 
 
 if __name__=='__main__':
-    x0, x1, W, Z = whitened_test_data(5000, 5, 5, 1)
+    # x0, x1, W, Z = whitened_test_data(5000, 5, 5, 1)
+    pass
