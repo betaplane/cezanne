@@ -15,7 +15,7 @@ def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
     w = np.random.normal(0, 1, (D, K))
     z = np.random.normal(0, 1, (K, N))
     x = w.dot(z)
-    p = detPCA(x, K)
+    p = detPCA(x, D)
     mask = np.zeros(x.shape).flatten()
     mask[np.random.randint(0, len(mask), round(missing * len(mask)))] = 1
     x1 = np.ma.masked_array(x.flatten(), mask).reshape(x.shape)
@@ -78,14 +78,14 @@ class detPCA(PCA):
 
 class probPCA(PCA):
     @staticmethod
-    def lognormal():
+    def lognormal(shape=(), name='LogNormal'):
         return ed.models.TransformedDistribution(
             ed.models.Normal(
                 # since we use this for variance-like variables
-                tf.nn.softplus(tf.Variable(tf.random_normal(()))),
-                tf.nn.softplus(tf.Variable(tf.random_normal(())))
+                tf.nn.softplus(tf.Variable(tf.random_normal(shape))),
+                tf.nn.softplus(tf.Variable(tf.random_normal(shape)))
             ), bijector = tf.contrib.distributions.bijectors.Exp(),
-            name = 'LogNormal'
+            name = name
         )
 
     @staticmethod
@@ -98,10 +98,14 @@ class probPCA(PCA):
         xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
         return xmu ** 2 * xvar * (xvar - 1)
 
-    def __init__(self, x1, K=5, n_iter=500, noise='point', full_cov=False):
+    def print(self):
+        for k, v in self.inference.latent_vars.items():
+            if v.name in ['alpha']:
+                print('{}: {}'.format(v.name, v.mean().eval()))
+
+    def __init__(self, x1, K=5, n_iter=500, noise='point', full_cov=False, ARD=False):
         self.x1 = x1
         D, N = x1.shape
-        W = ed.models.Normal(tf.zeros((D, K)), tf.ones((D, K)))
         if full_cov:
             self.cov = tf.nn.softplus(tf.Variable(tf.random_normal((K, K))))
             Z = ed.models.MultivariateNormalTriL(tf.zeros((N, K)), self.cov)
@@ -109,15 +113,24 @@ class probPCA(PCA):
             Z = ed.models.Normal(tf.zeros((N, K)), tf.ones((N, K)))
 
         # somewhat skeptical about the NormalWithSoftplusScale method (the GammaWithSoftplusConcentrationRate resulted in negative concentration for some reason)
-        QW = ed.models.Normal(tf.Variable(tf.random_normal(W.shape)),
-                             tf.nn.softplus(tf.Variable(tf.random_normal(W.shape))))
         QZ = ed.models.Normal(tf.Variable(tf.random_normal(Z.shape)),
                               tf.nn.softplus(tf.Variable(tf.random_normal(Z.shape))))
+        KL = {Z: QZ}
 
-        KL = {W: QW, Z: QZ}
+        if ARD:
+            alpha = ed.models.Gamma(1e-5 * tf.ones((1, K)), 1e-5 * tf.ones((1, K)))
+            W = ed.models.Normal(tf.zeros((D, K)), alpha ** -.5)
+            qa = self.lognormal(alpha.shape, 'alpha')
+            KL[alpha] = qa
+        else:
+            W = ed.models.Normal(tf.zeros((D, K)), tf.ones((D, K)))
+
+        QW = ed.models.Normal(tf.Variable(tf.random_normal(W.shape)),
+                                  tf.nn.softplus(tf.Variable(tf.random_normal(W.shape))))
+        KL[W] = QW
 
         if noise == 'point':
-                tau = tf.nn.softplu(tf.Variable(tf.random_normal(()), dtype=tf.float32))
+                tau = tf.nn.softplus(tf.Variable(tf.random_normal(()), dtype=tf.float32))
                 tau_print = tau
                 self.tau = tau
         elif noise == 'full':
@@ -125,10 +138,10 @@ class probPCA(PCA):
             # https://github.com/blei-lab/edward/issues/389
             # https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
             s = ed.models.Gamma(1e-5, 1e-5)
-            qs = self.lognormal()
+            qs = self.lognormal(name='tau')
             tau = s ** -.5
             tau_print = self.lognormalmean(qs.distribution)
-            KL.update({s: qs})
+            KL[s] = qs
             self.tau = qs
         else: # if noise is a simple number
             tau = tf.constant(noise)
@@ -142,10 +155,9 @@ class probPCA(PCA):
         sess = ed.get_session()
         self.w, self.z = sess.run([QW.mean(), tf.matrix_transpose(QZ.mean())])
 
-        try:
-            print('estimated/exact noise: ', tau_print.eval())
-        except:
-            pass
+        print('estimated/exact noise: {}'.format(tau_print.eval()))
+        print('alphas', self.lognormalmean(qa.distribution).eval())
+
 
 class vbPCA(PCA):
     def __init__(self, x1, K, n_iter, rotate=False):
@@ -178,5 +190,5 @@ class vbPCA(PCA):
 
 
 if __name__=='__main__':
-    # x0, x1, W, Z = whitened_test_data(5000, 5, 5, 1)
+    x0, x1, W, Z = whitened_test_data(5000, 5, 4, 1)
     pass
