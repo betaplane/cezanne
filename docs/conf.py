@@ -38,7 +38,17 @@ extensions = ['sphinx.ext.autodoc',
     'sphinx.ext.viewcode',
     'sphinx.ext.githubpages']
 
-autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry']
+# http://docs.readthedocs.io/en/latest/faq.html#i-get-import-errors-on-libraries-that-depend-on-c-modules
+from unittest.mock import MagicMock
+class Mock(MagicMock):
+    @classmethod
+    def __getattr__(cls, name):
+        return MagicMock()
+
+# somehow the autodoc version doesn't work properly
+autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy']
+
+sys.modules.update((n, Mock()) for n in autodoc_mock_imports)
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
