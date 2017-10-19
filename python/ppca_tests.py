@@ -117,7 +117,7 @@ class probPCA(PCA):
         KL = {W: QW, Z: QZ}
 
         if noise == 'point':
-                tau = tf.nn.softplus(tf.Variable(tf.random_normal(()), dtype=tf.float32))
+                tau = tf.nn.softplu(tf.Variable(tf.random_normal(()), dtype=tf.float32))
                 tau_print = tau
                 self.tau = tau
         elif noise == 'full':
