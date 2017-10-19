@@ -23,3 +23,9 @@ Plotting
 
 .. automodule:: python.plots
    :members:
+
+PCA
+---
+
+.. automodule:: python.ppca_tests
+   :members:

@@ -194,5 +194,5 @@ intersphinx_mapping = {
     'np': ('http://docs.scipy.org/doc/numpy/', None),
     'xr': ('http://xarray.pydata.org/en/stable', None),
     'pd': ('http://pandas.pydata.org/pandas-docs/stable/', None),
-    'mpl': ('http://matplotlib.org/', None)
+    'mpl': ('http://matplotlib.org/', None),
 }

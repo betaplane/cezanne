@@ -1,4 +1,15 @@
 #!/usr/bin/env python
+"""
+Notes
+-----
+
+* :class:`tf.contrib.distributions.GammaWithSoftplusConcentrationRate` produced negative 'concentration'. I therefore went with using :class:`tf.nn.softplus`, also in the case of :class:`ed.models.Normal` (instead of :class:`ed.models.NormalWithSoftplusScale`).
+* The black-box :class:`ed.inference.KLqp` algorithm used by Edward (score function gradient) doesn't deal well with Gamma and Dirichlet:
+    * https://github.com/blei-lab/edward/issues/389
+    * https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
+
+"""
+
 import matplotlib.pyplot as plt
 import xarray as xr
 import numpy as np
@@ -11,8 +22,12 @@ import bayespy.inference.vmp.transformations as bpt
 # D dimension of example ('space')
 # K number of principal components
 
+np.random.seed(1)
+tf.set_random_seed(1)
+ed.set_seed(1)
+
 def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
-    w = np.random.normal(0, 1, (D, K))
+    w = np.random.normal(0, 2, (D, K))
     z = np.random.normal(0, 1, (K, N))
     x = w.dot(z)
     p = detPCA(x, D)
@@ -82,8 +97,8 @@ class probPCA(PCA):
         return ed.models.TransformedDistribution(
             ed.models.Normal(
                 # since we use this for variance-like variables
-                tf.nn.softplus(tf.Variable(tf.random_normal(shape))),
-                tf.nn.softplus(tf.Variable(tf.random_normal(shape)))
+                tf.nn.softplus(tf.Variable(tf.random_normal(shape, seed=1))),
+                tf.nn.softplus(tf.Variable(tf.random_normal(shape, seed=1)))
             ), bijector = tf.contrib.distributions.bijectors.Exp(),
             name = name
         )
@@ -103,40 +118,57 @@ class probPCA(PCA):
             if v.name in ['alpha']:
                 print('{}: {}'.format(v.name, v.mean().eval()))
 
-    def __init__(self, x1, K=5, n_iter=500, noise='point', full_cov=False, ARD=False):
+    def __init__(self, x1, K=5, n_iter=500, **kwargs):
         self.x1 = x1
         D, N = x1.shape
-        if full_cov:
-            self.cov = tf.nn.softplus(tf.Variable(tf.random_normal((K, K))))
-            Z = ed.models.MultivariateNormalTriL(tf.zeros((N, K)), self.cov)
+
+        pc_prior = kwargs.get('pc_prior', '')
+        if pc_prior == 'full':
+            self.Zcov = tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=1)))
+            Z = ed.models.MultivariateNormalTriL(tf.zeros((N, K)), self.Zcov)
         else:
             Z = ed.models.Normal(tf.zeros((N, K)), tf.ones((N, K)))
 
-        # somewhat skeptical about the NormalWithSoftplusScale method (the GammaWithSoftplusConcentrationRate resulted in negative concentration for some reason)
-        QZ = ed.models.Normal(tf.Variable(tf.random_normal(Z.shape)),
-                              tf.nn.softplus(tf.Variable(tf.random_normal(Z.shape))))
+        pc_posterior = kwargs.get('pc_posterior', '')
+        if pc_posterior == 'full':
+            QZ = ed.models.MultivariateNormalTriL(tf.Variable(tf.random_normal(Z.shape, seed=1)),
+                                                  tf.nn.softplus(tf.random_normal((K, K), seed=1)))
+        else:
+            QZ = ed.models.Normal(tf.Variable(tf.random_normal(Z.shape, seed=1)),
+                              tf.nn.softplus(tf.Variable(tf.random_normal(Z.shape, seed=1))))
         KL = {Z: QZ}
 
-        if ARD:
+        ARD = kwargs.get('ARD', '')
+        if ARD == 'full':
             alpha = ed.models.Gamma(1e-5 * tf.ones((1, K)), 1e-5 * tf.ones((1, K)))
-            W = ed.models.Normal(tf.zeros((D, K)), alpha ** -.5)
             qa = self.lognormal(alpha.shape, 'alpha')
             KL[alpha] = qa
+            a = alpha ** -.5
         else:
-            W = ed.models.Normal(tf.zeros((D, K)), tf.ones((D, K)))
+            a = tf.ones((1, K)) # in hopes that this is correctly broadcast
 
-        QW = ed.models.Normal(tf.Variable(tf.random_normal(W.shape)),
-                                  tf.nn.softplus(tf.Variable(tf.random_normal(W.shape))))
+        w_prior = kwargs.get('w_prior', '')
+        if w_prior == 'full':
+            self.Wcov = tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=1)))
+            W = ed.models.MultivariateNormalTriL(tf.zeros((D, K)), a * self.Wcov)
+        else:
+            W = ed.models.Normal(tf.zeros((D, K)), a)
+
+        w_posterior = kwargs.get('w_posterior', '')
+        if w_posterior == 'full':
+            QW = ed.models.MultivariateNormalTriL(tf.Variable(tf.random_normal((D, K), seed=1)),
+                                                  tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=1))))
+        else:
+            QW = ed.models.Normal(tf.Variable(tf.random_normal(W.shape, seed=1)),
+                                  tf.nn.softplus(tf.Variable(tf.random_normal(W.shape, seed=1))))
         KL[W] = QW
 
+        noise = kwargs.get('noise', 'point')
         if noise == 'point':
-                tau = tf.nn.softplus(tf.Variable(tf.random_normal(()), dtype=tf.float32))
-                tau_print = tau
-                self.tau = tau
+            tau = tf.nn.softplus(tf.Variable(tf.random_normal((), seed=1), dtype=tf.float32))
+            tau_print = tau
+            self.tau = tau
         elif noise == 'full':
-            # the black-box KLqp algorithm used by Edward (score function gradient) doesn't deal well with Gamma and Dirichlet:
-            # https://github.com/blei-lab/edward/issues/389
-            # https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
             s = ed.models.Gamma(1e-5, 1e-5)
             qs = self.lognormal(name='tau')
             tau = s ** -.5
@@ -156,7 +188,7 @@ class probPCA(PCA):
         self.w, self.z = sess.run([QW.mean(), tf.matrix_transpose(QZ.mean())])
 
         print('estimated/exact noise: {}'.format(tau_print.eval()))
-        print('alphas', self.lognormalmean(qa.distribution).eval())
+        # print('alphas', self.lognormalmean(qa.distribution).eval())
 
 
 class vbPCA(PCA):
@@ -190,5 +222,5 @@ class vbPCA(PCA):
 
 
 if __name__=='__main__':
-    x0, x1, W, Z = whitened_test_data(5000, 5, 4, 1)
+    x0, x1, W, Z = whitened_test_data(5000, 5, 5, 1)
     pass
