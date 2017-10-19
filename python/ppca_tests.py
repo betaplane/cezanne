@@ -98,11 +98,15 @@ class probPCA(PCA):
         xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
         return xmu ** 2 * xvar * (xvar - 1)
 
-    def __init__(self, x1, K=5, n_iter=500, noise=1.0):
+    def __init__(self, x1, K=5, n_iter=500, noise='point', full_cov=False):
         self.x1 = x1
         D, N = x1.shape
         W = ed.models.Normal(tf.zeros((D, K)), tf.ones((D, K)))
-        Z = ed.models.Normal(tf.zeros((K, N)), tf.ones((K, N)))
+        if full_cov:
+            self.cov = tf.nn.softplus(tf.Variable(tf.random_normal((K, K))))
+            Z = ed.models.MultivariateNormalTriL(tf.zeros((N, K)), self.cov)
+        else:
+            Z = ed.models.Normal(tf.zeros((N, K)), tf.ones((N, K)))
 
         # somewhat skeptical about the NormalWithSoftplusScale method (the GammaWithSoftplusConcentrationRate resulted in negative concentration for some reason)
         QW = ed.models.Normal(tf.Variable(tf.random_normal(W.shape)),
@@ -112,8 +116,8 @@ class probPCA(PCA):
 
         KL = {W: QW, Z: QZ}
 
-        if hasattr(noise, '__iter__') and noise[0] == 'point':
-                tau = tf.Variable(noise[1], dtype=tf.float32)
+        if noise == 'point':
+                tau = tf.nn.softplus(tf.Variable(tf.random_normal(()), dtype=tf.float32))
                 tau_print = tau
                 self.tau = tau
         elif noise == 'full':
@@ -130,17 +134,13 @@ class probPCA(PCA):
             tau = tf.constant(noise)
             tau_print = tau
 
-        X = ed.models.Normal(tf.matmul(W, Z), tau * tf.ones((D, N)))
-        # this should be the version with X modeled with full covariances
-        # self.tau = tf.Variable(tf.random_normal((D, D)))
-        # X = ed.models.MultivariateNormalTriL(
-        #     tf.matrix_transpose(tf.matmul(W, Z)), self.tau)
+        X = ed.models.Normal(tf.matmul(W, Z, transpose_b=True), tau * tf.ones((D, N)))
 
         self.inference = ed.KLqp(KL, data={X: x1})
         self.out = self.inference.run(n_iter=n_iter, n_samples=10)
 
         sess = ed.get_session()
-        self.w, self.z = sess.run([QW.mean(), QZ.mean()])
+        self.w, self.z = sess.run([QW.mean(), tf.matrix_transpose(QZ.mean())])
 
         try:
             print('estimated/exact noise: ', tau_print.eval())
