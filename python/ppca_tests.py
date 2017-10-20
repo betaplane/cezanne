@@ -17,24 +17,26 @@ import tensorflow as tf
 import edward as ed
 import bayespy as bp
 import bayespy.inference.vmp.transformations as bpt
+from types import MethodType
 
 # N number of examples ('time')
 # D dimension of example ('space')
 # K number of principal components
 
-np.random.seed(1)
-tf.set_random_seed(1)
-ed.set_seed(1)
+# np.random.seed(1)
+# tf.set_random_seed(1)
+# ed.set_seed(1)
 
 def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
-    w = np.random.normal(0, 2, (D, K))
+    w = np.random.normal(0, 1, (D, K))
     z = np.random.normal(0, 1, (K, N))
+    m = np.random.normal(0, 1, (D, 1))
     x = w.dot(z)
     p = detPCA(x, D)
     mask = np.zeros(x.shape).flatten()
     mask[np.random.randint(0, len(mask), round(missing * len(mask)))] = 1
     x1 = np.ma.masked_array(x.flatten(), mask).reshape(x.shape)
-    return x, x1 + np.random.normal(0, s, (D, N)), p.w, p.z
+    return x + m, x1 + m + np.random.normal(0, s, (D, N)), p.w, p.z, m
 
 
 def tf_rotate(w, z):
@@ -92,104 +94,127 @@ class detPCA(PCA):
 
 
 class probPCA(PCA):
-    @staticmethod
-    def lognormal(shape=(), name='LogNormal'):
-        return ed.models.TransformedDistribution(
+    def lognormal(self, shape=(), name='LogNormal'):
+        lognormal = ed.models.TransformedDistribution(
             ed.models.Normal(
                 # since we use this for variance-like variables
-                tf.nn.softplus(tf.Variable(tf.random_normal(shape, seed=1))),
-                tf.nn.softplus(tf.Variable(tf.random_normal(shape, seed=1)))
+                tf.nn.softplus(tf.Variable(tf.random_normal(shape, seed=self.seed)), name='{}/loc'.format(name)),
+                tf.nn.softplus(tf.Variable(tf.random_normal(shape, seed=self.seed)), name='{}/scale'.format(name)),
+                name = '{}_Normal'.format(name)
             ), bijector = tf.contrib.distributions.bijectors.Exp(),
-            name = name
+            name = '{}_LogNormal'.format(name)
         )
+        lognormal.mean = MethodType(self.lognormalmean, lognormal)
+        lognormal.variance = MethodType(self.lognormalvariance, lognormal)
+        return lognormal
 
     @staticmethod
-    def lognormalmean(ds):
+    def lognormalmean(self):
+        ds = self.distribution
         xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
         return xmu * xvar ** .5
 
     @staticmethod
-    def lognormalvariance(ds):
+    def lognormalvariance(self):
+        ds = self.distribution
         xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
         return xmu ** 2 * xvar * (xvar - 1)
 
-    def print(self):
-        for k, v in self.inference.latent_vars.items():
-            if v.name in ['alpha']:
-                print('{}: {}'.format(v.name, v.mean().eval()))
+    def print(self, *vars):
+        for v in vars:
+            if hasattr(self, v):
+                try:
+                    print(v, getattr(self, v).mean().eval())
+                except AttributeError:
+                    print(v, getattr(self, v).eval())
 
-    def __init__(self, x1, K=5, n_iter=500, **kwargs):
+    def __init__(self, x1, dims=None, n_iter=500, full_prior=[], full_posterior=[], mean='point', noise='point', seed=None):
+        self.seed = seed
+        tf.reset_default_graph()
+        sess = tf.InteractiveSession()
+        tf.set_random_seed(self.seed)
+
         self.x1 = x1
         D, N = x1.shape
+        K = D if (isinstance(dims, str) or dims is None) else dims
+        full_prior = set(full_posterior).union(full_prior)
+        KL = {}
 
-        pc_prior = kwargs.get('pc_prior', '')
-        if pc_prior == 'full':
-            self.Zcov = tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=1)))
-            Z = ed.models.MultivariateNormalTriL(tf.zeros((N, K)), self.Zcov)
-        else:
-            Z = ed.models.Normal(tf.zeros((N, K)), tf.ones((N, K)))
-
-        pc_posterior = kwargs.get('pc_posterior', '')
-        if pc_posterior == 'full':
-            QZ = ed.models.MultivariateNormalTriL(tf.Variable(tf.random_normal(Z.shape, seed=1)),
-                                                  tf.nn.softplus(tf.random_normal((K, K), seed=1)))
-        else:
-            QZ = ed.models.Normal(tf.Variable(tf.random_normal(Z.shape, seed=1)),
-                              tf.nn.softplus(tf.Variable(tf.random_normal(Z.shape, seed=1))))
-        KL = {Z: QZ}
-
-        ARD = kwargs.get('ARD', '')
-        if ARD == 'full':
-            alpha = ed.models.Gamma(1e-5 * tf.ones((1, K)), 1e-5 * tf.ones((1, K)))
-            qa = self.lognormal(alpha.shape, 'alpha')
-            KL[alpha] = qa
+        if dims == 'full':
+            alpha = ed.models.Gamma(1e-5 * tf.ones((1, D)), 1e-5 * tf.ones((1, D)), name='model/alpha')
+            qa = self.lognormal(alpha.shape, 'posterior/alpha')
+            KL.update({alpha: qa})
+            self.alpha = qa
             a = alpha ** -.5
+        elif dims == 'point':
+            raise Exception('not implemented')
         else:
-            a = tf.ones((1, K)) # in hopes that this is correctly broadcast
+            a = tf.ones((1, K), name='alpha') # in hopes that this is correctly broadcast
 
-        w_prior = kwargs.get('w_prior', '')
-        if w_prior == 'full':
-            self.Wcov = tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=1)))
-            W = ed.models.MultivariateNormalTriL(tf.zeros((D, K)), a * self.Wcov)
-        else:
-            W = ed.models.Normal(tf.zeros((D, K)), a)
+        with tf.name_scope('model'):
+            if 'Z' in full_prior:
+                self.Z_scale = tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=self.seed)), name='Z/scale')
+                Z = ed.models.MultivariateNormalTriL(tf.zeros((N, K)), self.Z_scale, name='Z')
+            else:
+                Z = ed.models.Normal(tf.zeros((N, K), name='Z/loc'), tf.ones((N, K), name='Z/scale'), name='Z')
 
-        w_posterior = kwargs.get('w_posterior', '')
-        if w_posterior == 'full':
-            QW = ed.models.MultivariateNormalTriL(tf.Variable(tf.random_normal((D, K), seed=1)),
-                                                  tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=1))))
-        else:
-            QW = ed.models.Normal(tf.Variable(tf.random_normal(W.shape, seed=1)),
-                                  tf.nn.softplus(tf.Variable(tf.random_normal(W.shape, seed=1))))
-        KL[W] = QW
+            if 'W' in full_prior:
+                self.W_scale = tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=self.seed)), name='W/scale')
+                W = ed.models.MultivariateNormalTriL(tf.zeros((D, K)), a * self.W_scale, name='W')
+            else:
+                W = ed.models.Normal(tf.zeros((D, K)), a, name='W')
 
-        noise = kwargs.get('noise', 'point')
+        with tf.name_scope('posterior'):
+            if 'Z' in full_posterior:
+                QZ = ed.models.MultivariateNormalTriL(
+                    tf.Variable(tf.random_normal(Z.shape, seed=self.seed), name='Z/loc'),
+                    tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=self.seed), name='Z/scale')), name='Z')
+            else:
+                QZ = ed.models.Normal(
+                    tf.Variable(tf.random_normal(Z.shape, seed=self.seed), name='Z/loc'),
+                    tf.nn.softplus(tf.Variable(tf.random_normal(Z.shape, seed=self.seed), name='Z/scale')), name='Z')
+
+            if 'W' in full_posterior:
+                QW = ed.models.MultivariateNormalTriL(
+                    tf.Variable(tf.random_normal((D, K), seed=self.seed), name='W/loc'),
+                    tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=self.seed), name='W/scale')), name='W')
+            else:
+                QW = ed.models.Normal(
+                    tf.Variable(tf.random_normal(W.shape, seed=self.seed), name='W/loc'),
+                    tf.nn.softplus(tf.Variable(tf.random_normal(W.shape, seed=self.seed), name='W/scale')), name='W')
+
+        KL.update({Z: QZ, W: QW})
+
+
         if noise == 'point':
-            tau = tf.nn.softplus(tf.Variable(tf.random_normal((), seed=1), dtype=tf.float32))
-            tau_print = tau
+            tau = tf.nn.softplus(tf.Variable(tf.random_normal((), seed=self.seed), name='tau'))
             self.tau = tau
         elif noise == 'full':
-            s = ed.models.Gamma(1e-5, 1e-5)
-            qs = self.lognormal(name='tau')
+            s = ed.models.Gamma(1e-5, 1e-5, name='model/tau')
+            qs = self.lognormal(name='posterior/tau')
             tau = s ** -.5
-            tau_print = self.lognormalmean(qs.distribution)
-            KL[s] = qs
+            KL.update({s: qs})
             self.tau = qs
         else: # if noise is a simple number
             tau = tf.constant(noise)
-            tau_print = tau
 
-        X = ed.models.Normal(tf.matmul(W, Z, transpose_b=True), tau * tf.ones((D, N)))
+        if mean == 'full':
+            m = ed.models.Normal(tf.zeros((D, 1)), tf.ones((D, 1)))
+            self.mu = ed.models.Normal(tf.Variable(tf.random_normal((D, 1), seed=self.seed)),
+                                       tf.nn.softplus(tf.Variable(tf.random_normal((D, 1), seed=self.seed))))
+            KL.update({m: self.mu})
+        else:
+            m = tf.Variable(tf.random_normal((D, 1), seed=self.seed), name='mean')
+            self.mu = m
+
+        X = ed.models.Normal(tf.matmul(W, Z, transpose_b=True) + m, tau * tf.ones((D, N)))
 
         self.inference = ed.KLqp(KL, data={X: x1})
-        self.out = self.inference.run(n_iter=n_iter, n_samples=10)
+        self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir='log')
 
-        sess = ed.get_session()
         self.w, self.z = sess.run([QW.mean(), tf.matrix_transpose(QZ.mean())])
 
-        print('estimated/exact noise: {}'.format(tau_print.eval()))
-        # print('alphas', self.lognormalmean(qa.distribution).eval())
-
+        self.print('tau', 'mu', 'alpha')
 
 class vbPCA(PCA):
     def __init__(self, x1, K, n_iter, rotate=False):
@@ -198,10 +223,11 @@ class vbPCA(PCA):
         z = bp.nodes.GaussianARD(0, 1, plates=(1, N), shape=(K, ))
         alpha = bp.nodes.Gamma(1e-5, 1e-5, plates=(K, ))
         w = bp.nodes.GaussianARD(0, alpha, plates=(D, 1), shape=(K, ))
+        m = bp.nodes.GaussianARD(0, 1, shape=(D, 1))
         tau = bp.nodes.Gamma(1e-5, 1e-5)
-        x = bp.nodes.GaussianARD(bp.nodes.SumMultiply('d,d->', z, w), tau)
+        x = bp.nodes.GaussianARD(bp.nodes.Add(bp.nodes.Dot(z, w), m), tau)
         x.observe(x1, mask=~x1.mask)
-        q = bp.inference.VB(x, z, w, alpha, tau)
+        q = bp.inference.VB(x, z, w, alpha, tau, m)
 
         if rotate:
             rot_z = bpt.RotateGaussianARD(z)
@@ -214,6 +240,7 @@ class vbPCA(PCA):
 
         self.w = w.get_moments()[0].squeeze()
         self.z = z.get_moments()[0].squeeze().T
+        self.mu = m.get_moments()[0].squeeze()
         self.tau = tau
 
         print('alphas: ', alpha.get_moments()[0])
@@ -222,5 +249,5 @@ class vbPCA(PCA):
 
 
 if __name__=='__main__':
-    x0, x1, W, Z = whitened_test_data(5000, 5, 5, 1)
+    x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1)
     pass
