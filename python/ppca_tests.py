@@ -54,7 +54,7 @@ def tf_rotate(w, z):
 class PCA(object):
     def critique(self, x0, w0, z0, rotate=False):
         (w, z) = self.rotate() if rotate else (self.w, self.z)
-        x = w.dot(z)
+        self.x = w.dot(z)
 
         # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
         # Note: in deterministic PCA, e will be an array of ones, s.t. potentially the sorting (i) may be undetermined and mess things up.
@@ -69,8 +69,8 @@ class PCA(object):
         self.w_rot = w
 
         err = {
-            'noise': np.abs(self.x1 - x).sum(),
-            'clean': np.abs(x0 - x).sum(),
+            'noise': np.abs(self.x1 - self.x).sum(),
+            'clean': np.abs(x0 - self.x).sum(),
             'W': np.abs(w0[:, :w.shape[1]] - w).sum(),
             'Z': np.abs(z0[:z.shape[0], :] - z).sum()
         }
@@ -87,7 +87,9 @@ class PCA(object):
 
 class detPCA(PCA):
     def __init__(self, x1, K=5):
-        self.x1 = x1
+        self.x1 = x1.copy()
+        self.m = x1.mean(1, keepdims=True)
+        x1 = x1 - self.m
         self.e, v = np.linalg.eigh(np.cov(x1))
         self.w = v[:, np.argsort(self.e)[::-1][:K]]
         self.z = self.w.T.dot(x1)
@@ -128,7 +130,8 @@ class probPCA(PCA):
                 except AttributeError:
                     print(v, getattr(self, v).eval())
 
-    def __init__(self, x1, dims=None, n_iter=500, full_prior=[], full_posterior=[], mean='point', noise='point', seed=None):
+    def __init__(self, x1, dims=None, n_iter=500,
+                 full_prior=[], full_posterior=[], zero_locs=False, mean='point', noise='point', seed=None):
         self.seed = seed
         tf.reset_default_graph()
         sess = tf.InteractiveSession()
@@ -164,27 +167,22 @@ class probPCA(PCA):
             else:
                 W = ed.models.Normal(tf.zeros((D, K)), a, name='W')
 
-        with tf.name_scope('posterior'):
-            if 'Z' in full_posterior:
-                QZ = ed.models.MultivariateNormalTriL(
-                    tf.Variable(tf.random_normal(Z.shape, seed=self.seed), name='Z/loc'),
-                    tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=self.seed), name='Z/scale')), name='Z')
-            else:
-                QZ = ed.models.Normal(
-                    tf.Variable(tf.random_normal(Z.shape, seed=self.seed), name='Z/loc'),
-                    tf.nn.softplus(tf.Variable(tf.random_normal(Z.shape, seed=self.seed), name='Z/scale')), name='Z')
+        def post(shape, name, covariance='fact', zeros=False):
+            return {
+                'full': ed.models.MultivariateNormalTriL,
+                'fact': ed.models.Normal
+            }[covariance]({
+                True: tf.zeros(shape),
+                False: tf.Variable(tf.random_normal(shape, seed=self.seed), name='{}/loc'.format(name)),
+            }[zeros], tf.nn.softplus(
+                tf.Variable(tf.random_normal((K, K), seed=self.seed), name='{}/scale'.format(name))),
+                          name=name)
 
-            if 'W' in full_posterior:
-                QW = ed.models.MultivariateNormalTriL(
-                    tf.Variable(tf.random_normal((D, K), seed=self.seed), name='W/loc'),
-                    tf.nn.softplus(tf.Variable(tf.random_normal((K, K), seed=self.seed), name='W/scale')), name='W')
-            else:
-                QW = ed.models.Normal(
-                    tf.Variable(tf.random_normal(W.shape, seed=self.seed), name='W/loc'),
-                    tf.nn.softplus(tf.Variable(tf.random_normal(W.shape, seed=self.seed), name='W/scale')), name='W')
+        with tf.name_scope('posterior'):
+            QZ = post(Z.shape, 'Z', 'full' if 'Z' in full_posterior else 'fact', zero_locs)
+            QW = post(W.shape, 'W', 'full' if 'W' in full_posterior else 'fact', zero_locs)
 
         KL.update({Z: QZ, W: QW})
-
 
         if noise == 'point':
             tau = tf.nn.softplus(tf.Variable(tf.random_normal((), seed=self.seed), name='tau'))
@@ -200,12 +198,12 @@ class probPCA(PCA):
 
         if mean == 'full':
             m = ed.models.Normal(tf.zeros((D, 1)), tf.ones((D, 1)))
-            self.mu = ed.models.Normal(tf.Variable(tf.random_normal((D, 1), seed=self.seed)),
+            self.m = ed.models.Normal(tf.Variable(tf.random_normal((D, 1), seed=self.seed)),
                                        tf.nn.softplus(tf.Variable(tf.random_normal((D, 1), seed=self.seed))))
-            KL.update({m: self.mu})
+            KL.update({m: self.m})
         else:
             m = tf.Variable(tf.random_normal((D, 1), seed=self.seed), name='mean')
-            self.mu = m
+            self.m = m
 
         X = ed.models.Normal(tf.matmul(W, Z, transpose_b=True) + m, tau * tf.ones((D, N)))
 
@@ -214,7 +212,7 @@ class probPCA(PCA):
 
         self.w, self.z = sess.run([QW.mean(), tf.matrix_transpose(QZ.mean())])
 
-        self.print('tau', 'mu', 'alpha')
+        self.print('tau', 'm', 'alpha')
 
 class vbPCA(PCA):
     def __init__(self, x1, K, n_iter, rotate=False):
@@ -249,5 +247,5 @@ class vbPCA(PCA):
 
 
 if __name__=='__main__':
-    x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1)
+    x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1, missing=.3)
     pass
