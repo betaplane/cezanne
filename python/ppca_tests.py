@@ -175,8 +175,8 @@ class probPCA(PCA):
                 True: tf.zeros(shape),
                 False: tf.Variable(tf.random_normal(shape, seed=self.seed), name='{}/loc'.format(name)),
             }[zeros], tf.nn.softplus(
-                tf.Variable(tf.random_normal((K, K), seed=self.seed), name='{}/scale'.format(name))),
-                          name=name)
+                tf.Variable(tf.random_normal({'full': (K, K), 'fact': shape}[covariance], seed=self.seed)
+                            , name='{}/scale'.format(name))), name=name)
 
         with tf.name_scope('posterior'):
             QZ = post(Z.shape, 'Z', 'full' if 'Z' in full_posterior else 'fact', zero_locs)
