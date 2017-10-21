@@ -23,9 +23,6 @@ from types import MethodType
 # D dimension of example ('space')
 # K number of principal components
 
-# np.random.seed(1)
-# tf.set_random_seed(1)
-# ed.set_seed(1)
 
 def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
     w = np.random.normal(0, 1, (D, K))
