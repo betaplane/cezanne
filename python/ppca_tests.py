@@ -11,7 +11,7 @@ Notes
 """
 
 import matplotlib.pyplot as plt
-import xarray as xr
+import pandas as pd
 import numpy as np
 import tensorflow as tf
 import edward as ed
@@ -23,6 +23,11 @@ from types import MethodType
 # D dimension of example ('space')
 # K number of principal components
 
+def station_data():
+    t = pd.read_hdf('../../ceaza/data/station_data_new.h5', 'ta_c').xs('prom', 1, 'aggr')
+    sta = pd.read_hdf('../../ceaza/data/stations.h5', 'stations')
+    lat = sta.loc[t.columns.get_level_values(0)].lat.astype(float)
+    return np.ma.masked_invalid(t[t.columns[:, (lat>-34) & (lat<-27)]].resample('D').mean())
 
 def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
     w = np.random.normal(0, 1, (D, K))
@@ -128,7 +133,9 @@ class probPCA(PCA):
                     print(v, getattr(self, v).eval())
 
     def __init__(self, x1, dims=None, n_iter=500,
-                 full_prior=[], full_posterior=[], zero_locs=False, mean='point', noise='point', seed=None):
+                 full_prior=[], full_posterior=[], zero_locs=False,
+                 mean='point', noise='point',
+                 logdir='log', seed=None):
         self.seed = seed
         tf.reset_default_graph()
         sess = tf.InteractiveSession()
@@ -205,7 +212,7 @@ class probPCA(PCA):
         X = ed.models.Normal(tf.matmul(W, Z, transpose_b=True) + m, tau * tf.ones((D, N)))
 
         self.inference = ed.KLqp(KL, data={X: x1})
-        self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir='log')
+        self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir=logdir)
 
         self.w, self.z = sess.run([QW.mean(), tf.matrix_transpose(QZ.mean())])
 
