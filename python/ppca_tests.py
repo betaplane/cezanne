@@ -24,14 +24,14 @@ from types import MethodType
 # K number of principal components
 
 def station_data():
-    t = pd.read_hdf('../../ceaza/data/station_data_new.h5', 'ta_c').xs('prom', 1, 'aggr')
-    sta = pd.read_hdf('../../ceaza/data/stations.h5', 'stations')
+    t = pd.read_hdf('../../data/CEAZAMet/station_data.h5', 'ta_c').xs('prom', 1, 'aggr')
+    sta = pd.read_hdf('../../data/CEAZAMet/stations.h5', 'stations')
     lat = sta.loc[t.columns.get_level_values(0)].lat.astype(float)
-    return np.ma.masked_invalid(t[t.columns[:, (lat>-34) & (lat<-27)]].resample('D').mean())
+    return t[t.columns[(lat>-34) & (lat<-27)]].resample('D').mean()
 
 def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
-    w = np.random.normal(0, 1, (D, K))
-    z = np.random.normal(0, 1, (K, N))
+    w = np.random.normal(0, 10, (D, K))
+    z = np.random.normal(0, 10, (K, N))
     m = np.random.normal(0, 1, (D, 1))
     x = w.dot(z)
     p = detPCA(x, D)
@@ -219,9 +219,10 @@ class probPCA(PCA):
         self.print('tau', 'm', 'alpha')
 
 class vbPCA(PCA):
-    def __init__(self, x1, K, n_iter, rotate=False):
+    def __init__(self, x1, K=None, n_iter=100, rotate=False):
         D, N = x1.shape
         self.x1 = x1
+
         z = bp.nodes.GaussianARD(0, 1, plates=(1, N), shape=(K, ))
         alpha = bp.nodes.Gamma(1e-5, 1e-5, plates=(K, ))
         w = bp.nodes.GaussianARD(0, alpha, plates=(D, 1), shape=(K, ))
@@ -252,4 +253,5 @@ class vbPCA(PCA):
 
 if __name__=='__main__':
     x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1, missing=.3)
+    x = np.ma.masked_invalid(station_data()[['3','4','5','6','8','9']]).T
     pass

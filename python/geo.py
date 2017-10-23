@@ -2,7 +2,8 @@
 import numpy as np
 from xarray import DataArray, open_dataset
 from shapely.geometry import Polygon, Point, MultiPoint, LinearRing
-from functools import singledispatch
+from functools import singledispatch, partial
+from pyproj import Geod
 
 
 def kml(name, lon, lat, code=None, nc=None):
@@ -65,8 +66,6 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
 
 
 def nearest(grid_lon, grid_lat, lon, lat):
-    from pyproj import Geod
-    from functools import partial
     inv = partial(Geod(ellps='WGS84').inv, lon, lat)
 
     def dist(x, y):
@@ -77,6 +76,21 @@ def nearest(grid_lon, grid_lat, lon, lat):
     lat_idx, lon_idx = np.unravel_index(np.argmin(d), grid_lon.shape)
     return lat_idx, lon_idx, d[lat_idx, lon_idx]
 
+def distance_matrix(grid_lon, grid_lat, lon, lat):
+    """Given grids of longitudes and latitudes, return a matrix with the distances from a point.
+
+    :param grid_lon: grid of longitudes
+    :param grid_lat: grid of latitudes
+    :param lon: longitude of point from which distances should be computed
+    :param lat: latitude of point
+    :returns: distance matrix of same shape as grid_lon and grid_lat
+    :rtype: :class:`np.array`
+
+    """
+    inv = partial(Geod(ellps='WGS84').inv, lon, lat)
+    def dist(x, y):
+        return inv(x, y)[2]
+    return np.vectorize(dist)(grid_lon, grid_lat)
 
 @singledispatch
 def domain_bounds(ds, test=None):
