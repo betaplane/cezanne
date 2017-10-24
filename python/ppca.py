@@ -217,27 +217,31 @@ class probPCA(PCA):
             m = tf.Variable(data_mean, name='mean')
             mu = m
 
-        x = x1.flatten()
-        i, = np.where(np.isfinite(x))
-        mat = tf.gather(tf.reshape(tf.matmul(W, Z, transpose_b=True) + m, [-1]), i)
-        X = ed.models.Normal(mat, tau * tf.ones(mat.shape))
+        data = x1.flatten()
+        i, = np.where(np.isfinite(data))
+        x = tf.gather(tf.reshape(tf.matmul(W, Z, transpose_b=True) + m, [-1]), i)
+        self.data_loss = tf.reduce_mean(tf.pow(x - tf.cast(data[i], tf.float32), 2))
+        tf.summary.scalar('data_loss', self.data_loss)
+        X = ed.models.Normal(x, tau * tf.ones(x.shape))
 
-        self.inference = ed.KLqp(KL, data={X: x[i]})
-
-        # self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir=logdir)
-        self.run(n_iter=n_iter, logdir=logdir)
-
-        self.w, self.z, self.m = self.sess.run([QW.mean(), tf.matrix_transpose(QZ.mean()), mu])
-        self.print('tau', 'alpha', self.m)
-
-    def run(self, n_iter, logdir):
-        self.inference.initialize(n_samples=10, logdir=logdir)
+        self.inference = ed.KLqp(KL, data={X: data[i]})
+        self.inference.initialize(n_iter=n_iter, n_samples=10, logdir=logdir)
         tf.global_variables_initializer().run()
 
-        prog = ed.util.Progbar(n_iter)
+        self.merged = tf.summary.merge_all()
+
+        # self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir=logdir)
+        self.run(n_iter=n_iter)
+
+        self.w, self.z, self.m = self.sess.run([QW.mean(), tf.matrix_transpose(QZ.mean()), mu])
+        print('')
+        self.print('tau', 'alpha', self.m)
+
+    def run(self, n_iter):
         for i in range(n_iter):
             out = self.inference.update()
-            prog.update(i, out)
+            self.inference.print_progress(out)
+            self.inference.train_writer.add_summary(self.sess.run(self.merged))
 
 
 class vbPCA(PCA):
