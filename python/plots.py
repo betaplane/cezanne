@@ -5,7 +5,7 @@ from cartopy import crs
 
 
 def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, **kwargs):
-    """Plot a matrix of the times when a given :class:`~pandas.DataFrame` has valid observations. Not sure with what data types it'll still work, but in general 0/False(/nan?) should work for nonexistent times, and 1/count for exisitng ones.
+    """Plot a matrix of the times when a given :class:`~pandas.DataFrame` has valid observations. Not sure with what data types it'll still work, but in general 0/False(/nan?) should work for nonexistent times, and 1/count for exisitng ones. Figure size is automatically computed, but can be overridden with the **figsize** or **fig_width** arguments.
 
     :param df: DataFrame with time in index and station labels as columns. The columns labels are used to label the rows of the plotted matrix.
     :type df: :class:`~pandas.DataFrame`
@@ -16,17 +16,20 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
     :type color: :obj:`dict` {color spec: [row indexes]}
 
     :Keyword Arguments:
-        Same as for :class:`matplotlib.figure.SubplotParams`
+        Same as for :class:`matplotlib.figure.SubplotParams`, plus:
+            * **figsize** - override automatic figure sizing
+            * **fig_width** - override only the figure width
 
     """
     if ax is None:
-        fig, ax = plt.subplots(figsize=(kwargs.pop('fig_width', 6), 10 * df.shape[1]/80))
+        figsize = kwargs.pop('figsize', (kwargs.pop('fig_width', 6), 10 * df.shape[1]/80))
+        fig, ax = plt.subplots(figsize=figsize)
     else:
         fig = ax.figure
     fig.subplots_adjust(bottom=bottom, top=top, **kwargs)
     plt.set_cmap('viridis')
     y = np.arange(df.shape[1] + 1)
-    ax.pcolormesh(df.index, y, df.T)
+    ax.pcolormesh(df.index, y, df.T, vmin=0., vmax=1.)
     ax.set_yticks(y[1:])
     if label:
         l = ax.set_yticklabels(df.columns)

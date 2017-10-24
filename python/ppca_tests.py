@@ -54,9 +54,9 @@ def tf_rotate(w, z):
 
 
 class PCA(object):
-    def critique(self, x0, w0, z0, rotate=False):
+    def critique(self, x0=None, w0=None, z0=None, rotate=False):
         (w, z) = self.rotate() if rotate else (self.w, self.z)
-        self.x = w.dot(z)
+        self.x = w.dot(z) + self.m
 
         # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
         # Note: in deterministic PCA, e will be an array of ones, s.t. potentially the sorting (i) may be undetermined and mess things up.
@@ -65,18 +65,18 @@ class PCA(object):
             i = np.argsort(e)[::-1]
             w = w[:, i]
             e = e[i].reshape((1, -1))
-            s = np.sign(np.sign(w0[:, :w.shape[1]] * w).sum(0, keepdims=True))
-            w = w / e * s
-            z = z[i, :] * e.T * s.T
+            w = w / e
+            z = z[i, :] * e.T
+            if w0 is not None:
+                s = np.sign(np.sign(w0[:, :w.shape[1]] * w).sum(0, keepdims=True))
+                w = w * s
+                z = z * s.T
         self.w_rot = w
 
-        err = {
-            'noise': np.abs(self.x1 - self.x).sum(),
-            'clean': np.abs(x0 - self.x).sum(),
-            'W': np.abs(w0[:, :w.shape[1]] - w).sum(),
-            'Z': np.abs(z0[:z.shape[0], :] - z).sum()
-        }
-        print('reconstruction errors: ', err)
+        print('noisy input: ', np.abs(self.x1 - self.x).sum())
+        if x0 is not None: print('clean input: ', np.abs(x0 - self.x).sum())
+        if w0 is not None: print('W: ', np.abs(w0[:, :w.shape[1]] - w).sum())
+        if z0 is not None: print('Z: ', np.abs(z0[:z.shape[0], :] - z).sum())
         return self
 
     # Note: this simplified rotation applies only to probabilistic PCA, which already has some of the scalings built in.
@@ -126,7 +126,9 @@ class probPCA(PCA):
 
     def print(self, *vars):
         for v in vars:
-            if hasattr(self, v):
+            if not isinstance(v, str):
+                print(v)
+            elif hasattr(self, v):
                 try:
                     print(v, getattr(self, v).mean().eval())
                 except AttributeError:
@@ -138,7 +140,7 @@ class probPCA(PCA):
                  logdir='log', seed=None):
         self.seed = seed
         tf.reset_default_graph()
-        sess = tf.InteractiveSession()
+        self.sess = tf.InteractiveSession()
         tf.set_random_seed(self.seed)
 
         self.x1 = x1
@@ -200,23 +202,43 @@ class probPCA(PCA):
         else: # if noise is a simple number
             tau = tf.constant(noise)
 
+        data_mean = x1.mean(1, keepdims=True).astype('float32')
         if mean == 'full':
-            m = ed.models.Normal(tf.zeros((D, 1)), tf.ones((D, 1)))
-            self.m = ed.models.Normal(tf.Variable(tf.random_normal((D, 1), seed=self.seed)),
-                                       tf.nn.softplus(tf.Variable(tf.random_normal((D, 1), seed=self.seed))))
-            KL.update({m: self.m})
+            hyper_mean = tf.Variable(data_mean, name='hyper_mean')
+            m = ed.models.Normal(hyper_mean, tf.ones((D, 1)))
+            self.qm = ed.models.Normal(
+                tf.Variable(data_mean),
+                # tf.Variable(tf.random_normal((D, 1), seed=self.seed)),
+                tf.nn.softplus(tf.Variable(tf.random_normal((D, 1), seed=self.seed))))
+            KL.update({m: self.qm})
+            mu  = hyper_mean #self.qm.mean()
         else:
-            m = tf.Variable(tf.random_normal((D, 1), seed=self.seed), name='mean')
-            self.m = m
+            # m = tf.Variable(tf.random_normal((D, 1), seed=self.seed), name='mean')
+            m = tf.Variable(data_mean, name='mean')
+            mu = m
 
-        X = ed.models.Normal(tf.matmul(W, Z, transpose_b=True) + m, tau * tf.ones((D, N)))
+        x = x1.flatten()
+        i, = np.where(np.isfinite(x))
+        mat = tf.gather(tf.reshape(tf.matmul(W, Z, transpose_b=True) + m, [-1]), i)
+        X = ed.models.Normal(mat, tau * tf.ones(mat.shape))
 
-        self.inference = ed.KLqp(KL, data={X: x1})
-        self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir=logdir)
+        self.inference = ed.KLqp(KL, data={X: x[i]})
 
-        self.w, self.z = sess.run([QW.mean(), tf.matrix_transpose(QZ.mean())])
+        # self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir=logdir)
+        self.run(n_iter=n_iter, logdir=logdir)
 
-        self.print('tau', 'm', 'alpha')
+        self.w, self.z, self.m = self.sess.run([QW.mean(), tf.matrix_transpose(QZ.mean()), mu])
+        self.print('tau', 'alpha', self.m)
+
+    def run(self, n_iter, logdir):
+        self.inference.initialize(n_samples=10, logdir=logdir)
+        tf.global_variables_initializer().run()
+
+        prog = ed.util.Progbar(n_iter)
+        for i in range(n_iter):
+            out = self.inference.update()
+            prog.update(i, out)
+
 
 class vbPCA(PCA):
     def __init__(self, x1, K=None, n_iter=100, rotate=False):
@@ -252,6 +274,7 @@ class vbPCA(PCA):
 
 
 if __name__=='__main__':
-    x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1, missing=.3)
-    x = np.ma.masked_invalid(station_data()[['3','4','5','6','8','9']]).T
+    # x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1, missing=.3)
+    t = station_data()[['3','4','5','6','8','9']]
+    x = np.ma.masked_invalid(t).T
     pass
