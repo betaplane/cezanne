@@ -118,8 +118,14 @@ class PPCA(PCA):
         self.sess = tf.InteractiveSession()
         tf.set_random_seed(self.seed)
         self.loc = kwargs.get('loc', 'random_normal')
+        self.full_posterior = kwargs.get('full_posterior', [])
+        self.full_prior = kwargs.get('full_prior', self.full_posterior)
 
-    def param_init(self, shape, name, values=None, kind='loc'):
+    def param_init(self, name, values=None, kind='loc'):
+        if kind=='scale' and name in self.full_posterior:
+            shape = (self.K, self.K)
+        else:
+            shape = {'Z': (self.N, self.K), 'W': (self.D, self.K)}[name]
         if self.loc == 'fixed':
             return tf.Variable(tf.zeros(shape), name='{}/{}'.format(name, kind))
         else:
@@ -137,8 +143,8 @@ class gradPCA(PPCA):
         i, = np.where(~np.isnan(data))
         data = data[i]
 
-        W = self.param_init((self.D, self.K), 'W', kind='hyper')
-        Z = self.param_init((self.N, self.K), 'Z', kind='hyper')
+        W = self.param_init('W', kind='hyper')
+        Z = self.param_init('Z', kind='hyper')
         x = tf.matmul(W, Z, transpose_b=True)
         m = tf.reduce_sum(x * mask, 1, keep_dims=True) / mask_sum
         self.data_loss = tf.losses.mean_squared_error(tf.gather(tf.reshape(x - m, [-1]), i), data)
@@ -224,20 +230,15 @@ class probPCA(PPCA):
             else:
                 W = ed.models.Normal(tf.zeros((self.D, self.K)), a, name='W')
 
-        def post(shape, name, covariance='fact', zeros=False):
+        def post(name):
             return {
-                'full': ed.models.MultivariateNormalTriL,
-                'fact': ed.models.Normal
-            }[covariance]({
-                True: tf.zeros(shape),
-                False: tf.Variable(tf.random_normal(shape, seed=self.seed), name='{}/loc'.format(name)),
-            }[zeros], tf.nn.softplus(
-                tf.Variable(tf.random_normal({'full': (self.K, self.K), 'fact': shape}[covariance], seed=self.seed)
-                            , name='{}/scale'.format(name))), name=name)
+                True: ed.models.MultivariateNormalTriL,
+                False: ed.models.Normal
+            }[name in full_posterior](self.param_init(name), self.param_init(name, kind='scale'))
 
         with tf.name_scope('posterior'):
-            QZ = post(Z.shape, 'Z', 'full' if 'Z' in full_posterior else 'fact', zero_locs)
-            QW = post(W.shape, 'W', 'full' if 'W' in full_posterior else 'fact', zero_locs)
+            QZ = post('Z')
+            QW = post('W')
 
         KL.update({Z: QZ, W: QW})
 
@@ -332,7 +333,7 @@ class vbPCA(PCA):
 
 
 if __name__=='__main__':
-    x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1, missing=.3)
+    x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1) #, missing=.3)
     # t = station_data()[['3','4','5','6','8','9']]
     # x = np.ma.masked_invalid(t).T
     pass
