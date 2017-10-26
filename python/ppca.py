@@ -19,6 +19,8 @@ import edward as ed
 import bayespy as bp
 import bayespy.inference.vmp.transformations as bpt
 from types import MethodType
+from datetime import datetime
+import os
 
 # N number of examples ('time')
 # D dimension of example ('space')
@@ -35,7 +37,7 @@ def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
     z = np.random.normal(0, 1, (K, N))
     m = np.random.normal(0, 1, (D, 1))
     x = w.dot(z)
-    p = detPCA(x, n_iter=1)
+    p = detPCA(np.ma.masked_invalid(x), n_iter=1)
     x1 = x.flatten()
     x1[np.random.randint(0, len(x1), round(missing * len(x1)))] = np.nan # see notes in module docstring
     x1 = np.ma.masked_invalid(x1).reshape(x.shape)
@@ -75,7 +77,7 @@ class PCA(object):
         self.w_rot = w
 
         print('\nnoisy input: ', ((self.x1 - self.x) ** 2).mean())
-        print('data_loss: ', self.sess.run(self.data_loss))
+        if hasattr(self, 'data_loss'): print('data_loss: ', self.sess.run(self.data_loss))
         if x0 is not None: print('clean input: ', ((x0 - self.x) ** 2).mean())
         if w0 is not None: print('W: ', np.abs(w0[:, :w.shape[1]] - w).sum())
         if z0 is not None: print('Z: ', np.abs(z0[:z.shape[0], :] - z).sum())
@@ -90,22 +92,24 @@ class PCA(object):
 
 
 class detPCA(PCA):
-    def __init__(self, x1, K=None, n_iter=10):
-        self.x1 = x1
+    def __init__(self, x1, K=None, n_iter=1):
+        self.x1 = x1.copy()
+        self.loss = []
         if K is None:
             K = x1.shape[0]
-        mask = np.isnan(x1)
-        self.m = x1.mean(1, keepdims=True)
-        self.x = self.m
+        data_mean = x1.mean(1, keepdims=True)
+        x1 = (x1 - data_mean)
+        x = x1.filled(0)
         for i in range(n_iter):
-            x = np.where(mask, self.x, x1) - self.m
             self.e, v = np.linalg.eigh(np.cov(x))
             self.w = v[:, np.argsort(self.e)[::-1][:K]]
             self.z = self.w.T.dot(x)
-            self.x = self.w.dot(self.z)
-            self.m = self.x.mean(1, keepdims=True)
-            loss = ((self.x - x) ** 2).sum()
-            print(loss)
+            x = self.w.dot(self.z)
+            diff = x1 - x
+            m = diff.mean(1, keepdims=True)
+            x = np.where(x1.mask, x + m, x1)
+            self.loss.append(((diff - m) ** 2).sum())
+        self.m = data_mean + m
 
 class PPCA(PCA):
     def __init__(self, x1, **kwargs):
@@ -114,27 +118,39 @@ class PPCA(PCA):
         self.dims = kwargs.get('dims', None)
         self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
         self.seed = kwargs.get('seed', None)
-        tf.reset_default_graph()
-        self.sess = tf.InteractiveSession()
-        tf.set_random_seed(self.seed)
         self.loc = kwargs.get('loc', 'random_normal')
         self.full_posterior = kwargs.get('full_posterior', [])
         self.full_prior = kwargs.get('full_prior', self.full_posterior)
+        self.logdir = kwargs.get('logdir', None)
+        self.dtype = kwargs.get('dtype', tf.float32)
+        self.n_iter = kwargs.get('n_iter')
 
-    def param_init(self, name, values=None, kind='loc'):
+        tf.reset_default_graph()
+        self.sess = tf.InteractiveSession()
+        tf.set_random_seed(self.seed)
+
+    def param_init(self, name, values=None, jigger=0):
+        n, kind = name.split('/')
+
         if kind=='scale' and name in self.full_posterior:
             shape = (self.K, self.K)
         else:
-            shape = {'Z': (self.N, self.K), 'W': (self.D, self.K)}[name]
+            shape = {'Z': (self.N, self.K), 'W': (self.D, self.K)}[n]
+
         if self.loc == 'fixed':
-            return tf.Variable(tf.zeros(shape), name='{}/{}'.format(name, kind))
+            return tf.get_variable(name, initializer=tf.zeros(shape))
+        elif values is not None:
+            v = tf.cast(values, self.dtype)
+            if jigger > 0:
+                v = v + getattr(tf, self.loc)(v.shape, stddev = jigger * values.std(), seed = self.seed)
+            return tf.get_variable(name, initializer=v)
         else:
-            v = tf.Variable(getattr(tf, self.loc)(shape, seed=self.seed), name='{}/{}'.format(name, kind))
+            v = tf.get_variable(name, initializer=getattr(tf, self.loc)(shape, seed=self.seed))
             return tf.nn.softplus(v) if kind == 'scale' else v
 
 
 class gradPCA(PPCA):
-    def __init__(self, x1, learning_rate, n_iter=100, **kwargs):
+    def __init__(self, x1, learning_rate, n_iter=100, jigger=False, **kwargs):
         super().__init__(x1, **kwargs)
         mask = 1 - np.isnan(x1).astype(int).filled(1)
         mask_sum = np.sum(mask, 1, keepdims=True)
@@ -143,8 +159,10 @@ class gradPCA(PPCA):
         i, = np.where(~np.isnan(data))
         data = data[i]
 
-        W = self.param_init('W', kind='hyper')
-        Z = self.param_init('Z', kind='hyper')
+        p = detPCA(x1, n_iter=1)
+
+        W = self.param_init('W/hyper', p.w, jigger=jigger)
+        Z = self.param_init('Z/hyper', p.z.T,jigger=jigger)
         x = tf.matmul(W, Z, transpose_b=True)
         m = tf.reduce_sum(x * mask, 1, keep_dims=True) / mask_sum
         self.data_loss = tf.losses.mean_squared_error(tf.gather(tf.reshape(x - m, [-1]), i), data)
@@ -152,9 +170,21 @@ class gradPCA(PPCA):
 
         prog = ed.Progbar(n_iter)
         tf.global_variables_initializer().run()
-        for j in range(n_iter):
-            _, out = self.sess.run([opt, self.data_loss])
-            prog.update(j, {'loss': out})
+
+        if self.logdir is not None:
+            tf.summary.scalar('data_loss', self.data_loss)
+            merged = tf.summary.merge_all()
+            writer = tf.summary.FileWriter(
+                os.path.join(self.logdir, datetime.utcnow().strftime('%Y%m%d_%H%M%S')))
+
+            for j in range(n_iter):
+                _, out, s = self.sess.run([opt, self.data_loss, merged])
+                prog.update(j, {'loss': out})
+                writer.add_summary(s, j)
+        else:
+            for j in range(n_iter):
+                _, out = self.sess.run([opt, self.data_loss])
+                prog.update(j, {'loss': out})
 
         self.w, self.z, self.m = self.sess.run([W, tf.matrix_transpose(Z), m + data_mean])
 
@@ -197,13 +227,8 @@ class probPCA(PPCA):
                 except AttributeError:
                     print(v, getattr(self, v).eval())
 
-    def __init__(self, x1, n_iter=500,
-                 full_prior=[], full_posterior=[], zero_locs=False,
-                 mean='point', noise='point',
-                 logdir='log', **kwargs):
+    def __init__(self, x1, mean='point', noise='point', **kwargs):
         super().__init__(x1, **kwargs)
-
-        full_prior = set(full_posterior).union(full_prior)
         KL = {}
 
         if self.dims == 'full':
@@ -218,56 +243,56 @@ class probPCA(PPCA):
             a = tf.ones((1, self.K), name='alpha') # in hopes that this is correctly broadcast
 
         with tf.name_scope('model'):
-            if 'Z' in full_prior:
+            if 'Z' in self.full_prior:
                 self.Z_scale = tf.nn.softplus(tf.Variable(tf.random_normal((self.K, self.K), seed=self.seed)), name='Z/scale')
                 Z = ed.models.MultivariateNormalTriL(tf.zeros((self.N, self.K)), self.Z_scale, name='Z')
             else:
                 Z = ed.models.Normal(tf.zeros((self.N, self.K), name='Z/loc'), tf.ones((self.N, self.K), name='Z/scale'), name='Z')
 
-            if 'W' in full_prior:
+            if 'W' in self.full_prior:
                 self.W_scale = tf.nn.softplus(tf.Variable(tf.random_normal((self.K, self.K), seed=self.seed)), name='W/scale')
                 W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)), a * self.W_scale, name='W')
             else:
                 W = ed.models.Normal(tf.zeros((self.D, self.K)), a, name='W')
 
-        def post(name):
-            return {
+        def normal(name):
+            distr = {
                 True: ed.models.MultivariateNormalTriL,
                 False: ed.models.Normal
-            }[name in full_posterior](self.param_init(name), self.param_init(name, kind='scale'))
+                }[name in self.full_posterior]
+            return distr(*[self.param_init('{}/{}'.format(name, k)) for k in ['loc', 'scale']], name=name)
 
-        with tf.name_scope('posterior'):
-            QZ = post('Z')
-            QW = post('W')
+        with tf.variable_scope('posterior'):
+            QZ, QW = map(normal, ['Z', 'W'])
 
         KL.update({Z: QZ, W: QW})
 
-        if noise == 'point':
-            tau = tf.nn.softplus(tf.Variable(tf.random_normal((), seed=self.seed), name='tau'))
-            self.tau = tau
-        elif noise == 'full':
-            s = ed.models.Gamma(1e-5, 1e-5, name='model/tau')
-            qs = self.lognormal(name='posterior/tau')
-            tau = s ** -.5
-            KL.update({s: qs})
-            self.tau = qs
-        else: # if noise is a simple number
-            tau = tf.constant(noise)
+        with tf.variable_scope(''):
+            data_mean = tf.cast(x1.mean(1, keepdims=True), self.dtype)
+            if mean == 'full':
+                hyper_mean = tf.Variable(data_mean, name='hyper_mean')
+                m = ed.models.Normal(data_mean, tf.ones((self.D, 1)))
+                qm = ed.models.Normal(
+                    tf.Variable(data_mean),
+                    # tf.Variable(tf.random_normal((self.D, 1), seed=self.seed)),
+                    tf.nn.softplus(tf.Variable(tf.random_normal((self.D, 1), seed=self.seed))))
+                KL.update({m: qm})
+            else:
+                # m = tf.Variable(tf.random_normal((self.D, 1), seed=self.seed), name='mean')
+                m = tf.get_variable('posterior/mu/loc', initializer=data_mean)
 
-        data_mean = x1.mean(1, keepdims=True).astype('float32')
-        if mean == 'full':
-            hyper_mean = tf.Variable(data_mean, name='hyper_mean')
-            m = ed.models.Normal(hyper_mean, tf.ones((self.D, 1)))
-            self.qm = ed.models.Normal(
-                tf.Variable(data_mean),
-                # tf.Variable(tf.random_normal((self.D, 1), seed=self.seed)),
-                tf.nn.softplus(tf.Variable(tf.random_normal((self.D, 1), seed=self.seed))))
-            KL.update({m: self.qm})
-            mu  = hyper_mean #self.qm.mean()
-        else:
-            # m = tf.Variable(tf.random_normal((self.D, 1), seed=self.seed), name='mean')
-            m = tf.Variable(data_mean, name='mean')
-            mu = m
+            if noise == 'point':
+                tau = tf.nn.softplus(tf.Variable(tf.random_normal((), seed=self.seed), name='tau'))
+                self.tau = tau
+            elif noise == 'full':
+                s = ed.models.Gamma(1e-5, 1e-5, name='model/tau')
+                qs = self.lognormal(name='posterior/tau')
+                tau = s ** -.5
+                KL.update({s: qs})
+                self.tau = qs
+            else: # if noise is a simple number
+                tau = tf.constant(noise)
+
 
         data = x1.flatten()
         i, = np.where(~np.isnan(data))
@@ -276,27 +301,46 @@ class probPCA(PPCA):
         X = ed.models.Normal(x, tau * tf.ones(x.shape))
 
         self.inference = ed.KLqp(KL, data={X: data})
-        self.inference.initialize(n_iter=n_iter, n_samples=10, logdir=logdir)
-        tf.global_variables_initializer().run()
 
+        # this comes from edward source (class VariationalInference)
+        # this way, edward automatically writes out my own summaries
+        summary_key = 'summaries_{}'.format(id(self.inference))
         with tf.variable_scope('loss'):
             self.y = tf.matmul(QW.mean(), QZ.mean(), transpose_b=True) + m
             self.data_loss = tf.losses.mean_squared_error(data, tf.gather(tf.reshape(self.y, [-1]), i))
-            # self.data_loss = tf.reduce_mean((data - tf.gather(tf.reshape(self.y, [-1]), i)) ** 2)
-            tf.summary.scalar('data_loss', self.data_loss)
-        self.merged = tf.summary.merge_all()
+            tf.summary.scalar('data_loss', self.data_loss, collections=[summary_key])
 
+        self.inference.initialize(n_samples=10, logdir=self.logdir)
         # self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir=logdir)
-        self.run(n_iter=n_iter)
 
-        self.w, self.z, self.m = self.sess.run([QW.mean(), tf.matrix_transpose(QZ.mean()), mu])
-        self.print('tau', 'alpha', self.m)
 
     def run(self, n_iter):
+        # if this is a repeated run, replace edward's FileWriter to write to a new directory
+        try:
+            t = self.inference.t.eval()
+        except tf.errors.FailedPreconditionError:
+            pass
+        else:
+            self.inference.train_writer = tf.summary.FileWriter(
+                os.path.join(self.logdir, datetime.utcnow().strftime('%Y%m%d_%H%M%S')))
+
+        tf.global_variables_initializer().run()
+        # hack to use the progbar that edward allocates anyway, without giving n_iter to inference.initialize()
+        self.inference.progbar.target = n_iter
+
         for i in range(n_iter):
             out = self.inference.update()
             self.inference.print_progress(out)
-            self.inference.train_writer.add_summary(self.sess.run(self.merged), i)
+
+        with tf.variable_scope('posterior', reuse=True):
+            self.w = tf.get_variable('W/loc').eval()
+            self.z = tf.matrix_transpose(tf.get_variable('Z/loc')).eval()
+            self.m = tf.get_variable('mu/loc').eval()
+
+        self.inference.finalize() # this just closes the FileWriter
+        # self.w, self.z, self.m = self.sess.run([self.w, self.z, self.m])
+        self.print('tau', 'alpha', self.m)
+        return self
 
 
 class vbPCA(PCA):
@@ -333,7 +377,7 @@ class vbPCA(PCA):
 
 
 if __name__=='__main__':
-    x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1) #, missing=.3)
+    # x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1, missing=.3)
     # t = station_data()[['3','4','5','6','8','9']]
     # x = np.ma.masked_invalid(t).T
     pass
