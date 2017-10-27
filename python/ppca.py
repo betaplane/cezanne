@@ -75,18 +75,12 @@ class PCA(object):
                 z = z * s.T
         self.w_rot = w
 
-        if hasattr(self, 'data_loss'): print('data_loss: ', self.sess.run(self.data_loss))
+        if hasattr(self, 'data_loss'): print('\ndata_loss: ', self.sess.run(self.data_loss))
         if x0 is not None: print('clean input: ', ((x0 - self.x) ** 2).mean())
         if w0 is not None: print('W: ', np.abs(w0[:, :w.shape[1]] - w).sum())
         if z0 is not None: print('Z: ', np.abs(z0[:z.shape[0], :] - z).sum())
         return self
 
-    # Note: this simplified rotation applies only to probabilistic PCA, which already has some of the scalings built in.
-    def rotate(self):
-        e, v = np.linalg.eigh(self.W.T.dot(self.W))
-        w_rot = self.W.dot(v)
-        z_rot = self.Z.dot(v) # v.T.dot(self.z)
-        return w_rot, z_rot
 
 
 class detPCA(PCA):
@@ -114,9 +108,6 @@ class PPCA(PCA):
     def __init__(self, shape, **kwargs):
         self.D, self.N = shape
         self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir', 'n_iter']})
-        self.loc = kwargs.get('loc', 'random_normal')
-        self.full_posterior = kwargs.get('full_posterior', [])
-        self.full_prior = kwargs.get('full_prior', self.full_posterior)
         self.dtype = kwargs.get('dtype', tf.float32)
         self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
 
@@ -124,28 +115,45 @@ class PPCA(PCA):
         self.sess = tf.InteractiveSession()
         tf.set_random_seed(self.seed)
 
-    def param_init(self, name, values=None, jigger=0):
-        n, kind = name.split('/')
+    def get_config(self, *args):
+        c = getattr(self, args[0], None)
+        c = c.get(tf.get_variable_scope().name, c) if isinstance(c, dict) else c
+        for a in args[1:]:
+            if not isinstance(c, dict):
+                break
+            c = c.get(a, c) # this allows skipping of non-existant keys
+        return c
 
-        if kind=='scale' and name in self.full_posterior:
+    def param_init(self, name):
+        n, kind = name.split('/')
+        scope = tf.get_variable_scope() # e.g. posterior
+        train = self.get_config('trainable', kind, n)
+        init = self.get_config('initializer', kind, train)
+        try:
+            init = init(seed = self.seed)
+        except TypeError:
+            init = init()
+
+        if kind=='scale' and self.get_config('covariance', kind, n)=='full':
             shape = (self.K, self.K)
         else:
             shape = {'Z': (self.N, self.K), 'W': (self.D, self.K)}[n]
 
-        if self.loc == 'fixed':
-            return tf.get_variable(name, initializer=tf.zeros(shape))
-        elif values is not None:
-            v = tf.cast(values, self.dtype)
-            if jigger > 0:
-                v = v + getattr(tf, self.loc)(v.shape, stddev = jigger * values.std(), seed = self.seed)
-            return tf.get_variable(name, initializer=v)
-        else:
-            v = tf.get_variable(name, initializer=getattr(tf, self.loc)(shape, seed=self.seed))
-            return tf.nn.softplus(v) if kind == 'scale' else v
+        v = tf.get_variable(name, shape, self.dtype, init, trainable=train)
+        return tf.nn.softplus(v) if kind == 'scale' else v
+
+    def rotate(self):
+        e, v = np.linalg.eigh(self.W.T.dot(self.W))
+        w_rot = self.W.dot(v)
+        z_rot = self.Z.dot(v) # v.T.dot(self.z)
+        return w_rot, z_rot
 
 
 class gradPCA(PPCA):
-    def __init__(self, x1, learning_rate, n_iter=100, jigger=False, **kwargs):
+    trainable = True
+    initializer = tf.zeros_initializer# tf.random_normal_initializer
+
+    def __init__(self, x1, learning_rate, n_iter=100, **kwargs):
         super().__init__(x1.shape, **kwargs)
         mask = 1 - np.isnan(x1).astype(int).filled(1)
         mask_sum = np.sum(mask, 1, keepdims=True)
@@ -156,8 +164,8 @@ class gradPCA(PPCA):
 
         p = detPCA(x1, n_iter=1)
 
-        W = self.param_init('W/hyper', p.w, jigger=jigger)
-        Z = self.param_init('Z/hyper', p.z.T, jigger=jigger)
+        W = self.param_init('W/hyper') + p.w
+        Z = self.param_init('Z/hyper') + p.z.T
         x = tf.matmul(W, Z, transpose_b=True)
         m = tf.reduce_sum(x * mask, 1, keep_dims=True) / mask_sum
         self.data_loss = tf.losses.mean_squared_error(tf.gather(tf.reshape(x - m, [-1]), i), data)
@@ -181,7 +189,8 @@ class gradPCA(PPCA):
                 _, out = self.sess.run([opt, self.data_loss])
                 prog.update(j, {'loss': out})
 
-        self.W, self.W, self.mu = self.sess.run([W, Z, m + data_mean])
+        mu = m + data_mean
+        self.W, self.Z, self.mu, self.x = self.sess.run([W, Z, mu, x + mu])
 
 
 class probPCA(PPCA):
@@ -222,6 +231,29 @@ class probPCA(PPCA):
                 except AttributeError:
                     print(v, getattr(self, v).eval())
 
+
+    trainable = {
+        'posterior': True,
+        'prior': {
+            'loc': False,
+            'scale': False #{'W': False, 'Z': False}
+        }
+    }
+    initializer = {
+        'posterior': tf.random_normal_initializer,
+        'prior': {
+            'loc': tf.zeros_initializer,
+            'scale': {True: tf.random_normal_initializer, False: tf.ones_initializer}
+        }
+    }
+    covariance = {
+        'posterior': 'fact',
+        'prior': {
+            'W': 'fact',
+            'Z': 'fact'
+        }
+    }
+
     def __init__(self, x1, mean='point', noise='point', **kwargs):
         super().__init__(x1.shape, **kwargs)
         KL = {}
@@ -237,25 +269,19 @@ class probPCA(PPCA):
         else:
             a = tf.ones((1, self.K), name='alpha') # in hopes that this is correctly broadcast
 
-        with tf.name_scope('model'):
-            if 'Z' in self.full_prior:
-                self.Z_scale = tf.nn.softplus(tf.Variable(tf.random_normal((self.K, self.K), seed=self.seed)), name='Z/scale')
-                Z = ed.models.MultivariateNormalTriL(tf.zeros((self.N, self.K)), self.Z_scale, name='Z')
-            else:
-                Z = ed.models.Normal(tf.zeros((self.N, self.K), name='Z/loc'), tf.ones((self.N, self.K), name='Z/scale'), name='Z')
+        def normal(name):
+            return {
+                'full': ed.models.MultivariateNormalTriL,
+                'fact': ed.models.Normal
+            }[self.get_config('covariance', name)](
+                *[self.param_init('{}/{}'.format(name, k)) for k in ['loc', 'scale']], name=name)
 
-            if 'W' in self.full_prior:
-                self.W_scale = tf.nn.softplus(tf.Variable(tf.random_normal((self.K, self.K), seed=self.seed)), name='W/scale')
-                W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)), a * self.W_scale, name='W')
+        with tf.variable_scope('prior'):
+            Z = normal('Z')
+            if self.get_config('covariance', 'W') == 'full':
+                W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)), a * self.param_init('W/scale'), name='W')
             else:
                 W = ed.models.Normal(tf.zeros((self.D, self.K)), a, name='W')
-
-        def normal(name):
-            distr = {
-                True: ed.models.MultivariateNormalTriL,
-                False: ed.models.Normal
-                }[name in self.full_posterior]
-            return distr(*[self.param_init('{}/{}'.format(name, k)) for k in ['loc', 'scale']], name=name)
 
         with tf.variable_scope('posterior'):
             QZ, QW = map(normal, ['Z', 'W'])
@@ -339,6 +365,7 @@ class probPCA(PPCA):
 class vbPCA(PCA):
     def __init__(self, x1, K=None, n_iter=100, rotate=False):
         self.D, self.N = x1.shape
+        K = self.D if K is None else K
         self.x1 = x1
 
         z = bp.nodes.GaussianARD(0, 1, plates=(1, self.N), shape=(K, ))
@@ -359,10 +386,11 @@ class vbPCA(PCA):
         w.initialize_from_random()
         q.update(repeat=n_iter)
 
-        self.w = w.get_moments()[0].squeeze()
-        self.z = z.get_moments()[0].squeeze().T
-        self.mu = m.get_moments()[0].squeeze()
+        self.W = w.get_moments()[0].squeeze()
+        self.Z = z.get_moments()[0].squeeze().T
+        self.mu = m.get_moments()[0]
         self.tau = tau
+        self.x = self.W.dot(self.Z) + self.mu
 
         print('alphas: ', alpha.get_moments()[0])
         print('estimated noise: ', tau.get_moments()[0])
