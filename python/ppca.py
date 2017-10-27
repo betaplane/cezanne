@@ -58,8 +58,7 @@ def tf_rotate(w, z):
 
 class PCA(object):
     def critique(self, x0=None, w0=None, z0=None, rotate=False):
-        (w, z) = self.rotate() if rotate else (self.w, self.z)
-        self.x = w.dot(z) + self.m
+        (w, z) = self.rotate() if rotate else (self.W, self.Z)
 
         # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
         # Note: in deterministic PCA, e will be an array of ones, s.t. potentially the sorting (i) may be undetermined and mess things up.
@@ -76,7 +75,6 @@ class PCA(object):
                 z = z * s.T
         self.w_rot = w
 
-        print('\nnoisy input: ', ((self.x1 - self.x) ** 2).mean())
         if hasattr(self, 'data_loss'): print('data_loss: ', self.sess.run(self.data_loss))
         if x0 is not None: print('clean input: ', ((x0 - self.x) ** 2).mean())
         if w0 is not None: print('W: ', np.abs(w0[:, :w.shape[1]] - w).sum())
@@ -85,9 +83,9 @@ class PCA(object):
 
     # Note: this simplified rotation applies only to probabilistic PCA, which already has some of the scalings built in.
     def rotate(self):
-        e, v = np.linalg.eigh(self.w.T.dot(self.w))
-        w_rot = self.w.dot(v)
-        z_rot = v.T.dot(self.z)
+        e, v = np.linalg.eigh(self.W.T.dot(self.W))
+        w_rot = self.W.dot(v)
+        z_rot = self.Z.dot(v) # v.T.dot(self.z)
         return w_rot, z_rot
 
 
@@ -111,19 +109,16 @@ class detPCA(PCA):
             self.loss.append(((diff - m) ** 2).sum())
         self.m = data_mean + m
 
+
 class PPCA(PCA):
-    def __init__(self, x1, **kwargs):
-        self.x1 = x1.copy()
-        self.D, self.N = x1.shape
-        self.dims = kwargs.get('dims', None)
-        self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
-        self.seed = kwargs.get('seed', None)
+    def __init__(self, shape, **kwargs):
+        self.D, self.N = shape
+        self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir', 'n_iter']})
         self.loc = kwargs.get('loc', 'random_normal')
         self.full_posterior = kwargs.get('full_posterior', [])
         self.full_prior = kwargs.get('full_prior', self.full_posterior)
-        self.logdir = kwargs.get('logdir', None)
         self.dtype = kwargs.get('dtype', tf.float32)
-        self.n_iter = kwargs.get('n_iter')
+        self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
 
         tf.reset_default_graph()
         self.sess = tf.InteractiveSession()
@@ -151,7 +146,7 @@ class PPCA(PCA):
 
 class gradPCA(PPCA):
     def __init__(self, x1, learning_rate, n_iter=100, jigger=False, **kwargs):
-        super().__init__(x1, **kwargs)
+        super().__init__(x1.shape, **kwargs)
         mask = 1 - np.isnan(x1).astype(int).filled(1)
         mask_sum = np.sum(mask, 1, keepdims=True)
         data_mean = x1.mean(1, keepdims=True)
@@ -162,7 +157,7 @@ class gradPCA(PPCA):
         p = detPCA(x1, n_iter=1)
 
         W = self.param_init('W/hyper', p.w, jigger=jigger)
-        Z = self.param_init('Z/hyper', p.z.T,jigger=jigger)
+        Z = self.param_init('Z/hyper', p.z.T, jigger=jigger)
         x = tf.matmul(W, Z, transpose_b=True)
         m = tf.reduce_sum(x * mask, 1, keep_dims=True) / mask_sum
         self.data_loss = tf.losses.mean_squared_error(tf.gather(tf.reshape(x - m, [-1]), i), data)
@@ -186,7 +181,7 @@ class gradPCA(PPCA):
                 _, out = self.sess.run([opt, self.data_loss])
                 prog.update(j, {'loss': out})
 
-        self.w, self.z, self.m = self.sess.run([W, tf.matrix_transpose(Z), m + data_mean])
+        self.W, self.W, self.mu = self.sess.run([W, Z, m + data_mean])
 
 
 class probPCA(PPCA):
@@ -228,7 +223,7 @@ class probPCA(PPCA):
                     print(v, getattr(self, v).eval())
 
     def __init__(self, x1, mean='point', noise='point', **kwargs):
-        super().__init__(x1, **kwargs)
+        super().__init__(x1.shape, **kwargs)
         KL = {}
 
         if self.dims == 'full':
@@ -293,7 +288,6 @@ class probPCA(PPCA):
             else: # if noise is a simple number
                 tau = tf.constant(noise)
 
-
         data = x1.flatten()
         i, = np.where(~np.isnan(data))
         data = data[i]
@@ -306,8 +300,8 @@ class probPCA(PPCA):
         # this way, edward automatically writes out my own summaries
         summary_key = 'summaries_{}'.format(id(self.inference))
         with tf.variable_scope('loss'):
-            self.y = tf.matmul(QW.mean(), QZ.mean(), transpose_b=True) + m
-            self.data_loss = tf.losses.mean_squared_error(data, tf.gather(tf.reshape(self.y, [-1]), i))
+            xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
+            self.data_loss = tf.losses.mean_squared_error(data, tf.gather(tf.reshape(xm, [-1]), i))
             tf.summary.scalar('data_loss', self.data_loss, collections=[summary_key])
 
         self.inference.initialize(n_samples=10, logdir=self.logdir)
@@ -333,13 +327,12 @@ class probPCA(PPCA):
             self.inference.print_progress(out)
 
         with tf.variable_scope('posterior', reuse=True):
-            self.w = tf.get_variable('W/loc').eval()
-            self.z = tf.matrix_transpose(tf.get_variable('Z/loc')).eval()
-            self.m = tf.get_variable('mu/loc').eval()
+            self.__dict__.update(self.sess.run({key: tf.get_variable('{}/loc'.format(key)) for key in ['W', 'Z', 'mu']}))
+
+        self.x = self.sess.run(tf.get_default_graph().get_operation_by_name('loss/x').values())
 
         self.inference.finalize() # this just closes the FileWriter
-        # self.w, self.z, self.m = self.sess.run([self.w, self.z, self.m])
-        self.print('tau', 'alpha', self.m)
+        self.print('tau', 'alpha', self.mu)
         return self
 
 
