@@ -2,7 +2,11 @@
 """
 Notes
 -----
-
+* The instance variables exposed by the various classes have the following meaning:
+    * **W** (D, K) - the weights / loadings matrix_transpose
+    * **Z** (N, K) - the principal components
+    * **mu** (D, 1) - the data means (per dimension)
+    * **x** (D, N) - the reconstructed data
 * :class:`tf.contrib.distributions.GammaWithSoftplusConcentrationRate` produced negative 'concentration'. I therefore went with using :class:`tf.nn.softplus`, also in the case of :class:`ed.models.Normal` (instead of :class:`ed.models.NormalWithSoftplusScale`).
 * The black-box :class:`ed.inference.KLqp` algorithm used by Edward (score function gradient) doesn't deal well with Gamma and Dirichlet:
     * https://github.com/blei-lab/edward/issues/389
@@ -57,7 +61,13 @@ def tf_rotate(w, z):
 
 
 class PCA(object):
-    def critique(self, x0=None, w0=None, z0=None, rotate=False):
+    def __init__(self):
+        self.losses = pd.DataFrame()
+
+    def append(self, **kwargs):
+        self.losses = self.losses.append(kwargs, ignore_index=True)
+
+    def critique(self, data=None, x0=None, w0=None, z0=None, rotate=False):
         (w, z) = self.rotate() if rotate else (self.W, self.Z)
 
         # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
@@ -68,25 +78,31 @@ class PCA(object):
             w = w[:, i]
             e = e[i].reshape((1, -1))
             w = w / e
-            z = z[i, :] * e.T
-            if w0 is not None:
-                s = np.sign(np.sign(w0[:, :w.shape[1]] * w).sum(0, keepdims=True))
+            z = z[:, i] * e
+            if hasattr(data, 'W'):
+                s = np.sign(np.sign(data.W[:, :w.shape[1]] * w).sum(0, keepdims=True))
                 w = w * s
-                z = z * s.T
-        self.w_rot = w
+                z = z * s
 
-        if hasattr(self, 'data_loss'): print('\ndata_loss: ', self.sess.run(self.data_loss))
-        if x0 is not None: print('clean input: ', ((x0 - self.x) ** 2).mean())
-        if w0 is not None: print('W: ', np.abs(w0[:, :w.shape[1]] - w).sum())
-        if z0 is not None: print('Z: ', np.abs(z0[:z.shape[0], :] - z).sum())
+        print('')
+        for v in ['data_loss', 'tau', 'alpha']:
+            if v in self.variables: print('{}: {}'.format(v, getattr(self, v)))
+
+        if data is not None:
+            self.append(tau = data.tau - self.tau, **{a: self.MSE(getattr(data, a), b)
+                   for a, b in [('x', self.x), ('W', w), ('Z', z), ('mu', self.mu)]})
+
         return self
 
-
+    def MSE(self, *args):
+        try:
+            # transforming to df and resetting index serves as an alignment tool for differing D and K
+            a, b = [pd.DataFrame(x).reset_index(drop=True) for x in args]
+            return ((a - b) ** 2).as_matrix().mean()
+        except: pass
 
 class detPCA(PCA):
-    def __init__(self, x1, K=None, n_iter=1):
-        self.x1 = x1.copy()
-        self.loss = []
+    def run(self, x1, K=None, n_iter=1):
         if K is None:
             K = x1.shape[0]
         data_mean = x1.mean(1, keepdims=True)
@@ -94,22 +110,27 @@ class detPCA(PCA):
         x = x1.filled(0)
         for i in range(n_iter):
             self.e, v = np.linalg.eigh(np.cov(x))
-            self.w = v[:, np.argsort(self.e)[::-1][:K]]
-            self.z = self.w.T.dot(x)
-            x = self.w.dot(self.z)
+            self.W = v[:, np.argsort(self.e)[::-1][:K]]
+            self.Z = self.W.T.dot(x)
+            self.x = self.W.dot(self.Z)
             diff = x1 - x
             m = diff.mean(1, keepdims=True)
-            x = np.where(x1.mask, x + m, x1)
-            self.loss.append(((diff - m) ** 2).sum())
-        self.m = data_mean + m
-
+            x = np.where(x1.mask, self.x + m, x1)
+        self.mu = data_mean + m
+        self.x = self.x + self.mu
+        return self
 
 class PPCA(PCA):
+    def __getattr__(self, name):
+        return self.sess.run(self.variables[name])
+
     def __init__(self, shape, **kwargs):
+        super().__init__()
         self.D, self.N = shape
         self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir', 'n_iter']})
         self.dtype = kwargs.get('dtype', tf.float32)
         self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
+        self.variables = {}
 
         tf.reset_default_graph()
         self.sess = tf.InteractiveSession()
@@ -220,17 +241,6 @@ class probPCA(PPCA):
         xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
         return xmu ** 2 * xvar * (xvar - 1)
 
-    def print(self, *vars):
-        print('')
-        for v in vars:
-            if not isinstance(v, str):
-                print(v)
-            elif hasattr(self, v):
-                try:
-                    print(v, getattr(self, v).mean().eval())
-                except AttributeError:
-                    print(v, getattr(self, v).eval())
-
 
     trainable = {
         'posterior': True,
@@ -298,21 +308,21 @@ class probPCA(PPCA):
                     # tf.Variable(tf.random_normal((self.D, 1), seed=self.seed)),
                     tf.nn.softplus(tf.Variable(tf.random_normal((self.D, 1), seed=self.seed))))
                 KL.update({m: qm})
+                self.variables.update({'mu': qm.mean()})
             else:
                 # m = tf.Variable(tf.random_normal((self.D, 1), seed=self.seed), name='mean')
                 m = tf.get_variable('posterior/mu/loc', initializer=data_mean)
+                self.variables.update({'mu': m})
 
             if noise == 'point':
                 tau = tf.nn.softplus(tf.Variable(tf.random_normal((), seed=self.seed), name='tau'))
-                self.tau = tau
+                self.variables.update({'tau': tau})
             elif noise == 'full':
                 s = ed.models.Gamma(1e-5, 1e-5, name='model/tau')
                 qs = self.lognormal(name='posterior/tau')
                 tau = s ** -.5
                 KL.update({s: qs})
-                self.tau = qs
-            else: # if noise is a simple number
-                tau = tf.constant(noise)
+                self.variables.update({'tau': qs.mean()})
 
         data = x1.flatten()
         i, = np.where(~np.isnan(data))
@@ -325,13 +335,14 @@ class probPCA(PPCA):
         # this comes from edward source (class VariationalInference)
         # this way, edward automatically writes out my own summaries
         summary_key = 'summaries_{}'.format(id(self.inference))
+
         with tf.variable_scope('loss'):
             xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
-            self.data_loss = tf.losses.mean_squared_error(data, tf.gather(tf.reshape(xm, [-1]), i))
-            tf.summary.scalar('data_loss', self.data_loss, collections=[summary_key])
+            data_loss = tf.losses.mean_squared_error(data, tf.gather(tf.reshape(xm, [-1]), i))
+            tf.summary.scalar('data_loss', data_loss, collections=[summary_key])
 
         self.inference.initialize(n_samples=10, logdir=self.logdir)
-        # self.out = self.inference.run(n_iter=n_iter, n_samples=10, logdir=logdir)
+        self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
 
 
     def run(self, n_iter):
@@ -341,10 +352,12 @@ class probPCA(PPCA):
         except tf.errors.FailedPreconditionError:
             pass
         else:
-            self.inference.train_writer = tf.summary.FileWriter(
-                os.path.join(self.logdir, datetime.utcnow().strftime('%Y%m%d_%H%M%S')))
+            if self.logdir is not None:
+                self.inference.train_writer = tf.summary.FileWriter(
+                    os.path.join(self.logdir, datetime.utcnow().strftime('%Y%m%d_%H%M%S')))
 
         tf.global_variables_initializer().run()
+
         # hack to use the progbar that edward allocates anyway, without giving n_iter to inference.initialize()
         self.inference.progbar.target = n_iter
 
@@ -352,18 +365,13 @@ class probPCA(PPCA):
             out = self.inference.update()
             self.inference.print_progress(out)
 
-        with tf.variable_scope('posterior', reuse=True):
-            self.__dict__.update(self.sess.run({key: tf.get_variable('{}/loc'.format(key)) for key in ['W', 'Z', 'mu']}))
-
-        self.x = self.sess.run(tf.get_default_graph().get_operation_by_name('loss/x').values())
-
         self.inference.finalize() # this just closes the FileWriter
-        self.print('tau', 'alpha', self.mu)
         return self
 
 
 class vbPCA(PCA):
     def __init__(self, x1, K=None, n_iter=100, rotate=False):
+        super().__init__()
         self.D, self.N = x1.shape
         K = self.D if K is None else K
         self.x1 = x1

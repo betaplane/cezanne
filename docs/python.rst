@@ -27,5 +27,5 @@ Plotting
 PCA
 ---
 
-.. automodule:: python.ppca_tests
+.. automodule:: python.ppca
    :members:
