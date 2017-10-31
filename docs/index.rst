@@ -12,7 +12,6 @@ Welcome to cezanne's documentation!
 
    python
 
-
 Indices and tables
 ==================
 

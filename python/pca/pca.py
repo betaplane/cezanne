@@ -24,6 +24,7 @@ import bayespy as bp
 import bayespy.inference.vmp.transformations as bpt
 from types import MethodType
 from datetime import datetime
+from warnings import warn
 import os
 
 # N number of examples ('time')
@@ -61,11 +62,33 @@ def tf_rotate(w, z):
 
 
 class PCA(object):
-    def __init__(self):
-        self.losses = pd.DataFrame()
+    """Base class for all PCA subtypes. Any **kwargs** passed to the constructor will be added to the :attr:`losses` accumulator. The idea is to automatically save any configuration values for later analysis of the accumulated results.
+    """
+
+    losses = pd.DataFrame()
+    """Class-level accumulator :class:`~pandas.DataFrame` for all data that's supposed to be saved for a given invocation."""
+
+    def __getattr__(self, name):
+        try:
+            v = self.variables[name]
+        except KeyError:
+            warn('Attempted to access non-existing variable.')
+            return np.nan # so that in summary DataFrame we have NaN instead of None
+        else:
+            return self.sess.run(v) if isinstance(self, PPCA) else v
+
+    def __init__(self, **kwargs):
+        self.variables = {}
+        self.instance = kwargs
+        self.instance.update({
+            'id': datetime.utcnow().strftime('pca%Y%m%d%H%M%S%f'),
+            'class': self.__class__.__name__
+        })
 
     def append(self, **kwargs):
-        self.losses = self.losses.append(kwargs, ignore_index=True)
+        kwargs.update({'logsubdir': self.logsubdir, 'n_iter': self.n_iter})
+        kwargs.update(self.instance)
+        PCA.losses = PCA.losses.append(kwargs, ignore_index=True)
 
     def critique(self, data=None, x0=None, w0=None, z0=None, rotate=False):
         (w, z) = self.rotate() if rotate else (self.W, self.Z)
@@ -86,20 +109,27 @@ class PCA(object):
 
         print('')
         for v in ['data_loss', 'tau', 'alpha']:
-            if v in self.variables: print('{}: {}'.format(v, getattr(self, v)))
+            print('{}: {}'.format(v, getattr(self, v)))
 
         if data is not None:
-            self.append(tau = data.tau - self.tau, **{a: self.MSE(getattr(data, a), b)
-                   for a, b in [('x', self.x), ('W', w), ('Z', z), ('mu', self.mu)]})
+            update = {a: self.RMS(data, a, W=w, Z=z) for a in ['x', 'W', 'Z', 'mu', 'tau']}
+            update.update({'missing': data.missing_fraction, 'data': data.id})
+
+        update.update({'data_loss': self.data_loss, 'rotated': rotate})
+        self.append(**update)
 
         return self
 
-    def MSE(self, *args):
+    def RMS(self, data, attr, **kwargs):
+        # transforming to df and resetting index serves as an alignment tool for differing D and K
+        def df(x):
+            return pd.DataFrame(x).reset_index(drop=True) if hasattr(x, '__iter__') else x
+        a = df(getattr(data, attr))
         try:
-            # transforming to df and resetting index serves as an alignment tool for differing D and K
-            a, b = [pd.DataFrame(x).reset_index(drop=True) for x in args]
-            return ((a - b) ** 2).as_matrix().mean()
-        except: pass
+            d = (a - df(kwargs.get(attr, getattr(self, attr)))) ** 2
+            return d.as_matrix().mean() ** .5 if hasattr(d, '__iter__') else d ** .5
+        except:
+            pass
 
 class detPCA(PCA):
     def run(self, x1, K=None, n_iter=1):
@@ -111,8 +141,8 @@ class detPCA(PCA):
         for i in range(n_iter):
             self.e, v = np.linalg.eigh(np.cov(x))
             self.W = v[:, np.argsort(self.e)[::-1][:K]]
-            self.Z = self.W.T.dot(x)
-            self.x = self.W.dot(self.Z)
+            self.Z = x.T.dot(self.W)
+            self.x = self.W.dot(self.Z.T)
             diff = x1 - x
             m = diff.mean(1, keepdims=True)
             x = np.where(x1.mask, self.x + m, x1)
@@ -121,16 +151,14 @@ class detPCA(PCA):
         return self
 
 class PPCA(PCA):
-    def __getattr__(self, name):
-        return self.sess.run(self.variables[name])
+    """Parent class for probabilistic PCA subclasses that need TensorFlow_ infrastructure."""
 
     def __init__(self, shape, **kwargs):
-        super().__init__()
         self.D, self.N = shape
         self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir', 'n_iter']})
         self.dtype = kwargs.get('dtype', tf.float32)
         self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
-        self.variables = {}
+        super().__init__(**kwargs) # additional kwargs are used to annotate the 'losses' DataFrame
 
         tf.reset_default_graph()
         self.sess = tf.InteractiveSession()
@@ -165,9 +193,21 @@ class PPCA(PCA):
 
     def rotate(self):
         e, v = np.linalg.eigh(self.W.T.dot(self.W))
-        w_rot = self.W.dot(v)
-        z_rot = self.Z.dot(v) # v.T.dot(self.z)
+        w_rot = self.W.dot(v) # W ~ (D, K)
+        z_rot = self.Z.dot(v) # Z ~ (N, K)
         return w_rot, z_rot
+
+    @property
+    def logsubdir(self):
+        try:
+            return os.path.split(self.inference.train_writer.get_logdir())[1]
+        except AttributeError:
+            return None
+
+    @logsubdir.setter
+    def logsubdir(self, value):
+        if self.logdir is not None:
+            self.inference.train_writer = tf.summary.FileWriter(os.path.join(self.logdir, value))
 
 
 class gradPCA(PPCA):
@@ -215,6 +255,8 @@ class gradPCA(PPCA):
 
 
 class probPCA(PPCA):
+    """Edward_-based fully configurable bayesian / mixed probabilistic principal component analyzer."""
+
     def lognormal(self, shape=(), name='LogNormal'):
         lognormal = ed.models.TransformedDistribution(
             ed.models.Normal(
@@ -249,6 +291,8 @@ class probPCA(PPCA):
             'scale': False #{'W': False, 'Z': False}
         }
     }
+    """The trainable components of the PPCA system."""
+
     initializer = {
         'posterior': tf.random_normal_initializer,
         'prior': {
@@ -256,6 +300,8 @@ class probPCA(PPCA):
             'scale': {True: tf.random_normal_initializer, False: tf.ones_initializer}
         }
     }
+    """The initializers used for the trainable components."""
+
     covariance = {
         'posterior': 'fact',
         'prior': {
@@ -263,6 +309,7 @@ class probPCA(PPCA):
             'Z': 'fact'
         }
     }
+    """The type of covariance (full or factorized) to be used for the respective components."""
 
     def __init__(self, x1, mean='point', noise='point', **kwargs):
         super().__init__(x1.shape, **kwargs)
@@ -325,6 +372,8 @@ class probPCA(PPCA):
                 self.variables.update({'tau': qs.mean()})
 
         data = x1.flatten()
+        data2 = tf.placeholder(self.dtype, (np.prod(shape), ), name='x1')
+        mask = tf.placeholder(tf.bool, data.shape, name='mask')
         i, = np.where(~np.isnan(data))
         data = data[i]
         x = tf.gather(tf.reshape(tf.matmul(W, Z, transpose_b=True) + m, [-1]), i)
@@ -346,15 +395,17 @@ class probPCA(PPCA):
 
 
     def run(self, n_iter):
+        self.n_iter = n_iter
         # if this is a repeated run, replace edward's FileWriter to write to a new directory
         try:
             t = self.inference.t.eval()
         except tf.errors.FailedPreconditionError:
             pass
         else:
-            if self.logdir is not None:
-                self.inference.train_writer = tf.summary.FileWriter(
-                    os.path.join(self.logdir, datetime.utcnow().strftime('%Y%m%d_%H%M%S')))
+            self.logsubdir = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            # if self.logdir is not None:
+            #     self.inference.train_writer = tf.summary.FileWriter(
+            #         os.path.join(self.logdir, datetime.utcnow().strftime('%Y%m%d_%H%M%S')))
 
         tf.global_variables_initializer().run()
 

@@ -1,10 +1,13 @@
 Python
 ======
 
+.. automodule:: python.pca
+
 .. toctree::
    :maxdepth: 2
 
    data
+   
 
 Helpers
 -------
@@ -24,8 +27,4 @@ Plotting
 .. automodule:: python.plots
    :members:
 
-PCA
----
 
-.. automodule:: python.ppca
-   :members:
