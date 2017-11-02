@@ -5,7 +5,7 @@ from datetime import datetime
 
 class data(object):
     def __init__(self):
-        self.id = datetime.utcnow().strftime('dataf%Y%m%d%H%M%S%f')
+        self.id = datetime.utcnow().strftime('data%Y%m%d%H%M%S%f')
 
     def toy(self, N=5000, D=5, K=5, tau=1):
         w = np.random.normal(0, 1, (D, K)) # weights
