@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
 Notes
 -----
@@ -13,6 +12,11 @@ Notes
     * https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
 * For the tensorboard summaries to work in the presence of missing values, the input array needs to be of :class:`np.ma.MaskedArray` type **and** have NaNs at the missing locations - not clear why.
 
+ToDo
+----
+* separate data observation from graph initialization in probPCA (use tf.placeholder)
+* write out the loss function value internally used by the algorithms in the losses dataframe
+
 """
 
 import matplotlib.pyplot as plt
@@ -24,41 +28,13 @@ import bayespy as bp
 import bayespy.inference.vmp.transformations as bpt
 from types import MethodType
 from datetime import datetime
-from warnings import warn
+from warnings import warn, catch_warnings, simplefilter
 import os
 
 # N number of examples ('time')
 # D dimension of example ('space')
 # K number of principal components
 
-def station_data():
-    t = pd.read_hdf('../../data/CEAZAMet/station_data.h5', 'ta_c').xs('prom', 1, 'aggr')
-    sta = pd.read_hdf('../../data/CEAZAMet/stations.h5', 'stations')
-    lat = sta.loc[t.columns.get_level_values(0)].lat.astype(float)
-    return t[t.columns[(lat>-34) & (lat<-27)]].resample('D').mean()
-
-def whitened_test_data(N=5000, D=5, K=5, s=1, missing=0):
-    w = np.random.normal(0, 1, (D, K))
-    z = np.random.normal(0, 1, (K, N))
-    m = np.random.normal(0, 1, (D, 1))
-    x = w.dot(z)
-    p = detPCA(np.ma.masked_invalid(x), n_iter=1)
-    x1 = x.flatten()
-    x1[np.random.randint(0, len(x1), round(missing * len(x1)))] = np.nan # see notes in module docstring
-    x1 = np.ma.masked_invalid(x1).reshape(x.shape)
-    return x + m, x1 + m + np.random.normal(0, s, (D, N)), p.w, p.z, m
-
-
-def tf_rotate(w, z):
-    u, U = tf.self_adjoint_eig(tf.matmul(z, tf.matrix_transpose(z)))
-    Dx = tf.diag(v ** .5)
-    v, V = tf.self_adjoint_eig(
-        tf.matmul(tf.matmul(tf.matmul(tf.matmul(tf.matmul(
-            Dx, tf.matrix_transpose(U)), w), tf.matrix_transpose(w)), U), Dx))
-    w_rot = tf.matmul(tf.matmul(tf.matmul(tf.matrix_transpose(w), U), Dx), V)
-    z_rot = tf.matmul(tf.matmul(tf.matmul(tf.matrix_transpose(V), tf.diag(v ** -.5)),
-                                tf.matrix_transpose(U)), z)
-    return w_rot, z_rot
 
 
 class PCA(object):
@@ -108,8 +84,11 @@ class PCA(object):
                 z = z * s
 
         print('')
-        for v in ['data_loss', 'tau', 'alpha']:
-            print('{}: {}'.format(v, getattr(self, v)))
+        # because this is precicely when the warning raised in __getattr__() should be ignored
+        with catch_warnings():
+            simplefilter('ignore')
+            for v in ['data_loss', 'tau', 'alpha']:
+                print('{}: {}'.format(v, getattr(self, v)))
 
         if data is not None:
             update = {a: self.RMS(data, a, W=w, Z=z) for a in ['x', 'W', 'Z', 'mu', 'tau']}
@@ -257,12 +236,16 @@ class gradPCA(PPCA):
 class probPCA(PPCA):
     """Edward_-based fully configurable bayesian / mixed probabilistic principal component analyzer."""
 
-    def lognormal(self, shape=(), name='LogNormal'):
+    def lognormal(self, name, shape=()):
         lognormal = ed.models.TransformedDistribution(
             ed.models.Normal(
                 # since we use this for variance-like variables
-                tf.nn.softplus(tf.Variable(tf.random_normal(shape, seed=self.seed)), name='{}/loc'.format(name)),
-                tf.nn.softplus(tf.Variable(tf.random_normal(shape, seed=self.seed)), name='{}/scale'.format(name)),
+                tf.nn.softplus(
+                    tf.get_variable('{}/loc'.format(name), shape=shape,
+                                    initializer=self.get_config('initializer', name))),
+                tf.nn.softplus(
+                    tf.get_variable('{}/scale'.format(name), shape=shape,
+                                    initializer=self.get_config('initializer', name))),
                 name = '{}_Normal'.format(name)
             ), bijector = tf.contrib.distributions.bijectors.Exp(),
             name = '{}_LogNormal'.format(name)
@@ -298,7 +281,8 @@ class probPCA(PPCA):
         'prior': {
             'loc': tf.zeros_initializer,
             'scale': {True: tf.random_normal_initializer, False: tf.ones_initializer}
-        }
+        },
+        'tau': tf.random_normal_initializer
     }
     """The initializers used for the trainable components."""
 
@@ -311,13 +295,14 @@ class probPCA(PPCA):
     }
     """The type of covariance (full or factorized) to be used for the respective components."""
 
-    def __init__(self, x1, mean='point', noise='point', **kwargs):
-        super().__init__(x1.shape, **kwargs)
+    def __init__(self, x1, hyper, mean='point', noise='point', **kwargs):
+        shape = x1.shape
+        super().__init__(shape, **kwargs)
         KL = {}
 
         if self.dims == 'full':
             alpha = ed.models.Gamma(1e-5 * tf.ones((1, self.D)), 1e-5 * tf.ones((1, self.D)), name='model/alpha')
-            qa = self.lognormal(alpha.shape, 'posterior/alpha')
+            qa = self.lognormal('posterior/alpha', alpha.shape)
             KL.update({alpha: qa})
             self.alpha = qa
             a = alpha ** -.5
@@ -347,36 +332,40 @@ class probPCA(PPCA):
 
         with tf.variable_scope(''):
             data_mean = tf.cast(x1.mean(1, keepdims=True), self.dtype)
-            if mean == 'full':
-                hyper_mean = tf.Variable(data_mean, name='hyper_mean')
-                m = ed.models.Normal(data_mean, tf.ones((self.D, 1)))
+            if mean == 'point':
+                m = tf.get_variable('posterior/mu/loc', initializer=data_mean)
+                self.variables.update({'mu': m})
+            elif mean == 'full':
+                hyper_mean = tf.get_variable('posterior/mu/hyper', initializer=data_mean) if hyper else data_mean
+                m = ed.models.Normal(hyper_mean, tf.ones((self.D, 1)))
                 qm = ed.models.Normal(
                     tf.Variable(data_mean),
-                    # tf.Variable(tf.random_normal((self.D, 1), seed=self.seed)),
                     tf.nn.softplus(tf.Variable(tf.random_normal((self.D, 1), seed=self.seed))))
                 KL.update({m: qm})
                 self.variables.update({'mu': qm.mean()})
-            else:
-                # m = tf.Variable(tf.random_normal((self.D, 1), seed=self.seed), name='mean')
-                m = tf.get_variable('posterior/mu/loc', initializer=data_mean)
-                self.variables.update({'mu': m})
 
             if noise == 'point':
-                tau = tf.nn.softplus(tf.Variable(tf.random_normal((), seed=self.seed), name='tau'))
+                init = self.get_config('initializer', 'tau')
+                tau = tf.nn.softplus(
+                    tf.get_variable('posterior/tau', shape=(), initializer=init(self.seed)))
                 self.variables.update({'tau': tau})
             elif noise == 'full':
-                s = ed.models.Gamma(1e-5, 1e-5, name='model/tau')
+                s = ed.models.Gamma(1e-5, 1e-5, name='prior/tau')
                 qs = self.lognormal(name='posterior/tau')
                 tau = s ** -.5
                 KL.update({s: qs})
                 self.variables.update({'tau': qs.mean()})
 
         data = x1.flatten()
-        data2 = tf.placeholder(self.dtype, (np.prod(shape), ), name='x1')
-        mask = tf.placeholder(tf.bool, data.shape, name='mask')
         i, = np.where(~np.isnan(data))
         data = data[i]
         x = tf.gather(tf.reshape(tf.matmul(W, Z, transpose_b=True) + m, [-1]), i)
+
+        # self.data = tf.placeholder(self.dtype, shape, name='x1')
+        # self.mask = tf.placeholder(tf.bool, shape, name='mask')
+        # data = tf.boolean_mask(self.data, self.mask, name='masked_x1')
+        # x = tf.boolean_mask(tf.matmul(W, Z, transpose_b=True) + m, self.mask)
+
         X = ed.models.Normal(x, tau * tf.ones(x.shape))
 
         self.inference = ed.KLqp(KL, data={X: data})
@@ -385,6 +374,7 @@ class probPCA(PPCA):
         # this way, edward automatically writes out my own summaries
         summary_key = 'summaries_{}'.format(id(self.inference))
 
+        # data_loss is not instrumental in the procedure, I compute it solely to write it out to tensorboard
         with tf.variable_scope('loss'):
             xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
             data_loss = tf.losses.mean_squared_error(data, tf.gather(tf.reshape(xm, [-1]), i))
@@ -403,9 +393,6 @@ class probPCA(PPCA):
             pass
         else:
             self.logsubdir = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-            # if self.logdir is not None:
-            #     self.inference.train_writer = tf.summary.FileWriter(
-            #         os.path.join(self.logdir, datetime.utcnow().strftime('%Y%m%d_%H%M%S')))
 
         tf.global_variables_initializer().run()
 
@@ -422,7 +409,7 @@ class probPCA(PPCA):
 
 class vbPCA(PCA):
     def __init__(self, x1, K=None, n_iter=100, rotate=False):
-        super().__init__()
+        super().__init__(rotated=rotate)
         self.D, self.N = x1.shape
         K = self.D if K is None else K
         self.x1 = x1
@@ -434,25 +421,25 @@ class vbPCA(PCA):
         tau = bp.nodes.Gamma(1e-5, 1e-5)
         x = bp.nodes.GaussianARD(bp.nodes.Add(bp.nodes.Dot(z, w), m), tau)
         x.observe(x1, mask=~x1.mask)
-        q = bp.inference.VB(x, z, w, alpha, tau, m)
+        self.inference = bp.inference.VB(x, z, w, alpha, tau, m)
 
         if rotate:
             rot_z = bpt.RotateGaussianARD(z)
             rot_w = bpt.RotateGaussianARD(w, alpha)
             R = bpt.RotationOptimizer(rot_z, rot_w, K)
-            q.set_callback(R.rotate)
+            self.inference.set_callback(R.rotate)
 
         w.initialize_from_random()
-        q.update(repeat=n_iter)
+        self.inference.update(repeat=n_iter)
 
         self.W = w.get_moments()[0].squeeze()
-        self.Z = z.get_moments()[0].squeeze().T
+        self.Z = z.get_moments()[0].squeeze()
         self.mu = m.get_moments()[0]
-        self.tau = tau
-        self.x = self.W.dot(self.Z) + self.mu
-
-        print('alphas: ', alpha.get_moments()[0])
-        print('estimated noise: ', tau.get_moments()[0])
+        self.tau = tau.get_moments()[0].item()
+        self.x = self.W.dot(self.Z.T) + self.mu
+        self.alpha = alpha.get_moments()[0]
+        self.n_iter = self.inference.iter
+        self.loss = self.inference.loglikelihood_lowerbound()
 
 
 
