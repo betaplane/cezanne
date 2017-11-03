@@ -127,4 +127,8 @@ def test2(file, n_iter=2000):
                             c.loc[('prior', 'tau', 'scale'), :] = tau_scale
 
                             for s in range(n_seed):
-                                p = probPCA(d.x1, seed=s, )
+                                p = probPCA(d.x1, seed=s, mu=mu, tau=tau, config=x, i=i, j=j, k=k, l=l, m=m, n=n)
+                                p.run(n_iter).critique(d)
+
+                            with pd.HDFStore(file) as S:
+                                S['exp2'] = p.losses.replace('None', np.nan)
