@@ -143,31 +143,29 @@ class PPCA(PCA):
         self.sess = tf.InteractiveSession()
         tf.set_random_seed(self.seed)
 
-    def get_config(self, *args):
-        c = getattr(self, args[0], None)
-        c = c.get(tf.get_variable_scope().name, c) if isinstance(c, dict) else c
-        for a in args[1:]:
-            if not isinstance(c, dict):
-                break
-            c = c.get(a, c) # this allows skipping of non-existant keys
-        return c
-
-    def param_init(self, name):
-        n, kind = name.split('/')
-        scope = tf.get_variable_scope() # e.g. posterior
-        train = self.get_config('trainable', kind, n)
-        init = self.get_config('initializer', kind, train)
+    def _init(self, init, shape=None):
         try:
-            init = init(seed = self.seed)
+            return {'initializer': init(seed = self.seed), 'shape': shape}
         except TypeError:
-            init = init()
+            return {'initializer': init(), 'shape': shape}
 
-        if kind=='scale' and self.get_config('covariance', kind, n)=='full':
-            shape = (self.K, self.K)
-        else:
-            shape = {'Z': (self.N, self.K), 'W': (self.D, self.K)}[n]
+    def param_init(self, name, shape=None):
+        a = name.split('/')
+        if len(a) == 3:
+            scope, n, kind = a
+        elif len(a) == 2:
+            n, kind = a
+            scope = tf.get_variable_scope().name # e.g. posterior
 
-        v = tf.get_variable(name, shape, self.dtype, init, trainable=train)
+        cov, train, init = self.config.loc[(scope, n, kind), :]
+
+        if shape is None:
+            if kind=='scale' and cov=='full':
+                shape = (self.K, self.K)
+            else:
+                shape = {'Z': (self.N, self.K), 'W': (self.D, self.K)}[n]
+
+        v = tf.get_variable(name, dtype=self.dtype, trainable=train, **self._init(init, shape))
         return tf.nn.softplus(v) if kind == 'scale' else v
 
     def rotate(self):
@@ -241,11 +239,11 @@ class probPCA(PPCA):
             ed.models.Normal(
                 # since we use this for variance-like variables
                 tf.nn.softplus(
-                    tf.get_variable('{}/loc'.format(name), shape=shape,
-                                    initializer=self.get_config('initializer', name))),
+                    tf.get_variable('{}/loc'.format(name), **self._init(
+                                        self.config.loc[('posterior', name, 'loc'), 'initializer'], shape))),
                 tf.nn.softplus(
-                    tf.get_variable('{}/scale'.format(name), shape=shape,
-                                    initializer=self.get_config('initializer', name))),
+                    tf.get_variable('{}/scale'.format(name), **self._init(
+                                        self.config.loc[('posterior', name, 'scale'), 'initializer'], shape))),
                 name = '{}_Normal'.format(name)
             ), bijector = tf.contrib.distributions.bijectors.Exp(),
             name = '{}_LogNormal'.format(name)
@@ -266,38 +264,21 @@ class probPCA(PPCA):
         xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
         return xmu ** 2 * xvar * (xvar - 1)
 
+    def configure(self):
+        idx = pd.IndexSlice
+        config = pd.DataFrame(
+            index = pd.MultiIndex.from_product([['prior', 'posterior'], ['W', 'Z', 'tau'], ['loc', 'scale']]),
+            columns = ['covariance', 'trainable', 'initializer']
+        ).sort_index()
+        config.loc[idx['prior', :, 'loc'], :]   = ['fact', False, tf.zeros_initializer]
+        config.loc[idx['prior', :, 'scale'], :] = ['fact', False, tf.ones_initializer]
+        config.loc['posterior', :]              = ['fact', True, tf.random_normal_initializer]
+        self.config = config
 
-    trainable = {
-        'posterior': True,
-        'prior': {
-            'loc': False,
-            'scale': False #{'W': False, 'Z': False}
-        }
-    }
-    """The trainable components of the PPCA system."""
-
-    initializer = {
-        'posterior': tf.random_normal_initializer,
-        'prior': {
-            'loc': tf.zeros_initializer,
-            'scale': {True: tf.random_normal_initializer, False: tf.ones_initializer}
-        },
-        'tau': tf.random_normal_initializer
-    }
-    """The initializers used for the trainable components."""
-
-    covariance = {
-        'posterior': 'fact',
-        'prior': {
-            'W': 'fact',
-            'Z': 'fact'
-        }
-    }
-    """The type of covariance (full or factorized) to be used for the respective components."""
-
-    def __init__(self, x1, hyper, mean='point', noise='point', **kwargs):
+    def __init__(self, x1, mean='point', noise='point', **kwargs):
         shape = x1.shape
         super().__init__(shape, **kwargs)
+        self.configure()
         KL = {}
 
         if self.dims == 'full':
@@ -311,16 +292,19 @@ class probPCA(PPCA):
         else:
             a = tf.ones((1, self.K), name='alpha') # in hopes that this is correctly broadcast
 
-        def normal(name):
-            return {
+        def normal(name, covariance=False):
+            scope = tf.get_variable_scope().name
+            cov = self.config.loc[(scope, name, 'scale'), 'covariance']
+            model = {
                 'full': ed.models.MultivariateNormalTriL,
                 'fact': ed.models.Normal
-            }[self.get_config('covariance', name)](
+            }[cov](
                 *[self.param_init('{}/{}'.format(name, k)) for k in ['loc', 'scale']], name=name)
+            return (model, cov) if covariance else model
 
         with tf.variable_scope('prior'):
-            Z = normal('Z')
-            if self.get_config('covariance', 'W') == 'full':
+            Z, cov = normal('Z', True)
+            if cov == 'full':
                 W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)), a * self.param_init('W/scale'), name='W')
             else:
                 W = ed.models.Normal(tf.zeros((self.D, self.K)), a, name='W')
@@ -335,9 +319,12 @@ class probPCA(PPCA):
             if mean == 'point':
                 m = tf.get_variable('posterior/mu/loc', initializer=data_mean)
                 self.variables.update({'mu': m})
-            elif mean == 'full':
-                hyper_mean = tf.get_variable('posterior/mu/hyper', initializer=data_mean) if hyper else data_mean
-                m = ed.models.Normal(hyper_mean, tf.ones((self.D, 1)))
+            else:
+                if mean == 'hyper':
+                    hyper_mean = tf.get_variable('posterior/mu/hyper', initializer=data_mean)
+                    m = ed.models.Normal(hyper_mean, tf.ones((self.D, 1)))
+                elif mean == 'full':
+                    m = ed.models.Normal(data_mean, tf.ones((self.D, 1)))
                 qm = ed.models.Normal(
                     tf.Variable(data_mean),
                     tf.nn.softplus(tf.Variable(tf.random_normal((self.D, 1), seed=self.seed))))
@@ -345,13 +332,11 @@ class probPCA(PPCA):
                 self.variables.update({'mu': qm.mean()})
 
             if noise == 'point':
-                init = self.get_config('initializer', 'tau')
-                tau = tf.nn.softplus(
-                    tf.get_variable('posterior/tau', shape=(), initializer=init(self.seed)))
+                tau = self.param_init('posterior/tau/scale', ())
                 self.variables.update({'tau': tau})
             elif noise == 'full':
                 s = ed.models.Gamma(1e-5, 1e-5, name='prior/tau')
-                qs = self.lognormal(name='posterior/tau')
+                qs = self.lognormal(name='tau')
                 tau = s ** -.5
                 KL.update({s: qs})
                 self.variables.update({'tau': qs.mean()})
