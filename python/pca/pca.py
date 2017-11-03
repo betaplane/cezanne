@@ -83,6 +83,10 @@ class PCA(object):
                 w = w * s
                 z = z * s
 
+        if data is not None:
+            update = {a: self.RMS(data, a, W=w, Z=z) for a in ['x', 'W', 'Z', 'mu', 'tau']}
+            update.update({'missing': data.missing_fraction, 'data': data.id})
+
         print('')
         # because this is precicely when the warning raised in __getattr__() should be ignored
         with catch_warnings():
@@ -90,12 +94,8 @@ class PCA(object):
             for v in ['data_loss', 'tau', 'alpha']:
                 print('{}: {}'.format(v, getattr(self, v)))
 
-        if data is not None:
-            update = {a: self.RMS(data, a, W=w, Z=z) for a in ['x', 'W', 'Z', 'mu', 'tau']}
-            update.update({'missing': data.missing_fraction, 'data': data.id})
-
-        update.update({'data_loss': self.data_loss, 'rotated': rotate})
-        self.append(**update)
+            update.update({'data_loss': self.data_loss, 'rotated': rotate, 'loss': self.loss})
+            self.append(**update)
 
         return self
 
@@ -144,28 +144,26 @@ class PPCA(PCA):
         tf.set_random_seed(self.seed)
 
     def _init(self, init, shape=None):
+        if isinstance(init, str):
+            return {'initializer': getattr(self, init)}
         try:
             return {'initializer': init(seed = self.seed), 'shape': shape}
         except TypeError:
             return {'initializer': init(), 'shape': shape}
 
-    def param_init(self, name, shape=None):
-        a = name.split('/')
-        if len(a) == 3:
-            scope, n, kind = a
-        elif len(a) == 2:
-            n, kind = a
-            scope = tf.get_variable_scope().name # e.g. posterior
+    def param_init(self, name, scope='', kind=''):
+        if scope == '':
+            scope = tf.get_variable_scope().name
+        full_name = '/'.join(n for n in [scope, name, kind] if n != '')
 
-        cov, train, init = self.config.loc[(scope, n, kind), :]
+        train, init = self.config.loc[(scope, name, kind), :]
 
-        if shape is None:
-            if kind=='scale' and cov=='full':
-                shape = (self.K, self.K)
-            else:
-                shape = {'Z': (self.N, self.K), 'W': (self.D, self.K)}[n]
+        if kind == 'scale' and (self.model[name] == scope or self.model[name] == 'all'):
+            shape = (self.K, self.K)
+        else:
+            shape = {'Z': (self.N, self.K), 'W': (self.D, self.K), 'mu': (self.D, 1), 'tau':()}[name]
 
-        v = tf.get_variable(name, dtype=self.dtype, trainable=train, **self._init(init, shape))
+        v = tf.get_variable(full_name, dtype=self.dtype, trainable=train, **self._init(init, shape))
         return tf.nn.softplus(v) if kind == 'scale' else v
 
     def rotate(self):
@@ -202,8 +200,8 @@ class gradPCA(PPCA):
 
         p = detPCA(x1, n_iter=1)
 
-        W = self.param_init('W/hyper') + p.w
-        Z = self.param_init('Z/hyper') + p.z.T
+        W = self.param_init('W', kind='hyper') + p.w
+        Z = self.param_init('Z', kind='hyper') + p.z.T
         x = tf.matmul(W, Z, transpose_b=True)
         m = tf.reduce_sum(x * mask, 1, keep_dims=True) / mask_sum
         self.data_loss = tf.losses.mean_squared_error(tf.gather(tf.reshape(x - m, [-1]), i), data)
@@ -234,16 +232,16 @@ class gradPCA(PPCA):
 class probPCA(PPCA):
     """Edward_-based fully configurable bayesian / mixed probabilistic principal component analyzer."""
 
-    def lognormal(self, name, shape=()):
+    def lognormal(self, name, scope='posterior', shape=()):
         lognormal = ed.models.TransformedDistribution(
             ed.models.Normal(
                 # since we use this for variance-like variables
                 tf.nn.softplus(
                     tf.get_variable('{}/loc'.format(name), **self._init(
-                                        self.config.loc[('posterior', name, 'loc'), 'initializer'], shape))),
+                                        self.config.loc[(scope, name, 'loc'), 'initializer'], shape))),
                 tf.nn.softplus(
                     tf.get_variable('{}/scale'.format(name), **self._init(
-                                        self.config.loc[('posterior', name, 'scale'), 'initializer'], shape))),
+                                        self.config.loc[(scope, name, 'scale'), 'initializer'], shape))),
                 name = '{}_Normal'.format(name)
             ), bijector = tf.contrib.distributions.bijectors.Exp(),
             name = '{}_LogNormal'.format(name)
@@ -264,25 +262,28 @@ class probPCA(PPCA):
         xmu, xvar = tf.exp(ds.mean()), tf.exp(ds.variance())
         return xmu ** 2 * xvar * (xvar - 1)
 
-    def configure(self):
+    @staticmethod
+    def configure():
         idx = pd.IndexSlice
         config = pd.DataFrame(
-            index = pd.MultiIndex.from_product([['prior', 'posterior'], ['W', 'Z', 'tau'], ['loc', 'scale']]),
-            columns = ['covariance', 'trainable', 'initializer']
+            index = pd.MultiIndex.from_product([['prior', 'posterior'], ['W', 'Z', 'tau', 'mu'], ['loc', 'scale']]),
+            columns = ['trainable', 'initializer']
         ).sort_index()
-        config.loc[idx['prior', :, 'loc'], :]   = ['fact', False, tf.zeros_initializer]
-        config.loc[idx['prior', :, 'scale'], :] = ['fact', False, tf.ones_initializer]
-        config.loc['posterior', :]              = ['fact', True, tf.random_normal_initializer]
-        self.config = config
+        config.loc[idx['prior', :, 'loc'], :]   = [False, tf.zeros_initializer]
+        config.loc[idx['prior', :, 'scale'], :] = [False, tf.ones_initializer]
+        config.loc['posterior', :]              = [True, tf.random_normal_initializer]
+        config.loc[idx[:, 'mu', 'loc'], 'initializer']   = 'data_mean'
+        return config
 
-    def __init__(self, x1, mean='point', noise='point', **kwargs):
+    def __init__(self, x1, config=None, **kwargs):
         shape = x1.shape
+        self.model = {k: kwargs.pop(k, 'none') for k in ['W', 'Z', 'mu', 'tau']}
         super().__init__(shape, **kwargs)
-        self.configure()
+        self.config = self.configure() if config is None else config
         KL = {}
 
         if self.dims == 'full':
-            alpha = ed.models.Gamma(1e-5 * tf.ones((1, self.D)), 1e-5 * tf.ones((1, self.D)), name='model/alpha')
+            alpha = ed.models.Gamma(1e-5 * tf.ones((1, self.D)), 1e-5 * tf.ones((1, self.D)), name='prior/alpha')
             qa = self.lognormal('posterior/alpha', alpha.shape)
             KL.update({alpha: qa})
             self.alpha = qa
@@ -292,20 +293,19 @@ class probPCA(PPCA):
         else:
             a = tf.ones((1, self.K), name='alpha') # in hopes that this is correctly broadcast
 
-        def normal(name, covariance=False):
+        def normal(name):
             scope = tf.get_variable_scope().name
-            cov = self.config.loc[(scope, name, 'scale'), 'covariance']
-            model = {
-                'full': ed.models.MultivariateNormalTriL,
-                'fact': ed.models.Normal
-            }[cov](
-                *[self.param_init('{}/{}'.format(name, k)) for k in ['loc', 'scale']], name=name)
-            return (model, cov) if covariance else model
+            return {
+                True: ed.models.MultivariateNormalTriL,
+                False: ed.models.Normal
+            }[self.model[name] == scope or self.model[name] == 'all'](
+                *[self.param_init(name, kind=k) for k in ['loc', 'scale']], name='{}/{}'.format(scope, name))
 
         with tf.variable_scope('prior'):
-            Z, cov = normal('Z', True)
-            if cov == 'full':
-                W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)), a * self.param_init('W/scale'), name='W')
+            Z = normal('Z')
+            if self.model['Z'] == 'prior' or self.model['Z'] == 'all':
+                W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)),
+                                                     a * self.param_init('W', kind='scale'), name='W')
             else:
                 W = ed.models.Normal(tf.zeros((self.D, self.K)), a, name='W')
 
@@ -314,32 +314,27 @@ class probPCA(PPCA):
 
         KL.update({Z: QZ, W: QW})
 
-        with tf.variable_scope(''):
-            data_mean = tf.cast(x1.mean(1, keepdims=True), self.dtype)
-            if mean == 'point':
-                m = tf.get_variable('posterior/mu/loc', initializer=data_mean)
-                self.variables.update({'mu': m})
-            else:
-                if mean == 'hyper':
-                    hyper_mean = tf.get_variable('posterior/mu/hyper', initializer=data_mean)
-                    m = ed.models.Normal(hyper_mean, tf.ones((self.D, 1)))
-                elif mean == 'full':
-                    m = ed.models.Normal(data_mean, tf.ones((self.D, 1)))
-                qm = ed.models.Normal(
-                    tf.Variable(data_mean),
-                    tf.nn.softplus(tf.Variable(tf.random_normal((self.D, 1), seed=self.seed))))
-                KL.update({m: qm})
-                self.variables.update({'mu': qm.mean()})
+        self.data_mean = tf.cast(x1.mean(1, keepdims=True), self.dtype)
+        if self.model['mu'] == 'none':
+            m = self.param_init('mu', 'posterior', 'loc') # 'posterior' variables are by default trainable
+            self.variables.update({'mu': m})
+        elif self.model['mu'] == 'full':
+            with tf.variable_scope('prior'):
+                m = normal('mu')
+            with tf.variable_scope('posterior'):
+                qm = normal('mu')
+            KL.update({m: qm})
+            self.variables.update({'mu': qm.mean()})
 
-            if noise == 'point':
-                tau = self.param_init('posterior/tau/scale', ())
-                self.variables.update({'tau': tau})
-            elif noise == 'full':
-                s = ed.models.Gamma(1e-5, 1e-5, name='prior/tau')
-                qs = self.lognormal(name='tau')
-                tau = s ** -.5
-                KL.update({s: qs})
-                self.variables.update({'tau': qs.mean()})
+        if self.model['tau'] == 'none':
+            tau = self.param_init('tau', 'posterior', 'scale')
+            self.variables.update({'tau': tau})
+        elif self.model['tau'] == 'full':
+            s = ed.models.Gamma(1e-5, 1e-5, name='prior/tau')
+            qs = self.lognormal('tau')
+            tau = s ** -.5
+            KL.update({s: qs})
+            self.variables.update({'tau': qs.mean()})
 
         data = x1.flatten()
         i, = np.where(~np.isnan(data))
@@ -389,6 +384,7 @@ class probPCA(PPCA):
             self.inference.print_progress(out)
 
         self.inference.finalize() # this just closes the FileWriter
+        self.variables.update({'loss': self.inference.loss})
         return self
 
 

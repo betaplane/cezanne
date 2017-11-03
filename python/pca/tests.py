@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import tensorflow as tf
 from datetime import datetime
 
 
@@ -51,3 +52,79 @@ class data(object):
     @property
     def missing_fraction(self):
         return self.x1.mask.sum() / np.prod(self.x1.shape)
+
+
+def test1(file, n_iter=2000, n_seed=10):
+    import pca
+    d = data().toy()
+
+    config = pca.probPCA.configure()
+    for i, kv in enumerate([
+            {'W': 'prior'},
+            {'Z': 'prior'},
+            {'W': 'prior', 'Z': 'prior'},
+            {'W': 'all'},
+            {'Z': 'all'},
+            {'W': 'all', 'Z': 'all'}
+    ]):
+        for j, conf in enumerate([
+                [False, tf.ones_initializer],
+                [True, tf.ones_initializer],
+                [True, tf.random_normal_initializer],
+        ]):
+            c = config.copy()
+            for k, v in kv.items():
+                c.loc[('prior', k, 'scale'), :] = conf
+            for s in range(n_seed):
+                p = pca.probPCA(d.x1, config=c, seed=s, covariance=i, initialization=j, **kv)
+                p.run(n_iter).critique(d)
+
+    with pd.HDFStore(file) as S:
+        S['exp1'] = p.losses.replace('None', np.nan)
+
+def test2(file, n_iter=2000):
+    import pca
+    d = data().toy()
+
+    config = pca.probPCA.configure()
+    for i, mu in enumerate(['none', 'full']):
+        for j, mu_loc in enumerate({
+            'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
+            'full': [
+                [False, 'data_mean'], # prior mean set to data mean
+                [True, 'data_mean']   # prior mean a hyperparamter
+            ]
+        }[mu]):
+            for k, mu_scale in enumerate({
+                    'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
+                    'full': [
+                        [False, tf.ones_initializer],
+                        [True, tf.ones_initializer],
+                        [True, tf.random_normal_initializer]
+                    ]
+            }[mu]):
+                for l, tau in enumerate(['none', 'full']):
+                    for m, tau_loc in enumerate({
+                            'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
+                            'full': [
+                                [False, tf.zeros_initializer],
+                                [True, tf.zeros_initializer],
+                                [True, tf.random_normal_initializer]
+                            ]
+                    }[tau]):
+                        for n, tau_scale in enumerate({
+                                'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
+                                'full': [
+                                    [False, tf.ones_initializer],
+                                    [True, tf.ones_initializer],
+                                    [True, tf.random_normal_initializer]
+                                ]
+                        }[tau]):
+                            c = config.copy()
+                            c.loc[('prior', 'mu', 'loc'), :] = mu_loc
+                            c.loc[('prior', 'mu', 'scale'), :] = mu_scale
+                            c.loc[('prior', 'tau', 'loc'), :] = tau_loc
+                            c.loc[('prior', 'tau', 'scale'), :] = tau_scale
+
+                            for s in range(n_seed):
+                                p = probPCA(d.x1, seed=s, )
