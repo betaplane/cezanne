@@ -41,9 +41,6 @@ class PCA(object):
     """Base class for all PCA subtypes. Any **kwargs** passed to the constructor will be added to the :attr:`losses` accumulator. The idea is to automatically save any configuration values for later analysis of the accumulated results.
     """
 
-    losses = pd.DataFrame()
-    """Class-level accumulator :class:`~pandas.DataFrame` for all data that's supposed to be saved for a given invocation."""
-
     def __getattr__(self, name):
         try:
             v = self.variables[name]
@@ -56,17 +53,10 @@ class PCA(object):
     def __init__(self, **kwargs):
         self.variables = {}
         self.instance = kwargs
-        self.instance.update({
-            'id': datetime.utcnow().strftime('pca%Y%m%d%H%M%S%f'),
-            'class': self.__class__.__name__
-        })
+        self.instance.update({'class': self.__class__.__name__})
+        self.id = datetime.utcnow().strftime('pca%Y%m%d%H%M%S%f')
 
-    def append(self, **kwargs):
-        kwargs.update({'logsubdir': self.logsubdir, 'n_iter': self.n_iter})
-        kwargs.update(self.instance)
-        PCA.losses = PCA.losses.append(kwargs, ignore_index=True)
-
-    def critique(self, data=None, x0=None, w0=None, z0=None, rotate=False):
+    def critique(self, data=None, rotate=True, file_name=None, table_name=None, row=None):
         (w, z) = self.rotate() if rotate else (self.W, self.Z)
 
         # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
@@ -84,8 +74,8 @@ class PCA(object):
                 z = z * s
 
         if data is not None:
-            update = {a: self.RMS(data, a, W=w, Z=z) for a in ['x', 'W', 'Z', 'mu', 'tau']}
-            update.update({'missing': data.missing_fraction, 'data': data.id})
+            results = {a: self.RMS(data, a, W=w, Z=z) for a in ['x', 'W', 'Z', 'mu', 'tau']}
+            results.update({'missing': data.missing_fraction, 'data_id': data.id})
 
         print('')
         # because this is precicely when the warning raised in __getattr__() should be ignored
@@ -94,9 +84,16 @@ class PCA(object):
             for v in ['data_loss', 'tau', 'alpha']:
                 print('{}: {}'.format(v, getattr(self, v)))
 
-            update.update({'data_loss': self.data_loss, 'rotated': rotate, 'loss': self.loss})
-            self.append(**update)
+            results.update({'data_loss': self.data_loss, 'rotated': rotate, 'loss': self.loss})
 
+        results.update(self.instance)
+        results.update({'logs': self.logsubdir, 'n_iter': self.n_iter})
+
+        self.results = pd.DataFrame(results, index=[self.id] if row is None else [row])
+        if (file_name is not None) and (table_name is not None):
+            self.results.to_hdf(file_name, table_name, format='t', append=True)
+        else:
+            warn('No results file and/or table name specified - results not written to file.')
         return self
 
     def RMS(self, data, attr, **kwargs):
@@ -263,7 +260,7 @@ class probPCA(PPCA):
         return xmu ** 2 * xvar * (xvar - 1)
 
     @staticmethod
-    def configure():
+    def configure(display=False):
         idx = pd.IndexSlice
         config = pd.DataFrame(
             index = pd.MultiIndex.from_product([['prior', 'posterior'], ['W', 'Z', 'tau', 'mu'], ['loc', 'scale']]),
@@ -273,6 +270,12 @@ class probPCA(PPCA):
         config.loc[idx['prior', :, 'scale'], :] = [False, tf.ones_initializer]
         config.loc['posterior', :]              = [True, tf.random_normal_initializer]
         config.loc[idx[:, 'mu', 'loc'], 'initializer']   = 'data_mean'
+        if display:
+            return config.replace({
+                tf.random_normal_initializer: 'random',
+                tf.ones_initializer: 'ones',
+                tf.zeros_initializer: 'zeros'
+            })
         return config
 
     def __init__(self, x1, config=None, **kwargs):
@@ -364,8 +367,7 @@ class probPCA(PPCA):
         self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
 
 
-    def run(self, n_iter):
-        self.n_iter = n_iter
+    def run(self, n_iter, conv='data'):
         # if this is a repeated run, replace edward's FileWriter to write to a new directory
         try:
             t = self.inference.t.eval()
@@ -378,9 +380,21 @@ class probPCA(PPCA):
 
         # hack to use the progbar that edward allocates anyway, without giving n_iter to inference.initialize()
         self.inference.progbar.target = n_iter
+        deque = np.empty(100)
 
         for i in range(n_iter):
             out = self.inference.update()
+            j = i % 100
+            if conv=='data':
+                deque[j] = self.data_loss
+                thresh = 1e-4
+            else:
+                deque[j] = out['loss']
+                thresh = 30
+            if j == 99:
+                if deque.std() < thresh:
+                    self.n_iter = i + 1
+                    break
             self.inference.print_progress(out)
 
         self.inference.finalize() # this just closes the FileWriter
