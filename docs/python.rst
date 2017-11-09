@@ -1,17 +1,16 @@
-Python
-======
-
-Links I can nefer find
+Links I can never find
 ----------------------
 * http://www.sphinx-doc.org/en/stable/domains.html#cross-referencing-python-objects
 
+Data
+----
+.. automodule:: python.data
+   :members:
+
+PCA
+---
 .. automodule:: python.pca
-
-.. toctree::
-   :maxdepth: 2
-
-   data
-   
+   :members:
 
 Helpers
 -------

@@ -1,1 +1,8 @@
-__all__ = ['IGRA', 'NCDC']
+"""
+.. automodule:: python.data.IGRA
+   :members:
+
+.. automodule:: python.data.NCDC
+   :members:
+
+"""

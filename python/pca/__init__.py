@@ -1,6 +1,4 @@
 """
-PCA
-===
 .. toctree::
     :maxdepth: 2
 

@@ -9,7 +9,7 @@ import numpy as np
 import tensorflow as tf
 from datetime import datetime
 import joblib
-from . import pca
+import pca
 
 
 class Data(object):
