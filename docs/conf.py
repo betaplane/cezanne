@@ -190,9 +190,10 @@ texinfo_documents = [
 
 # Example configuration for intersphinx: refer to the Python standard library.
 intersphinx_mapping = {
-    'python': ('https://docs.python.org/', None),
+    'python': ('https://docs.python.org/3', None),
     'np': ('http://docs.scipy.org/doc/numpy/', None),
     'xr': ('http://xarray.pydata.org/en/stable', None),
     'pd': ('http://pandas.pydata.org/pandas-docs/stable/', None),
     'mpl': ('http://matplotlib.org/', None),
+    'bp': ('http://bayespy.org/', None)
 }

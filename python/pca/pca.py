@@ -14,8 +14,7 @@ Notes
 
 ToDo
 ----
-* separate data observation from graph initialization in probPCA (use tf.placeholder)
-* write out the loss function value internally used by the algorithms in the losses dataframe
+* separate data observation from graph initialization in probPCA (use tf.placeholder) - not sure if possible with unknown missing value locations... (primarily a question w.r.t. Edward_, in TensorFlow_ it should be possible.)
 
 """
 
@@ -38,8 +37,7 @@ import os
 
 
 class PCA(object):
-    """Base class for all PCA subtypes. Any **kwargs** passed to the constructor will be added to the :attr:`losses` accumulator. The idea is to automatically save any configuration values for later analysis of the accumulated results.
-    """
+    """Base class for all PCA subtypes. The :meth:`critique` method computes various loss measures and appends them as a :class:`~pandas.DataFrame` to an HDF5 file. **Any \*\*kwargs passed to the constructor are appended to the DataFrame as additional columns so as to allow identification of individual experiments.** The :meth:`__getattr__` method returns attributes saved in the :attr:`variables` attribute (a :obj:`dict`) and runs them through a TensorFlow_ session (unless, of course, one is fetching an attribute that otherwise exists on a subclass)."""
 
     def __getattr__(self, name):
         try:
@@ -55,8 +53,22 @@ class PCA(object):
         self.instance = kwargs
         self.instance.update({'class': self.__class__.__name__})
         self.id = datetime.utcnow().strftime('pca%Y%m%d%H%M%S%f')
+        """A unique ID to identify instances of this class, e.g. in results tables. Constructe from :meth:`~datetime.datetime.utcnow`."""
 
     def critique(self, data=None, rotate=True, file_name=None, table_name=None, row=None):
+        """Compute various loss measures of the PCA reconstruction w.r.t. the original data if `data` is provided, otherwise juse print the training error (:attr:`data_loss`). Also optionally rotates the principal components `Z` and loadings `W` prior to comparison.
+
+        :param data: An object holding various components of the original data for comparison.
+        :type data: :class:`.Data`
+        :param rotate: Whether or not to rotate the principal components (:meth:`PPCA.rotate` needs to be defined on subclass).
+        :type rotate: :obj:`bool`
+        :param file_name: File name to append results to.
+        :param table_name: Name of able inside file `file_name` to which to append results. If either `file_name` or `table_name` or **not** given, nothing will be written out.
+        :param row: Index to give the row to be appended. If none is giben, defaults to :attr:`id`.
+        :returns: The instance of the :class:`PCA` subclass, for method chaining.
+        :rtype: :class:`PCA` subclass.
+
+        """
         (w, z) = self.rotate() if rotate else (self.W, self.Z)
 
         # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
@@ -127,11 +139,28 @@ class detPCA(PCA):
         return self
 
 class PPCA(PCA):
-    """Parent class for probabilistic PCA subclasses that need TensorFlow_ infrastructure."""
+    """Parent class for probabilistic PCA subclasses that need TensorFlow_ infrastructure.
+
+    :Keyword Arguments:
+        All are optional.
+
+        * **logdir** - If given, TensorBoard summaries are saved in the given directory, with sub-directories made up from timestamps (as per Edward_ defaults).
+        * **seed** - A random seed.
+
+        The following are at present only relevant for :class:`probPCA`.
+
+        * **convergence_test** - Which type of loss to use to test for convergence. Currently I take the StDev of the last 100 iterations of the loss function:
+            * `data_loss` - :attr:`data_loss` is used, the training error w.r.t. to the data passed.
+            * otherwise, Edward_'s built-in loss is used (I think ELBO).
+        * **dims**
+                * `full` - apply automatic relevance determination to the columns of the loadings matrix :attr:`W`
+                * :obj:`int` - use this many dimensions in the principal component space
+
+    """
 
     def __init__(self, shape, **kwargs):
         self.D, self.N = shape
-        self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir', 'n_iter']})
+        self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir', 'convergence_test']})
         self.dtype = kwargs.get('dtype', tf.float32)
         self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
         super().__init__(**kwargs) # additional kwargs are used to annotate the 'losses' DataFrame
@@ -164,6 +193,7 @@ class PPCA(PCA):
         return tf.nn.softplus(v) if kind == 'scale' else v
 
     def rotate(self):
+        """Rotate principal components :attr:`Z` and loadings matrix :attr:`W` to form an orthogonal set. (No normalization is applied at this point)."""
         e, v = np.linalg.eigh(self.W.T.dot(self.W))
         w_rot = self.W.dot(v) # W ~ (D, K)
         z_rot = self.Z.dot(v) # Z ~ (N, K)
@@ -367,7 +397,7 @@ class probPCA(PPCA):
         self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
 
 
-    def run(self, n_iter, conv='data'):
+    def run(self, n_iter):
         # if this is a repeated run, replace edward's FileWriter to write to a new directory
         try:
             t = self.inference.t.eval()
@@ -380,12 +410,15 @@ class probPCA(PPCA):
 
         # hack to use the progbar that edward allocates anyway, without giving n_iter to inference.initialize()
         self.inference.progbar.target = n_iter
+
+        # for computing StDev of last 100 loss values as convergence criterion
         deque = np.empty(100)
 
+        self.n_iter = n_iter
         for i in range(n_iter):
             out = self.inference.update()
             j = i % 100
-            if conv=='data':
+            if self.convergence_test == 'data_loss':
                 deque[j] = self.data_loss
                 thresh = 1e-4
             else:
@@ -403,6 +436,7 @@ class probPCA(PPCA):
 
 
 class vbPCA(PCA):
+    """BayesPy_-based Bayesian PCA."""
     def __init__(self, x1, K=None, n_iter=100, rotate=False):
         super().__init__(rotated=rotate)
         self.D, self.N = x1.shape
