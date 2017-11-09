@@ -11,6 +11,7 @@ Notes
     * https://github.com/blei-lab/edward/issues/389
     * https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
 * For the tensorboard summaries to work in the presence of missing values, the input array needs to be of :class:`np.ma.MaskedArray` type **and** have NaNs at the missing locations - not clear why.
+* Numpy eigenvalues are indeed **not** sorted.
 
 ToDo
 ----
@@ -73,17 +74,12 @@ class PCA(object):
 
         # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
         # Note: in deterministic PCA, e will be an array of ones, s.t. potentially the sorting (i) may be undetermined and mess things up.
-        if not isinstance(self, detPCA):
-            e = (w ** 2).sum(0)**.5
-            i = np.argsort(e)[::-1]
-            w = w[:, i]
-            e = e[i].reshape((1, -1))
-            w = w / e
-            z = z[:, i] * e
-            if hasattr(data, 'W'):
-                s = np.sign(np.sign(data.W[:, :w.shape[1]] * w).sum(0, keepdims=True))
-                w = w * s
-                z = z * s
+        if hasattr(self, 'scale'):
+            w, z = self.scale(w, z)
+        if hasattr(data, 'W'):
+            s = np.sign(np.sign(data.W[:, :w.shape[1]] * w).sum(0, keepdims=True))
+            w = w * s
+            z = z * s
 
         if data is not None:
             results = {a: self.RMS(data, a, W=w, Z=z) for a in ['x', 'W', 'Z', 'mu', 'tau']}
@@ -198,6 +194,16 @@ class PPCA(PCA):
         w_rot = self.W.dot(v) # W ~ (D, K)
         z_rot = self.Z.dot(v) # Z ~ (N, K)
         return w_rot, z_rot
+
+    @staticmethod
+    def scale(W, Z):
+        e = (W ** 2).sum(0)**.5
+        i = np.argsort(e)[::-1]
+        w = W[:, i]
+        e = e[i].reshape((1, -1))
+        w_scaled = W / e
+        z_scaled = Z[:, i] * e
+        return w_scaled, z_scaled
 
     @property
     def logsubdir(self):
