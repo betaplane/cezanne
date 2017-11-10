@@ -199,9 +199,8 @@ class PPCA(PCA):
     def scale(W, Z):
         e = (W ** 2).sum(0)**.5
         i = np.argsort(e)[::-1]
-        w = W[:, i]
         e = e[i].reshape((1, -1))
-        w_scaled = W / e
+        w_scaled = W[:, i] / e
         z_scaled = Z[:, i] * e
         return w_scaled, z_scaled
 
