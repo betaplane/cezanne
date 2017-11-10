@@ -12,6 +12,10 @@ PCA
 .. automodule:: python.pca
    :members:
 
+Various linear stats
+--------------------
+.. automodule:: python.linear
+
 Helpers
 -------
              

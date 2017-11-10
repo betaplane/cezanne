@@ -138,34 +138,6 @@ def basemap():
         resolution='h')
 
 
-def lsqdf(*df, b0=True):
-    """
-least squares regression: predictor in first column/argument, response in second
-returns [intercept (b0), slope (b1)]
-if b0=False, assumes zero intercept and returns [slope]
-	"""
-    df = pd.concat(df, axis=1, join='inner')
-    X = df.dropna().as_matrix()
-    if len(X):
-        return lsq(X[:, -1], X[:, :-1])
-    else:
-        print("no overlap")
-        return np.nan
-
-
-def lsq(Y, X, b0=True):
-    """
-Y is the label vector, X is a 2D matrix with features in columns. If b0=False, the constant
-term is zero.
-	"""
-    if b0:
-        b = np.linalg.lstsq(np.r_['1,2', np.ones((X.shape[0], 1)), X], Y)[0]
-    else:
-        b = np.linalg.lstsq(X, Y)[0]
-    return dict(
-        zip(['b{}'.format(i) for i in np.arange(b.shape[0]) + (1 - b0)], b))
-
-
 def avg(df, interval):
     if interval=='month':
         m = df.groupby((df.index.year,df.index.month)).mean()
