@@ -64,7 +64,7 @@ class PCA(object):
         :param rotate: Whether or not to rotate the principal components (:meth:`PPCA.rotate` needs to be defined on subclass).
         :type rotate: :obj:`bool`
         :param file_name: File name to append results to.
-        :param table_name: Name of able inside file `file_name` to which to append results. If either `file_name` or `table_name` or **not** given, nothing will be written out.
+        :param table_name: Name of able inside file ``file_name`` to which to append results. If either ``file_name`` or ``table_name`` or **not** given, nothing will be written out.
         :param row: Index to give the row to be appended. If none is giben, defaults to :attr:`id`.
         :returns: The instance of the :class:`PCA` subclass, for method chaining.
         :rtype: :class:`PCA` subclass.
@@ -146,10 +146,10 @@ class PPCA(PCA):
         The following are at present only relevant for :class:`probPCA`.
 
         * **convergence_test** - Which type of loss to use to test for convergence. Currently I take the StDev of the last 100 iterations of the loss function:
-            * `data_loss` - :attr:`data_loss` is used, the training error w.r.t. to the data passed.
+            * ``data_loss`` - :attr:`data_loss` is used, the training error w.r.t. to the data passed.
             * otherwise, Edward_'s built-in loss is used (I think ELBO).
         * **dims**
-                * `full` - apply automatic relevance determination to the columns of the loadings matrix :attr:`W`
+                * ``full`` - apply automatic relevance determination to the columns of the loadings matrix :attr:`W`
                 * :obj:`int` - use this many dimensions in the principal component space
 
     """
