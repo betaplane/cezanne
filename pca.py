@@ -22,14 +22,14 @@ ToDo
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-import tensorflow as tf
 import edward as ed
+import tensorflow as tf
 import bayespy as bp
 import bayespy.inference.vmp.transformations as bpt
 from types import MethodType
 from datetime import datetime
 from warnings import warn, catch_warnings, simplefilter
-import os
+import os, time
 
 # N number of examples ('time')
 # D dimension of example ('space')
@@ -40,14 +40,14 @@ import os
 class PCA(object):
     """Base class for all PCA subtypes. The :meth:`critique` method computes various loss measures and appends them as a :class:`~pandas.DataFrame` to an HDF5 file. **Any \*\*kwargs passed to the constructor are appended to the DataFrame as additional columns so as to allow identification of individual experiments.** The :meth:`__getattr__` method returns attributes saved in the :attr:`variables` attribute (a :obj:`dict`) and runs them through a TensorFlow_ session (unless, of course, one is fetching an attribute that otherwise exists on a subclass)."""
 
-    def __getattr__(self, name):
-        try:
-            v = self.variables[name]
-        except KeyError:
-            warn('Attempted to access non-existing variable.')
-            return np.nan # so that in summary DataFrame we have NaN instead of None
-        else:
-            return self.sess.run(v) if isinstance(self, PPCA) else v
+    # def __getattr__(self, name):
+    #     try:
+    #         v = self.variables[name]
+    #     except KeyError:
+    #         warn('Attempted to access non-existing variable.')
+    #         return np.nan # so that in summary DataFrame we have NaN instead of None
+    #     else:
+    #         return v.eval() if isinstance(v, tf.Tensor) else v
 
     def __init__(self, **kwargs):
         self.variables = {}
@@ -74,12 +74,16 @@ class PCA(object):
 
         # here we scale and sign the pc's and W matrix to facilitate comparison with the originals
         # Note: in deterministic PCA, e will be an array of ones, s.t. potentially the sorting (i) may be undetermined and mess things up.
-        if hasattr(self, 'scale'):
+        try:
             w, z = self.scale(w, z)
-        if hasattr(data, 'W'):
+        except Exception as e:
+            raise e # while developing
+        try:
             s = np.sign(np.sign(data.W[:, :w.shape[1]] * w).sum(0, keepdims=True))
             w = w * s
             z = z * s
+        except Exception as e:
+            raise e # while developing
 
         if data is not None:
             results = {a: self.RMS(data, a, W=w, Z=z) for a in ['x', 'W', 'Z', 'mu', 'tau']}
@@ -90,7 +94,7 @@ class PCA(object):
         with catch_warnings():
             simplefilter('ignore')
             for v in ['data_loss', 'tau', 'alpha']:
-                print('{}: {}'.format(v, getattr(self, v)))
+                print('{}: {}'.format(v, getattr(self, v, np.nan)))
 
             results.update({'data_loss': self.data_loss, 'rotated': rotate, 'loss': self.loss})
 
@@ -146,32 +150,35 @@ class PPCA(PCA):
         The following are at present only relevant for :class:`probPCA`.
 
         * **convergence_test** - Which type of loss to use to test for convergence. Currently I take the StDev of the last 100 iterations of the loss function:
+            * ``None`` - the training is run exactly the ``n_iter`` loops given as argument to :meth:`~probPCA.run`
             * ``data_loss`` - :attr:`data_loss` is used, the training error w.r.t. to the data passed.
-            * otherwise, Edward_'s built-in loss is used (I think ELBO).
+            * ``elbo``, Edward_'s built-in loss is used (I think ELBO).
         * **dims**
                 * ``full`` - apply automatic relevance determination to the columns of the loadings matrix :attr:`W`
                 * :obj:`int` - use this many dimensions in the principal component space
 
     """
 
-    def __init__(self, shape, **kwargs):
+    def __init__(self, shape, session_target=None, **kwargs):
         self.D, self.N = shape
         self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir', 'convergence_test']})
         self.dtype = kwargs.get('dtype', tf.float32)
         self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
+
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            tf.set_random_seed(self.seed)
+
         super().__init__(**kwargs) # additional kwargs are used to annotate the 'losses' DataFrame
 
-        tf.reset_default_graph()
-        self.sess = tf.InteractiveSession()
-        tf.set_random_seed(self.seed)
-
+    # NOTE: all the helper methods of this class probably need to be called within a specific graph context
     def _init(self, init, shape=None):
+        """Exists because if ``initializer`` is a :class:`~tensorflow.Tensor` or convertible to one, the ``shape`` kyeword is not needed. If ``init`` is a :obj:`str`, retrieves the attribute of this name from the parent class and uses it as initializer.
+
+        """
         if isinstance(init, str):
             return {'initializer': getattr(self, init)}
-        try:
-            return {'initializer': init(seed = self.seed), 'shape': shape}
-        except TypeError:
-            return {'initializer': init(), 'shape': shape}
+        return {'initializer': init(), 'shape': shape}
 
     def param_init(self, name, scope='', kind=''):
         if scope == '':
@@ -318,91 +325,93 @@ class probPCA(PPCA):
         self.model = {k: kwargs.pop(k, 'none') for k in ['W', 'Z', 'mu', 'tau']}
         super().__init__(shape, **kwargs)
         self.config = self.configure() if config is None else config
-        KL = {}
+        self.KL = {}
 
-        if self.dims == 'full':
-            alpha = ed.models.Gamma(1e-5 * tf.ones((1, self.D)), 1e-5 * tf.ones((1, self.D)), name='prior/alpha')
-            qa = self.lognormal('posterior/alpha', alpha.shape)
-            KL.update({alpha: qa})
-            self.alpha = qa
-            a = alpha ** -.5
-        elif self.dims == 'point':
-            raise Exception('not implemented')
-        else:
-            a = tf.ones((1, self.K), name='alpha') # in hopes that this is correctly broadcast
-
-        def normal(name):
-            scope = tf.get_variable_scope().name
-            return {
-                True: ed.models.MultivariateNormalTriL,
-                False: ed.models.Normal
-            }[self.model[name] == scope or self.model[name] == 'all'](
-                *[self.param_init(name, kind=k) for k in ['loc', 'scale']], name='{}/{}'.format(scope, name))
-
-        with tf.variable_scope('prior'):
-            Z = normal('Z')
-            if self.model['Z'] == 'prior' or self.model['Z'] == 'all':
-                W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)),
-                                                     a * self.param_init('W', kind='scale'), name='W')
+        with self.graph.as_default():
+            if self.dims == 'full':
+                alpha = ed.models.Gamma(1e-5 * tf.ones((1, self.D)), 1e-5 * tf.ones((1, self.D)), name='prior/alpha')
+                qa = self.lognormal('posterior/alpha', alpha.shape)
+                self.KL.update({alpha: qa})
+                self.alpha = qa
+                a = alpha ** -.5
+            elif self.dims == 'point':
+                raise Exception('not implemented')
             else:
-                W = ed.models.Normal(tf.zeros((self.D, self.K)), a, name='W')
+                a = tf.ones((1, self.K), name='alpha') # in hopes that this is correctly broadcast
 
-        with tf.variable_scope('posterior'):
-            QZ, QW = map(normal, ['Z', 'W'])
+            def normal(name):
+                scope = tf.get_variable_scope().name
+                return {
+                    True: ed.models.MultivariateNormalTriL,
+                    False: ed.models.Normal
+                }[self.model[name] == scope or self.model[name] == 'all'](
+                    *[self.param_init(name, kind=k) for k in ['loc', 'scale']], name='{}/{}'.format(scope, name))
 
-        KL.update({Z: QZ, W: QW})
-
-        self.data_mean = tf.cast(x1.mean(1, keepdims=True), self.dtype)
-        if self.model['mu'] == 'none':
-            m = self.param_init('mu', 'posterior', 'loc') # 'posterior' variables are by default trainable
-            self.variables.update({'mu': m})
-        elif self.model['mu'] == 'full':
             with tf.variable_scope('prior'):
-                m = normal('mu')
+                Z = normal('Z')
+                if self.model['Z'] == 'prior' or self.model['Z'] == 'all':
+                    W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)),
+                                                         a * self.param_init('W', kind='scale'), name='W')
+                else:
+                    W = ed.models.Normal(tf.zeros((self.D, self.K)), a, name='W')
+
             with tf.variable_scope('posterior'):
-                qm = normal('mu')
-            KL.update({m: qm})
-            self.variables.update({'mu': qm.mean()})
+                QZ, QW = map(normal, ['Z', 'W'])
 
-        if self.model['tau'] == 'none':
-            tau = self.param_init('tau', 'posterior', 'scale')
-            self.variables.update({'tau': tau})
-        elif self.model['tau'] == 'full':
-            s = ed.models.Gamma(1e-5, 1e-5, name='prior/tau')
-            qs = self.lognormal('tau')
-            tau = s ** -.5
-            KL.update({s: qs})
-            self.variables.update({'tau': qs.mean()})
+            self.KL.update({Z: QZ, W: QW})
 
-        data = x1.flatten()
-        i, = np.where(~np.isnan(data))
-        data = data[i]
-        x = tf.gather(tf.reshape(tf.matmul(W, Z, transpose_b=True) + m, [-1]), i)
+            # self.data_mean = tf.cast(x1.mean(1, keepdims=True), self.dtype)
+            self.data = tf.placeholder(self.dtype, shape)
+            self.data_mean = tf.reduce_mean(self.data, 1, keep_dims=True)
+            if self.model['mu'] == 'none':
+                m = self.param_init('mu', 'posterior', 'loc') # 'posterior' variables are by default trainable
+                self.variables.update({'mu': m})
+            elif self.model['mu'] == 'full':
+                with tf.variable_scope('prior'):
+                    m = normal('mu')
+                with tf.variable_scope('posterior'):
+                    qm = normal('mu')
+                self.KL.update({m: qm})
+                self.variables.update({'mu': qm.mean()})
 
-        # self.data = tf.placeholder(self.dtype, shape, name='x1')
-        # self.mask = tf.placeholder(tf.bool, shape, name='mask')
-        # data = tf.boolean_mask(self.data, self.mask, name='masked_x1')
-        # x = tf.boolean_mask(tf.matmul(W, Z, transpose_b=True) + m, self.mask)
+            if self.model['tau'] == 'none':
+                tau = self.param_init('tau', 'posterior', 'scale')
+                self.variables.update({'tau': tau})
+            elif self.model['tau'] == 'full':
+                s = ed.models.Gamma(1e-5, 1e-5, name='prior/tau')
+                qs = self.lognormal('tau')
+                tau = s ** -.5
+                self.KL.update({s: qs})
+                self.variables.update({'tau': qs.mean()})
 
-        X = ed.models.Normal(x, tau * tf.ones(x.shape))
+            # data = x1.flatten()
+            # i, = np.where(~np.isnan(data))
+            # data = data[i]
+            i = tf.where(tf.is_finite(self.data))
+            self.data_gathered = tf.gather(tf.reshape(tf.matmul(W, Z, transpose_b=True) + m, [-1]), i)
+            self.data_model = ed.models.Normal(self.data_gathered, tau * tf.ones(tf.shape(self.data_gathered)))
 
-        self.inference = ed.KLqp(KL, data={X: data})
+            # data_loss is not instrumental in the procedure, I compute it solely to write it out to tensorboard
+            with tf.variable_scope('loss'):
+                xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
+                data_loss = tf.losses.mean_squared_error(self.data_gathered, tf.gather(tf.reshape(xm, [-1]), i))
+            self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
 
-        # this comes from edward source (class VariationalInference)
-        # this way, edward automatically writes out my own summaries
-        summary_key = 'summaries_{}'.format(id(self.inference))
+            self.inference = ed.KLqp(self.KL, data={self.data_model: self.data_gathered})
 
-        # data_loss is not instrumental in the procedure, I compute it solely to write it out to tensorboard
-        with tf.variable_scope('loss'):
-            xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
-            data_loss = tf.losses.mean_squared_error(data, tf.gather(tf.reshape(xm, [-1]), i))
+            # this comes from edward source (class VariationalInference)
+            # this way, edward automatically writes out my own summaries
+            summary_key = 'summaries_{}'.format(id(self.inference))
             tf.summary.scalar('data_loss', data_loss, collections=[summary_key])
 
-        self.inference.initialize(n_samples=10, logdir=self.logdir)
-        self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
+            self.inference.initialize(n_samples=10, logdir=self.logdir)
 
 
-    def run(self, n_iter):
+    def run(self, data, n_iter):
+        # NOTE: tf.InteractiveSession is the same as tf.Session except it makes the session the default session
+        # Edward unfortunately seems to only use the default session, so we need to work with that.
+        tf.InteractiveSession(graph=self.graph)
+
         # if this is a repeated run, replace edward's FileWriter to write to a new directory
         try:
             t = self.inference.t.eval()
@@ -411,7 +420,7 @@ class probPCA(PPCA):
         else:
             self.logsubdir = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
 
-        tf.global_variables_initializer().run()
+        tf.global_variables_initializer().run({self.data: data})
 
         # hack to use the progbar that edward allocates anyway, without giving n_iter to inference.initialize()
         self.inference.progbar.target = n_iter
@@ -420,23 +429,39 @@ class probPCA(PPCA):
         deque = np.empty(100)
 
         self.n_iter = n_iter
-        for i in range(n_iter):
-            out = self.inference.update()
-            j = i % 100
-            if self.convergence_test == 'data_loss':
+        start_time = time.time()
+
+        if self.convergence_test == None:
+            for i in range(n_iter):
+                out = self.inference.update({self.data: data})
+                self.inference.print_progress(out)
+        elif self.convergence_test == 'data_loss':
+            thresh = 1e-4
+            for i in range(n_iter):
+                out = self.inference.update({self.data: data})
+                j = i % 100
                 deque[j] = self.data_loss
-                thresh = 1e-4
-            else:
-                deque[j] = out['loss']
-                thresh = 30
-            if j == 99:
-                if deque.std() < thresh:
+                if (j == 99) and (deque.std() < thresh):
                     self.n_iter = i + 1
                     break
-            self.inference.print_progress(out)
+        elif self.convergence_test == 'elbo':
+            thresh = 30
+            for i in range(n_iter):
+                out = self.inference.update({self.data: data})
+                j = i % 100
+                deque[j] = out['loss']
+                if (j == 99) and (deque.std() < thresh):
+                    self.n_iter = i + 1
+                    break
 
+        print('Time: {}'.format(time.time() -  start_time))
         self.inference.finalize() # this just closes the FileWriter
         self.variables.update({'loss': self.inference.loss})
+        for k, v in self.variables.items():
+            try:
+                self.__dict__.update({k: v.eval()})
+            except tf.errors.InvalidArgumentError:
+                self.__dict__.update({k: v.eval({self.data: data})})
         return self
 
 
@@ -474,11 +499,3 @@ class vbPCA(PCA):
         self.alpha = alpha.get_moments()[0]
         self.n_iter = self.inference.iter
         self.loss = self.inference.loglikelihood_lowerbound()
-
-
-
-if __name__=='__main__':
-    # x0, x1, W, Z, m = whitened_test_data(5000, 5, 5, 1, missing=.3)
-    # t = station_data()[['3','4','5','6','8','9']]
-    # x = np.ma.masked_invalid(t).T
-    pass

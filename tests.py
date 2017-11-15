@@ -282,9 +282,8 @@ def data_loss_vs_elbo(n_data=10, n_seed=10):
     conf = pd.concat((c,), 0, keys=[0])
     return tests, conf
 
-if __name__=='__main__':
-    # data_loss_vs_elbo()
-    out = 0
+# if __name__=='__main__':
+#     out = 0
 
-    while out == 0:
-        out = Test('convergence.h5', 'data_loss_vs_elbo').run()
+#     while out == 0:
+#         out = Test('convergence.h5', 'data_loss_vs_elbo').run()
