@@ -362,7 +362,7 @@ class probPCA(PPCA):
 
             # self.data_mean = tf.cast(x1.mean(1, keepdims=True), self.dtype)
             self.data = tf.placeholder(self.dtype, shape)
-            self.data_mean = tf.reduce_mean(self.data, 1, keep_dims=True)
+            self.data_mean = tf.placeholder(self.dtype, (shape[0], 1))
             if self.model['mu'] == 'none':
                 m = self.param_init('mu', 'posterior', 'loc') # 'posterior' variables are by default trainable
                 self.variables.update({'mu': m})
@@ -387,14 +387,15 @@ class probPCA(PPCA):
             # data = x1.flatten()
             # i, = np.where(~np.isnan(data))
             # data = data[i]
-            i = tf.where(tf.is_finite(self.data))
-            self.data_gathered = tf.gather(tf.reshape(tf.matmul(W, Z, transpose_b=True) + m, [-1]), i)
-            self.data_model = ed.models.Normal(self.data_gathered, tau * tf.ones(tf.shape(self.data_gathered)))
+            i = tf.is_finite(self.data)
+            self.data_gathered = tf.boolean_mask(self.data, i)
+            x = tf.boolean_mask(tf.matmul(W, Z, transpose_b=True) + m, i)
+            self.data_model = ed.models.Normal(x, tau * tf.ones(tf.shape(x)))
 
             # data_loss is not instrumental in the procedure, I compute it solely to write it out to tensorboard
             with tf.variable_scope('loss'):
                 xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
-                data_loss = tf.losses.mean_squared_error(self.data_gathered, tf.gather(tf.reshape(xm, [-1]), i))
+                data_loss = tf.losses.mean_squared_error(self.data_gathered, tf.boolean_mask(xm, i))
             self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
 
             self.inference = ed.KLqp(self.KL, data={self.data_model: self.data_gathered})
@@ -420,7 +421,8 @@ class probPCA(PPCA):
         else:
             self.logsubdir = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
 
-        tf.global_variables_initializer().run({self.data: data})
+        feed_dict = {self.data: data, self.data_mean: np.nanmean(data, 1, keepdims=True)}
+        tf.global_variables_initializer().run(feed_dict)
 
         # hack to use the progbar that edward allocates anyway, without giving n_iter to inference.initialize()
         self.inference.progbar.target = n_iter
@@ -433,12 +435,12 @@ class probPCA(PPCA):
 
         if self.convergence_test == None:
             for i in range(n_iter):
-                out = self.inference.update({self.data: data})
+                out = self.inference.update(feed_dict)
                 self.inference.print_progress(out)
         elif self.convergence_test == 'data_loss':
             thresh = 1e-4
             for i in range(n_iter):
-                out = self.inference.update({self.data: data})
+                out = self.inference.update(feed_dict)
                 j = i % 100
                 deque[j] = self.data_loss
                 if (j == 99) and (deque.std() < thresh):
@@ -447,7 +449,7 @@ class probPCA(PPCA):
         elif self.convergence_test == 'elbo':
             thresh = 30
             for i in range(n_iter):
-                out = self.inference.update({self.data: data})
+                out = self.inference.update(feed_dict)
                 j = i % 100
                 deque[j] = out['loss']
                 if (j == 99) and (deque.std() < thresh):
@@ -461,7 +463,7 @@ class probPCA(PPCA):
             try:
                 self.__dict__.update({k: v.eval()})
             except tf.errors.InvalidArgumentError:
-                self.__dict__.update({k: v.eval({self.data: data})})
+                self.__dict__.update({k: v.eval(feed_dict)})
         return self
 
 
