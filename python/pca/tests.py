@@ -9,7 +9,9 @@ import numpy as np
 import tensorflow as tf
 from datetime import datetime
 import joblib
-# import pca
+import matplotlib.pyplot as plt
+from collections import Counter
+import pca
 
 
 class Data(object):
@@ -66,181 +68,139 @@ class Data(object):
         return self.x1.mask.sum() / np.prod(self.x1.shape)
 
 
-def test1(file, n_iter=2000, n_seed=10):
-    import pca
-    d = data().toy()
-
-    config = pca.probPCA.configure()
-    for i, kv in enumerate([
-            {'W': 'prior'},
-            {'Z': 'prior'},
-            {'W': 'prior', 'Z': 'prior'},
-            {'W': 'all'},
-            {'Z': 'all'},
-            {'W': 'all', 'Z': 'all'}
-    ]):
-        for j, conf in enumerate([
-                [False, tf.ones_initializer],
-                [True, tf.ones_initializer],
-                [True, tf.random_normal_initializer],
-        ]):
-            c = config.copy()
-            for k, v in kv.items():
-                c.loc[('prior', k, 'scale'), :] = conf
-            for s in range(n_seed):
-                p = pca.probPCA(d.x1, config=c, seed=s, covariance=i, initialization=j, **kv)
-                p.run(n_iter).critique(d)
-
-    with pd.HDFStore(file) as S:
-        S['exp1'] = p.losses.replace('None', np.nan)
-
-def test2(file, n_iter=2000, n_seed=10):
-    import pca
-    d = data().toy()
-
-    config = pca.probPCA.configure()
-    for i, mu in [(1, 'full')]: #enumerate(['none', 'full']):
-        for j, mu_loc in enumerate({
-            'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
-            'full': [
-                [False, 'data_mean'], # prior mean set to data mean
-                [True, 'data_mean']   # prior mean a hyperparamter
-            ]
-        }[mu][1:]):
-            j = 1
-            for k, mu_scale in enumerate({
-                    'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
-                    'full': [
-                        [False, tf.ones_initializer],
-                        [True, tf.ones_initializer],
-                        [True, tf.random_normal_initializer]
-                    ]
-            }[mu]):
-                for l, tau in enumerate(['none', 'full']):
-                    for m, tau_loc in enumerate({
-                            'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
-                            'full': [
-                                [False, tf.zeros_initializer],
-                                [True, tf.zeros_initializer],
-                                [True, tf.random_normal_initializer]
-                            ]
-                    }[tau]):
-                        for n, tau_scale in enumerate({
-                                'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
-                                'full': [
-                                    [False, tf.ones_initializer],
-                                    [True, tf.ones_initializer],
-                                    [True, tf.random_normal_initializer]
-                                ]
-                        }[tau]):
-                            c = config.copy()
-                            c.loc[('prior', 'mu', 'loc'), :] = mu_loc
-                            c.loc[('prior', 'mu', 'scale'), :] = mu_scale
-                            c.loc[('prior', 'tau', 'loc'), :] = tau_loc
-                            c.loc[('prior', 'tau', 'scale'), :] = tau_scale
-
-                            for s in range(n_seed):
-                                p = pca.probPCA(d.x1, seed=s, mu=mu, tau=tau, config=c, i=i, j=j, k=k, l=l, m=m, n=n)
-                                p.run(n_iter).critique(d)
-
-                            with pd.HDFStore(file) as S:
-                                S['exp2'] = p.losses.replace('None', np.nan)
-
-def test3(file, n_iter=20000, n_seed=30):
-    import pca
-    d = data().toy()
-
-    for s in range(n_seed):
-        p = pca.probPCA(d.x1, seed=s, covariance=0).run(n_iter).critique(d)
-
-    with pd.HDFStore(file) as S:
-        S['exp3'] = p.losses.replace('None', np.nan)
-
-    c = pca.probPCA.configure()
-    c.loc[('prior', 'W', 'scale'), :] = [True, tf.random_normal_initializer]
-    c.loc[('prior', 'Z', 'scale'), :] = [True, tf.random_normal_initializer]
-
-    for s in range(n_seed):
-        p = pca.probPCA(d.x1, seed=s, config=c, W='all', Z='all', covariance=1)
-        p.run(n_iter).critique(d)
-
-    with pd.HDFStore(file) as S:
-        S['exp3'] = p.losses.replace('None', np.nan)
-
-def test4(file, n_iter=20000, n_seed=30):
-    import pca
-
-    for s in range(n_seed):
-        d = data().toy()
-        c = pca.probpca.configure()
-
-        p = pca.probpca(d.x1, covariance=0, config=c).run(n_iter).critique(d)
-
-        c.loc[('prior', 'w', 'scale'), :] = [true, tf.random_normal_initializer]
-        c.loc[('prior', 'z', 'scale'), :] = [true, tf.random_normal_initializer]
-
-        p = pca.probpca(d.x1, config=c, w='all', z='all', covariance=1)
-        p.run(n_iter).critique(d)
-
-        with pd.hdfstore(file) as s:
-            s['exp4'] = p.losses.replace('none', np.nan)
-
-def test5(file='test5.h5', n_iter=20000, n_seed=10, n_data=10):
-    import pca
-
-    for i in range(n_data):
-        d = data().toy()
-        for s in range(n_seed):
-            for conv in ['data', 'ed']:
-                c = pca.probPCA.configure()
-
-                p = pca.probPCA(d.x1, covariance=0, config=c, seed=s, conv=conv)
-                p.run(n_iter, conv).critique(d)
-
-                c.loc[('prior', 'W', 'scale'), :] = [True, tf.random_normal_initializer]
-                c.loc[('prior', 'Z', 'scale'), :] = [True, tf.random_normal_initializer]
-
-                p = pca.probPCA(d.x1, config=c, W='all', Z='all', seed=s, covariance=1, conv=conv)
-                p.run(n_iter, conv).critique(d)
-
-                with pd.HDFStore(file) as S:
-                    s['test5'] = p.losses.replace('none', np.nan)
-
-
 class Test(object):
-    """Test runner class for the :mod:`~.pca.pca` submodule. Method :meth:`case` can be used as a decorator to produce the necessary :class:`DataFrames<pandas.DataFrame>` for PCA configuration."""
+    """Test runner class for the :mod:`~.pca.pca` submodule. Method :meth:`case` can be used as a decorator to produce the necessary :class:`DataFrames<pandas.DataFrame>` for PCA configuration.
+
+    :Arguments:
+        * **file_name** - Name of the :class:`~pandas.HDFStore` file which holds or will hold the experiment specifications and results.
+        * **test_name** - Top-level key under which the DataFrames specifying the experiments reside. There will be three nodes under the ``test_name``::
+                * **args** - the DataFrame specifying the individual experiments, on row per experiment
+                * **config** - a DataFrame containing the configurations referred to in the **args** DataFrame
+                * **results** - an appendable DataFrame which will be populated while the experiments are run
+
+    :Keyword Arguments:
+        * **data** - The name of a file which saves the :class:`Data` instances used for the experiments, for repeatability and restart in case of a crash.
+        * **plot** - If ``True``, will only read in the file given in ``file_name`` so that it can be used by the :meth:`plot` method.
+
+    .. py:decoratormethod:: case(file_name)
+
+        Decorator to create a :class:`~pandas.HDFStore` which contains all the specifications to run a series of experiments with the :mod:`~.pca.pca` module. To use it decorate a function which returns either of:
+            1. **One DataFrame** - this DataFrame describes the arguments to be passed to the :class:`~pca.pca.PCA` constructor (e.g. ``W``, ``Z``, ``seed`` or annotation keywords).
+            2. **(A tuple of) two DataFrames** - The first of the two is the same as in the first option; the second one contains hierarchically concatenated (along index) configuration DataFrames which need to be referred to by integer numbers in a column labelled 'config' in the first (argument) DataFrame. In other words, it contains one or more DataFrames representing modified versions of the default configuration obtained by a call to :meth:`~.pca.pca.probPCA.configure`, concatenated bt a call to :func:`pandas.concat` with ``axis=0`` and ``keys`` a list of unique integers corresponding to the values of the 'config' column in the argument DataFrame.
+
+        The argument ``file_name`` is the name of the :class:`~pandas.HDFStore` file in which the argument / configuration DataFrames are to be saved. The same file will be used to append the results from the experiments (see :meth:`~.pca.pca.PCA.critique`). The **name of the function** is used as the first level in the hierarchical HDF5 file to denote a given experiment / test.
+    """
 
     def _store_get(self, key):
         return self.store.get(key) if key in self.store else None
 
-    def __init__(self, file_name, test_name):
-        self.results = test_name + '/results'
+    def __init__(self, file_name, test_name, data='data.pkl', plot=False):
+        self.table = test_name + '/results'
         with pd.HDFStore(file_name) as self.store:
             self.args = self._store_get(test_name + '/args')
             self.config = self._store_get(test_name + '/config')
-            results = self._store_get(self.results)
-        self.keys = self.args.columns.difference({'data', 'seed', 'config', 'done'})
-        if results is not None:
-            self.data = joblib.load('data.pkl')
-            self.row = results.index[-1] + 1
-        else:
-            self.data = {i :Data().toy() for i in self.args.get('data').unique()}
-            joblib.dump(self.data, 'data.pkl')
-            self.row = 0
+            self.results = self._store_get(self.table)
+        if not plot:
+            self.keys = self.args.columns.difference({'data', 'seed', 'config', 'done'})
+            if (self.results is not None) or (data is not None):
+                self.data = joblib.load(data)
+            if self.results is not None:
+                self.row = results.index[-1] + 1
+            else:
+                self.data = {i :Data().toy() for i in self.args.get('data').unique()}
+                joblib.dump(self.data, data)
+                self.row = 0
 
     def run(self, n_iter=20000):
         if self.row > self.args.index[-1]:
             return -9
-        print('\nrow {}\n'.format(self.row))
+        print('row {}\n'.format(self.row))
         t = self.args.loc[self.row]
         d = self.data[t.get('data')]
+
+        conv = t.pop('convergence_test')
         kwargs = t[self.keys].to_dict()
         config = None
+
         if t.get('config') is not None:
             config = self.config.loc[t.get('config')]
-        self.p = pca.probPCA(d.x1, seed=t.get('seed'), config=config, **kwargs)
-        self.p.run(n_iter).critique(d, file_name=self.store.filename, table_name=self.results, row=self.row)
+
+        # avoid creating new instances if unnecessary
+        try:
+            new_instance = (t.get('seed') != self.pca.seed) or np.all(config != self.pca.config)
+        except TypeError: # config is None
+            new_instance = (config is None) and np.all(self.pca.config != self.pca.configure())
+        except AttributeError: # self.pca doesn't exist
+            new_instance = True
+        if new_instance:
+            self.pca = pca.probPCA(d.x1.shape, seed=t.get('seed'), config=config, **kwargs)
+            print('new instance created\n')
+
+        self.pca.run(d.x1, n_iter, convergence_test=conv)
+        self.pca.critique(d, file_name=self.store.filename, table_name=self.table, row=self.row)
+        self.row += 1
         return 0
+
+    def subplot(self, ax, data, column, xaxis, colors, offset=0, **kwargs):
+        col, lab = list(colors.items())[0]
+        label = kwargs.pop('label', lab[0])
+        color = kwargs.pop('color', None)
+
+        # this makes boolean lists for each kwarg and .all() is True only if all conditions are true
+        # keys are column names, values are lists against which the column values are checked via a 'isin' query
+        combined = [i for j in [xaxis, colors, kwargs] for i in j.items()]
+        y = data[pd.concat([data[k].isin(v) for k, v in combined], 1).all(1)]
+
+        # this groups the conditions
+        y = y.groupby([str(k) for k, v in combined])[column]
+        y = pd.concat((y.mean(), y.std()), 1, keys=['mean', 'std'])
+
+        xlabels = y.index.get_level_values(list(xaxis.keys())[0])
+
+        x0 = np.arange(len(y))
+        x = x0 + offset
+        p = ax.errorbar(x, y['mean'], yerr=y['std'], fmt='s', color=color, capsize=5, label=label)
+        ax.set_xticks(x0)
+        ax.set_xticklabels(xlabels)
+        ax.set_title(column)
+
+    def plot(self, xaxis, colors, **kwargs):
+        """Produce a plot that splits the results of a :mod:`~.pca.pca` experiment along two dimensions: the *xaxis* and differently *colored* plots. Plots the mean as a square and the standard deviation of the experiments falling into one particular group as whiskers. Shows 8 plots corresponding to attributes of the :class:`~.pca.pca.PCA` subclasses (`x`, `Z`, `W`, `n_iter`, `mu`, `tau`, `loss`, `data_loss`).
+
+        :param xaxis: Column of the ``results`` :class:`~pandas.DataFrame` whose values give rise to the groups displayed along the xaxis of the plots.
+        :type xaxis: :obj:`dict` with the columns name as *one* key and the values to be included as a :obj:`list`, or a :obj:`str` if all occuring values should be included. (If a specific order of the items is desired, use the full dictionary specification).
+        :param colors: Column of the ``results`` :class:`~pandas.DataFrame` whose values give rise to the groups displayed as separately colored plots with the same xaxes.
+        :type colors: same as for **xaxis**
+        :returns: The axes of the subplots, e.g. for placing a legend (labels are added automatically corresponding to the **colors** argument).
+        :rtype: :class:`~numpy.ndarray` of :class:`~matplotlib.axes.Axes` instances
+
+        """
+        fig, axs = plt.subplots(2, 4, figsize=kwargs.pop('figsize', (12, 6)))
+        fig.subplots_adjust(hspace=kwargs.pop('hspace', 0.3), wspace=kwargs.pop('wspace', .3))
+
+        results = kwargs.pop('results', self.results)
+        if isinstance(xaxis, str):
+            xaxis = {xaxis: results[xaxis].unique()}
+        if isinstance(colors, str):
+            col = colors
+            values = results[col].unique()
+        else:
+            col, values = colors.popitem()
+
+        # below are just plot arrangements
+        n = len(values)
+        max = .25 * (1 - np.exp((1-n)/2))
+        offs = np.linspace(-max, max, n)
+        m = len(list(xaxis.values())[0])
+        xlims = [-m/4, (m-1)+m/4]
+
+        for k, x in enumerate(['x', 'Z', 'W', 'n_iter', 'mu', 'tau', 'loss', 'data_loss']):
+            i = k // 4
+            j = k % 4
+            for l, v in enumerate(values):
+                self.subplot(axs[i, j], results, x, xaxis, dict([(col, [v])]), offs[l], **kwargs)
+                axs[i, j].set_xlim(xlims)
+        return axs
 
     @staticmethod
     def case(file_name):
@@ -251,14 +211,16 @@ class Test(object):
                     if isinstance(out, pd.DataFrame):
                         store[func.__name__ + '/args'] = out
                     else:
-                        store[func.__name__ + '/args'] = out[0]
+                        # the 'config' values are sorted so that graphs need not be reconstructed unnecessarily
+                        # (the graph only needs to be reconstructed if 'config' or the data shape changes)
+                        store[func.__name__ + '/args'] = out[0].sort_values(['config', 'seed']).reset_index(drop=True)
                         store[func.__name__ + '/config'] = out[1]
             return wrapped_func
         return wrap
 
 
 @Test.case('tests.h5')
-def test():
+def test0():
     args = pd.DataFrame({'data': [0, 1], 'config':[None, None], 'tttessst':[9, 10]})
     return args
 
@@ -271,7 +233,7 @@ def data_loss_vs_elbo(n_data=10, n_seed=10):
             for conv in ['data_loss', 'elbo']:
 
                 tests = tests.append({'data': i, 'seed': s, 'convergence_test': conv,
-                                      'config': None, 'covariance': 'none', 'W': 'none', 'Z': 'none'}
+                                      'config': 'none', 'covariance': 'none', 'W': 'none', 'Z': 'none'}
                                      , ignore_index=True)
                 tests = tests.append({'data': i, 'seed': s, 'convergence_test': conv,
                                       'config': 0, 'covariance': 'full', 'W': 'all', 'Z': 'all'}
@@ -285,5 +247,6 @@ def data_loss_vs_elbo(n_data=10, n_seed=10):
 # if __name__=='__main__':
 #     out = 0
 
+#     test = Test('convergence2.h5', 'data_loss_vs_elbo')
 #     while out == 0:
-#         out = Test('convergence.h5', 'data_loss_vs_elbo').run()
+#         out = test.run()

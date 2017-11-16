@@ -15,7 +15,7 @@ Notes
 
 ToDo
 ----
-* separate data observation from graph initialization in probPCA (use tf.placeholder) - not sure if possible with unknown missing value locations... (primarily a question w.r.t. Edward_, in TensorFlow_ it should be possible.)
+* what happens if the main data model (passed to KLqp) has full covariance?
 
 """
 
@@ -28,7 +28,7 @@ import bayespy as bp
 import bayespy.inference.vmp.transformations as bpt
 from types import MethodType
 from datetime import datetime
-from warnings import warn, catch_warnings, simplefilter
+from warnings import warn
 import os, time
 
 # N number of examples ('time')
@@ -38,16 +38,9 @@ import os, time
 
 
 class PCA(object):
-    """Base class for all PCA subtypes. The :meth:`critique` method computes various loss measures and appends them as a :class:`~pandas.DataFrame` to an HDF5 file. **Any \*\*kwargs passed to the constructor are appended to the DataFrame as additional columns so as to allow identification of individual experiments.** The :meth:`__getattr__` method returns attributes saved in the :attr:`variables` attribute (a :obj:`dict`) and runs them through a TensorFlow_ session (unless, of course, one is fetching an attribute that otherwise exists on a subclass)."""
+    """Base class for all PCA subtypes. The :meth:`critique` method computes various loss measures and appends them as a :class:`~pandas.DataFrame` to an HDF5 file. **Any \*\*kwargs passed to the constructor are appended to the DataFrame as additional columns so as to allow identification of individual experiments.** 
 
-    # def __getattr__(self, name):
-    #     try:
-    #         v = self.variables[name]
-    #     except KeyError:
-    #         warn('Attempted to access non-existing variable.')
-    #         return np.nan # so that in summary DataFrame we have NaN instead of None
-    #     else:
-    #         return v.eval() if isinstance(v, tf.Tensor) else v
+    """
 
     def __init__(self, **kwargs):
         self.variables = {}
@@ -90,22 +83,25 @@ class PCA(object):
             results.update({'missing': data.missing_fraction, 'data_id': data.id})
 
         print('')
-        # because this is precicely when the warning raised in __getattr__() should be ignored
-        with catch_warnings():
-            simplefilter('ignore')
-            for v in ['data_loss', 'tau', 'alpha']:
-                print('{}: {}'.format(v, getattr(self, v, np.nan)))
+        for v in ['data_loss', 'tau', 'alpha']:
+            print('{}: {}'.format(v, getattr(self, v, np.nan)))
 
-            results.update({'data_loss': self.data_loss, 'rotated': rotate, 'loss': self.loss})
+        results.update({
+            'data_loss': self.data_loss,
+            'rotated': rotate,
+            'loss': self.loss,
+            'logs': self.logsubdir,
+            'n_iter': self.n_iter,
+            'convergence_test': self.convergence_test
+        })
 
         results.update(self.instance)
-        results.update({'logs': self.logsubdir, 'n_iter': self.n_iter})
 
         self.results = pd.DataFrame(results, index=[self.id] if row is None else [row])
         if (file_name is not None) and (table_name is not None):
             self.results.to_hdf(file_name, table_name, format='t', append=True)
         else:
-            warn('No results file and/or table name specified - results not written to file.')
+            warn('/nNo results file and/or table name specified - results not written to file.')
         return self
 
     def RMS(self, data, attr, **kwargs):
@@ -161,7 +157,7 @@ class PPCA(PCA):
 
     def __init__(self, shape, session_target=None, **kwargs):
         self.D, self.N = shape
-        self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir', 'convergence_test']})
+        self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir']})
         self.dtype = kwargs.get('dtype', tf.float32)
         self.K = self.D if (self.dims is None or isinstance(self.dims, str)) else self.dims
 
@@ -303,6 +299,8 @@ class probPCA(PPCA):
 
     @staticmethod
     def configure(display=False):
+        """Return the default configuration :class:`~pandas.DataFrame`. If ``display=True``, return a version with python objects replaced by strings, e.g. to display it in a Jupyter notebook."""
+
         idx = pd.IndexSlice
         config = pd.DataFrame(
             index = pd.MultiIndex.from_product([['prior', 'posterior'], ['W', 'Z', 'tau', 'mu'], ['loc', 'scale']]),
@@ -320,18 +318,17 @@ class probPCA(PPCA):
             })
         return config
 
-    def __init__(self, x1, config=None, **kwargs):
-        shape = x1.shape
+    def __init__(self, shape, config=None, **kwargs):
         self.model = {k: kwargs.pop(k, 'none') for k in ['W', 'Z', 'mu', 'tau']}
         super().__init__(shape, **kwargs)
         self.config = self.configure() if config is None else config
-        self.KL = {}
+        KL = {}
 
         with self.graph.as_default():
             if self.dims == 'full':
                 alpha = ed.models.Gamma(1e-5 * tf.ones((1, self.D)), 1e-5 * tf.ones((1, self.D)), name='prior/alpha')
                 qa = self.lognormal('posterior/alpha', alpha.shape)
-                self.KL.update({alpha: qa})
+                KL.update({alpha: qa})
                 self.alpha = qa
                 a = alpha ** -.5
             elif self.dims == 'point':
@@ -358,9 +355,8 @@ class probPCA(PPCA):
             with tf.variable_scope('posterior'):
                 QZ, QW = map(normal, ['Z', 'W'])
 
-            self.KL.update({Z: QZ, W: QW})
+            KL.update({Z: QZ, W: QW})
 
-            # self.data_mean = tf.cast(x1.mean(1, keepdims=True), self.dtype)
             self.data = tf.placeholder(self.dtype, shape)
             self.data_mean = tf.placeholder(self.dtype, (shape[0], 1))
             if self.model['mu'] == 'none':
@@ -371,7 +367,7 @@ class probPCA(PPCA):
                     m = normal('mu')
                 with tf.variable_scope('posterior'):
                     qm = normal('mu')
-                self.KL.update({m: qm})
+                KL.update({m: qm})
                 self.variables.update({'mu': qm.mean()})
 
             if self.model['tau'] == 'none':
@@ -381,12 +377,9 @@ class probPCA(PPCA):
                 s = ed.models.Gamma(1e-5, 1e-5, name='prior/tau')
                 qs = self.lognormal('tau')
                 tau = s ** -.5
-                self.KL.update({s: qs})
+                KL.update({s: qs})
                 self.variables.update({'tau': qs.mean()})
 
-            # data = x1.flatten()
-            # i, = np.where(~np.isnan(data))
-            # data = data[i]
             i = tf.is_finite(self.data)
             self.data_gathered = tf.boolean_mask(self.data, i)
             x = tf.boolean_mask(tf.matmul(W, Z, transpose_b=True) + m, i)
@@ -398,7 +391,7 @@ class probPCA(PPCA):
                 data_loss = tf.losses.mean_squared_error(self.data_gathered, tf.boolean_mask(xm, i))
             self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
 
-            self.inference = ed.KLqp(self.KL, data={self.data_model: self.data_gathered})
+            self.inference = ed.KLqp(KL, data={self.data_model: self.data_gathered})
 
             # this comes from edward source (class VariationalInference)
             # this way, edward automatically writes out my own summaries
@@ -408,10 +401,11 @@ class probPCA(PPCA):
             self.inference.initialize(n_samples=10, logdir=self.logdir)
 
 
-    def run(self, data, n_iter):
+    def run(self, data, n_iter, open_session=True, convergence_test='data_loss'):
         # NOTE: tf.InteractiveSession is the same as tf.Session except it makes the session the default session
         # Edward unfortunately seems to only use the default session, so we need to work with that.
-        tf.InteractiveSession(graph=self.graph)
+        if open_session is True:
+            session = tf.InteractiveSession(graph=self.graph)
 
         # if this is a repeated run, replace edward's FileWriter to write to a new directory
         try:
@@ -433,37 +427,45 @@ class probPCA(PPCA):
         self.n_iter = n_iter
         start_time = time.time()
 
-        if self.convergence_test == None:
+        if convergence_test == None:
             for i in range(n_iter):
                 out = self.inference.update(feed_dict)
                 self.inference.print_progress(out)
-        elif self.convergence_test == 'data_loss':
+        elif convergence_test == 'data_loss':
             thresh = 1e-4
+            loss = self.variables['data_loss']
             for i in range(n_iter):
                 out = self.inference.update(feed_dict)
+                self.inference.print_progress(out)
                 j = i % 100
-                deque[j] = self.data_loss
+                deque[j] = loss.eval(feed_dict)
                 if (j == 99) and (deque.std() < thresh):
                     self.n_iter = i + 1
                     break
-        elif self.convergence_test == 'elbo':
+        elif convergence_test == 'elbo':
             thresh = 30
             for i in range(n_iter):
                 out = self.inference.update(feed_dict)
+                self.inference.print_progress(out)
                 j = i % 100
                 deque[j] = out['loss']
                 if (j == 99) and (deque.std() < thresh):
                     self.n_iter = i + 1
                     break
 
-        print('Time: {}'.format(time.time() -  start_time))
+        print('\nexecution time: {}\n'.format(time.time() -  start_time))
         self.inference.finalize() # this just closes the FileWriter
         self.variables.update({'loss': self.inference.loss})
+        self.convergence_test = convergence_test
         for k, v in self.variables.items():
             try:
                 self.__dict__.update({k: v.eval()})
             except tf.errors.InvalidArgumentError:
                 self.__dict__.update({k: v.eval(feed_dict)})
+
+        # The test sequences aren't crashing anymore now, so maybe this was the relevant missing piece
+        if open_session:
+            session.close()
         return self
 
 

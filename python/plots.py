@@ -64,3 +64,11 @@ def annotated(df, ax=None, color=None):
     ax.gridlines()
     ax.set_extent((-180, 180, -65, -90), crs.PlateCarree())
     return p
+
+def title(title, height=.95):
+    """Set an overall title on a figure consisting of subplots."""
+    fig = plt.gcf()
+    ax = fig.add_axes([0, 0, 1, height])
+    ax.axis('off')
+    ax.set_title(title)
+    fig.draw_artist(ax)
