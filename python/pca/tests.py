@@ -10,7 +10,6 @@ import tensorflow as tf
 from datetime import datetime
 import joblib
 import matplotlib.pyplot as plt
-from collections import Counter
 import pca
 
 
