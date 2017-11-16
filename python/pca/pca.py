@@ -35,6 +35,7 @@ import os, time
 # D dimension of example ('space')
 # K number of principal components
 
+# TEST
 
 
 class PCA(object):
