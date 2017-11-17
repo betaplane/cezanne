@@ -4,6 +4,11 @@ Links and Hints
 Sphinx
 ------
 * http://www.sphinx-doc.org/en/stable/domains.html#cross-referencing-python-objects
+* http://www.sphinx-doc.org/en/stable/markup/inline.html
+
+MathJax:
+    * http://www.sphinx-doc.org/en/stable/ext/math.html
+    * http://docs.mathjax.org/en/latest/tex.html#supported-latex-commands
 
 Git
 ---

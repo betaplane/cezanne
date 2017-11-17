@@ -10,10 +10,10 @@ Welcome to Probabilistic PCA's documentation!
    :maxdepth: 2
    :caption: Contents:
 
-.. automodule:: core
+.. automodule:: pca.core
    :members:
 
-.. automodule:: tests
+.. automodule:: pca.tests
    :members:
 
     .. _TensorFlow: https://www.tensorflow.org/api_docs/

@@ -10,7 +10,7 @@ import tensorflow as tf
 from datetime import datetime
 import joblib
 import matplotlib.pyplot as plt
-import core
+import pca.core
 
 
 class Data(object):

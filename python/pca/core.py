@@ -22,7 +22,6 @@ PCA
 
 """
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import edward as ed
@@ -104,7 +103,7 @@ class PCA(object):
         if (file_name is not None) and (table_name is not None):
             self.results.to_hdf(file_name, table_name, format='t', append=True)
         else:
-            warn('/nNo results file and/or table name specified - results not written to file.')
+            warn('No results file and/or table name specified - results not written to file.')
         return self
 
     def RMS(self, data, attr, **kwargs):
@@ -148,17 +147,16 @@ class PPCA(PCA):
 
         The following are at present only relevant for :class:`probPCA`.
 
-        * **convergence_test** - Which type of loss to use to test for convergence. Currently I take the StDev of the last 100 iterations of the loss function:
-            * ``None`` - the training is run exactly the ``n_iter`` loops given as argument to :meth:`~probPCA.run`
-            * ``data_loss`` - :attr:`data_loss` is used, the training error w.r.t. to the data passed.
-            * ``elbo``, Edward_'s built-in loss is used (I think ELBO).
         * **dims**
                 * ``full`` - apply automatic relevance determination to the columns of the loadings matrix :attr:`W`
                 * :obj:`int` - use this many dimensions in the principal component space
 
+    .. attribute:: graph
+
+        The TensorFlow_ `graph` constructed for any particular subclass. I am trying to separate graph construction and execution as far as possible, so that e.g. one can construct a `tf.Session` or `tf.InteractiveSession` outside the module with this graph.
     """
 
-    def __init__(self, shape, session_target=None, **kwargs):
+    def __init__(self, shape, **kwargs):
         self.D, self.N = shape
         self.__dict__.update({key: kwargs.get(key) for key in ['dims', 'seed', 'logdir']})
         self.dtype = kwargs.get('dtype', tf.float32)
@@ -222,7 +220,7 @@ class PPCA(PCA):
         if self.logdir is not None:
             self.inference.train_writer = tf.summary.FileWriter(os.path.join(self.logdir, value))
 
-
+# NOTE: this class is completely out of date with the rest of the module and not expected to work
 class gradPCA(PPCA):
     trainable = True
     initializer = tf.zeros_initializer# tf.random_normal_initializer
@@ -268,7 +266,21 @@ class gradPCA(PPCA):
 
 
 class probPCA(PPCA):
-    """Edward_-based fully configurable bayesian / mixed probabilistic principal component analyzer."""
+    """Edward_-based fully configurable bayesian / mixed probabilistic principal component analyzer.
+
+    :param shape: Shape of the data to expect in the :meth:`run` method. Needs to be (D, N) (see `Notes`_).
+    :param config: A modified configuration DataFrame; the default can be obtained by a call to :meth:`configure`.
+
+    :Keyword Arguments:
+        Optional keywords specify the type of prior and posterior approximation to be used and should be used in conjunction with appropriate settings of the `config` DataFrame. The options are at this point either ``none`` (a :obj:`str`, not :obj:`None`) -- the default -- or ``full``. For the loadings matrix and the principal components, this refers, respectively, to a completely factorized Gaussian model or one with full covariance matrix. If the posterior approximation is ``full``, the prior is automatically ``full`` too. For the 'hyperparamters' :math:`\\tau` and :math:`\mu`, ``none`` means that the parameters are point-estimated, whereas ``full`` means that they are given a full Bayesian treatment.
+
+        * **W** - The loadings matrix.
+        * **Z** - The principal components.
+        * **tau** - The noise level of the data, a scalar.
+        * **mu** - The means of the data vectors, with shape (D, ).
+
+        See also the keyword arguments to the parent classes :class:`PPCA` and :class:`PCA`.
+    """
 
     def lognormal(self, name, scope='posterior', shape=()):
         lognormal = ed.models.TransformedDistribution(
@@ -405,10 +417,22 @@ class probPCA(PPCA):
 
 
     def run(self, data, n_iter, open_session=True, convergence_test='data_loss'):
+        """Run the actual inference after the graph has been constructed in the :class:`probPCA` init call.
+
+        :param data: The data as a :class:`~numpy.ma.core.MaskedArray` in the shape (D, N) (see `Notes`_)
+        :param n_iter: The maximum number of iterations to run.
+        :param open_session: Whether to open a `tf.InteractiveSession` (if ``False``, an interactive session with the instance's :attr:`~PPCA.graph` needs to be open).
+        :param convergence_test: Which type of loss to use to test for convergence. Currently I take the StDev of the last 100 iterations of the loss function:
+
+            * ``None`` - the training is run exactly the ``n_iter`` loops given as argument to :meth:`~probPCA.run`
+            * ``data_loss`` - :attr:`data_loss` is used, the training error w.r.t. to the data passed.
+            * ``elbo``, Edward_'s built-in loss is used (I think ELBO).
+
+        """
+
         # NOTE: tf.InteractiveSession is the same as tf.Session except it makes the session the default session
         # Edward unfortunately seems to only use the default session, so we need to work with that.
-        if open_session is True:
-            session = tf.InteractiveSession(graph=self.graph)
+        session = tf.InteractiveSession(graph=self.graph) if open_session is True else tf.get_default_session()
 
         # if this is a repeated run, replace edward's FileWriter to write to a new directory
         try:
