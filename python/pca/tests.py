@@ -8,9 +8,9 @@ import pandas as pd
 import numpy as np
 import tensorflow as tf
 from datetime import datetime
-import joblib
+import joblib, os
 import matplotlib.pyplot as plt
-import pca.core
+import core
 
 
 class Data(object):
@@ -101,7 +101,7 @@ class Test(object):
             self.results = self._store_get(self.table)
         if not plot:
             self.keys = self.args.columns.difference({'data', 'seed', 'config', 'done'})
-            if (self.results is not None) or (data is not None):
+            if (self.results is not None) or os.path.isfile(data):
                 self.data = joblib.load(data)
             if self.results is not None:
                 self.row = results.index[-1] + 1
@@ -117,7 +117,7 @@ class Test(object):
         t = self.args.loc[self.row]
         d = self.data[t.get('data')]
 
-        conv = t.pop('convergence_test')
+        conv = t.pop('convergence_test') if 'convergence_test' in t else 'data_loss'
         kwargs = t[self.keys].to_dict()
         config = None
 
@@ -253,9 +253,60 @@ def data_loss_vs_elbo(n_data=10, n_seed=10):
     conf = pd.concat((c,), 0, keys=[0])
     return tests, conf
 
-# if __name__=='__main__':
-#     out = 0
+@Test.case('covariance.h5')
+def covariance_variations(n_seed=10):
+    c = []
+    t = pd.DataFrame()
+    for i, mu in enumerate(['none', 'full']):
+        for j, mu_loc in enumerate({
+            'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
+            'full': [
+                [False, 'data_mean'], # prior mean set to data mean
+                [True, 'data_mean']   # prior mean a hyperparamter
+            ]
+        }[mu]):
+            for k, mu_scale in enumerate({
+                    'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
+                    'full': [
+                        [False, tf.ones_initializer],
+                        [True, tf.ones_initializer],
+                        [True, tf.random_normal_initializer]
+                    ]
+            }[mu]):
+                for l, tau in enumerate(['none', 'full']):
+                    for m, tau_loc in enumerate({
+                            'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
+                            'full': [
+                                [False, tf.zeros_initializer],
+                                [True, tf.zeros_initializer],
+                                [True, tf.random_normal_initializer]
+                            ]
+                    }[tau]):
+                        for n, tau_scale in enumerate({
+                                'none': [[None, None]], # irrelevant since the 'posterior' value is used in config
+                                'full': [
+                                    [False, tf.ones_initializer],
+                                    [True, tf.ones_initializer],
+                                    [True, tf.random_normal_initializer]
+                                ]
+                        }[tau]):
+                            c.append(core.probPCA.configure())
+                            if mu=='full':
+                                c[-1].loc[('prior', 'mu', 'loc'), :] = mu_loc
+                                c[-1].loc[('prior', 'mu', 'scale'), :] = mu_scale
+                            if tau=='full':
+                                c[-1].loc[('prior', 'tau', 'loc'), :] = tau_loc
+                                c[-1].loc[('prior', 'tau', 'scale'), :] = tau_scale
 
-#     test = Test('convergence2.h5', 'data_loss_vs_elbo')
-#     while out == 0:
-#         out = test.run()
+                            for s in range(n_seed):
+                                t = t.append({'seed':s, 'mu':mu, 'tau':tau, 'config':len(c)-1, 'i':i, 'j':j, 'k':k, 'l':l, 'm':m, 'n':n, 'data':0}, ignore_index=True)
+
+    config = pd.concat(c, 0, keys=range(len(c)))
+    return t, config
+
+if __name__=='__main__':
+    out = 0
+
+    test = Test('covariance.h5', 'covariance_variations', data='covariance.pkl')
+    while out == 0:
+        out = test.run()
