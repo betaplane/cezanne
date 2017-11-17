@@ -1,11 +1,14 @@
 """
-Notes
------
+Conventions
+-----------
 * The instance variables exposed by the various classes have the following meaning:
     * **W** (D, K) - the weights / loadings matrix_transpose
     * **Z** (N, K) - the principal components
     * **mu** (D, 1) - the data means (per dimension)
     * **x** (D, N) - the reconstructed data
+
+Notes for myself
+----------------
 * :class:`tf.contrib.distributions.GammaWithSoftplusConcentrationRate` produced negative 'concentration'. I therefore went with using :class:`tf.nn.softplus`, also in the case of :class:`ed.models.Normal` (instead of :class:`ed.models.NormalWithSoftplusScale`).
 * The black-box :class:`ed.inference.KLqp` algorithm used by Edward (score function gradient) doesn't deal well with Gamma and Dirichlet:
     * https://github.com/blei-lab/edward/issues/389
@@ -13,9 +16,9 @@ Notes
 * For the tensorboard summaries to work in the presence of missing values, the input array needs to be of :class:`np.ma.MaskedArray` type **and** have NaNs at the missing locations - not clear why.
 * Numpy eigenvalues are indeed **not** sorted.
 
-ToDo
-----
-* what happens if the main data model (passed to KLqp) has full covariance?
+.. todo::
+
+    * what happens if the main data model (passed to KLqp) has full covariance?
 
 PCA
 ---
@@ -268,7 +271,7 @@ class gradPCA(PPCA):
 class probPCA(PPCA):
     """Edward_-based fully configurable bayesian / mixed probabilistic principal component analyzer.
 
-    :param shape: Shape of the data to expect in the :meth:`run` method. Needs to be (D, N) (see `Notes`_).
+    :param shape: Shape of the data to expect in the :meth:`run` method. Needs to be (D, N) (see `Conventions`_).
     :param config: A modified configuration DataFrame; the default can be obtained by a call to :meth:`configure`.
 
     :Keyword Arguments:
@@ -419,7 +422,7 @@ class probPCA(PPCA):
     def run(self, data, n_iter, open_session=True, convergence_test='data_loss'):
         """Run the actual inference after the graph has been constructed in the :class:`probPCA` init call.
 
-        :param data: The data as a :class:`~numpy.ma.core.MaskedArray` in the shape (D, N) (see `Notes`_)
+        :param data: The data as a :class:`~numpy.ma.core.MaskedArray` in the shape (D, N) (see `Conventions`_)
         :param n_iter: The maximum number of iterations to run.
         :param open_session: Whether to open a `tf.InteractiveSession` (if ``False``, an interactive session with the instance's :attr:`~PPCA.graph` needs to be open).
         :param convergence_test: Which type of loss to use to test for convergence. Currently I take the StDev of the last 100 iterations of the loss function:

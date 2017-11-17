@@ -166,12 +166,22 @@ class Test(object):
     def plot(self, xaxis, colors, **kwargs):
         """Produce a plot that splits the results of a :mod:`~.pca.core` experiment along two dimensions: the *xaxis* and differently *colored* plots. Plots the mean as a square and the standard deviation of the experiments falling into one particular group as whiskers. Shows 8 plots corresponding to attributes of the :class:`~.pca.core.PCA` subclasses (`x`, `Z`, `W`, `n_iter`, `mu`, `tau`, `loss`, `data_loss`).
 
-        :param xaxis: Column of the ``results`` :class:`~pandas.DataFrame` whose values give rise to the groups displayed along the xaxis of the plots.
-        :type xaxis: :obj:`dict` with the columns name as *one* key and the values to be included as a :obj:`list`, or a :obj:`str` if all occuring values should be included. (If a specific order of the items is desired, use the full dictionary specification).
-        :param colors: Column of the ``results`` :class:`~pandas.DataFrame` whose values give rise to the groups displayed as separately colored plots with the same xaxes.
-        :type colors: same as for **xaxis**
+        :param xaxis: Column of the ``results`` :class:`~pandas.DataFrame` whose values give rise to the groups displayed along the xaxis of the plots. If a :obj:`dict` is given, it should have *one* key: The column name by which to :meth:`~pandas.DataFrame.groupby` the results, and a :obj:`list` as the value, containing all the values of that columns which should be included. Alternatively, give only the column's name as a :obj:`str` to include all occuring values.
+        :type xaxis: :obj:`dict` or :obj:`str`
+
+        with the columns name as *one* key and the values to be included as a :obj:`list`, or a :obj:`str` if all occuring values should be included. (If a specific order of the items is desired, use the full dictionary specification).
+        :param colors: Column of the ``results`` :class:`~pandas.DataFrame` whose values give rise to the groups displayed as separately colored plots with the same xaxes. The same rules apply as for `xaxis`.
+        :type colors: :obj:`dict` or :obj:`str`
         :returns: The axes of the subplots, e.g. for placing a legend (labels are added automatically corresponding to the **colors** argument).
         :rtype: :class:`~numpy.ndarray` of :class:`~matplotlib.axes.Axes` instances
+
+        :Keyword Arguments:
+            Additional arguments specified as ``key=list`` will be used to restrict the results to the occurences of the values in ``list`` in the column named ``key``.
+
+            The following keywords are reserved:
+
+            * **results** - Pass in a ``results`` :class:`~pandas.DataFrame` other than the one read from the :class:`~pandas.HDFStore` given in the class initialization.
+            * **figsize**, **hspace** and **wspace** are passed to the corresponding :mod:`matplotlib` calls.
 
         """
         fig, axs = plt.subplots(2, 4, figsize=kwargs.pop('figsize', (12, 6)))
