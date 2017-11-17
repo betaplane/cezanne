@@ -58,7 +58,7 @@ templates_path = ['_templates']
 source_suffix = '.rst'
 
 # The master toctree document.
-master_doc = 'pca'
+master_doc = 'index'
 
 # General information about the project.
 project = 'Probabilistic PCA'

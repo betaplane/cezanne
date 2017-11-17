@@ -1,5 +1,5 @@
-Links
-=====
+Links and Hints
+===============
 
 Sphinx
 ------
@@ -7,17 +7,20 @@ Sphinx
 
 Git
 ---
+To update the pca repo, execute::
+
+  git subtree push --prefix python/pca pca master
+
+(from top level directory, i.e. ``code``).
+
 * http://www.paulwhippconsulting.com/blog/splitting-a-git-repository-into-two-projects-and-reintegrating-them/
 * https://www.atlassian.com/blog/git/alternatives-to-git-submodule-git-subtree
+
+.. include:: ../python/pca/docs/index.rst
 
 Data
 ====
 .. automodule:: python.data
-   :members:
-
-PCA
-===
-.. automodule:: python.pca
    :members:
 
 Various linear stats

@@ -10,7 +10,7 @@ import tensorflow as tf
 from datetime import datetime
 import joblib
 import matplotlib.pyplot as plt
-import pca
+import core
 
 
 class Data(object):
@@ -68,7 +68,7 @@ class Data(object):
 
 
 class Test(object):
-    """Test runner class for the :mod:`~.pca.pca` submodule. Method :meth:`case` can be used as a decorator to produce the necessary :class:`DataFrames<pandas.DataFrame>` for PCA configuration.
+    """Test runner class for the :mod:`~.pca.core` submodule. Method :meth:`case` can be used as a decorator to produce the necessary :class:`DataFrames<pandas.DataFrame>` for PCA configuration.
 
     :Arguments:
         * **file_name** - Name of the :class:`~pandas.HDFStore` file which holds or will hold the experiment specifications and results.
@@ -83,11 +83,11 @@ class Test(object):
 
     .. py:decoratormethod:: case(file_name)
 
-        Decorator to create a :class:`~pandas.HDFStore` which contains all the specifications to run a series of experiments with the :mod:`~.pca.pca` module. To use it decorate a function which returns either of:
-            1. **One DataFrame** - this DataFrame describes the arguments to be passed to the :class:`~pca.pca.PCA` constructor (e.g. ``W``, ``Z``, ``seed`` or annotation keywords).
-            2. **(A tuple of) two DataFrames** - The first of the two is the same as in the first option; the second one contains hierarchically concatenated (along index) configuration DataFrames which need to be referred to by integer numbers in a column labelled 'config' in the first (argument) DataFrame. In other words, it contains one or more DataFrames representing modified versions of the default configuration obtained by a call to :meth:`~.pca.pca.probPCA.configure`, concatenated bt a call to :func:`pandas.concat` with ``axis=0`` and ``keys`` a list of unique integers corresponding to the values of the 'config' column in the argument DataFrame.
+        Decorator to create a :class:`~pandas.HDFStore` which contains all the specifications to run a series of experiments with the :mod:`~.pca.core` module. To use it decorate a function which returns either of:
+            1. **One DataFrame** - this DataFrame describes the arguments to be passed to the :class:`~pca.core.PCA` constructor (e.g. ``W``, ``Z``, ``seed`` or annotation keywords).
+            2. **(A tuple of) two DataFrames** - The first of the two is the same as in the first option; the second one contains hierarchically concatenated (along index) configuration DataFrames which need to be referred to by integer numbers in a column labelled 'config' in the first (argument) DataFrame. In other words, it contains one or more DataFrames representing modified versions of the default configuration obtained by a call to :meth:`~.pca.core.probPCA.configure`, concatenated bt a call to :func:`pandas.concat` with ``axis=0`` and ``keys`` a list of unique integers corresponding to the values of the 'config' column in the argument DataFrame.
 
-        The argument ``file_name`` is the name of the :class:`~pandas.HDFStore` file in which the argument / configuration DataFrames are to be saved. The same file will be used to append the results from the experiments (see :meth:`~.pca.pca.PCA.critique`). The **name of the function** is used as the first level in the hierarchical HDF5 file to denote a given experiment / test.
+        The argument ``file_name`` is the name of the :class:`~pandas.HDFStore` file in which the argument / configuration DataFrames are to be saved. The same file will be used to append the results from the experiments (see :meth:`~.pca.core.PCA.critique`). The **name of the function** is used as the first level in the hierarchical HDF5 file to denote a given experiment / test.
     """
 
     def _store_get(self, key):
@@ -132,7 +132,7 @@ class Test(object):
         except AttributeError: # self.pca doesn't exist
             new_instance = True
         if new_instance:
-            self.pca = pca.probPCA(d.x1.shape, seed=t.get('seed'), config=config, **kwargs)
+            self.pca = core.probPCA(d.x1.shape, seed=t.get('seed'), config=config, **kwargs)
             print('new instance created\n')
 
         self.pca.run(d.x1, n_iter, convergence_test=conv)
@@ -164,7 +164,7 @@ class Test(object):
         ax.set_title(column)
 
     def plot(self, xaxis, colors, **kwargs):
-        """Produce a plot that splits the results of a :mod:`~.pca.pca` experiment along two dimensions: the *xaxis* and differently *colored* plots. Plots the mean as a square and the standard deviation of the experiments falling into one particular group as whiskers. Shows 8 plots corresponding to attributes of the :class:`~.pca.pca.PCA` subclasses (`x`, `Z`, `W`, `n_iter`, `mu`, `tau`, `loss`, `data_loss`).
+        """Produce a plot that splits the results of a :mod:`~.pca.core` experiment along two dimensions: the *xaxis* and differently *colored* plots. Plots the mean as a square and the standard deviation of the experiments falling into one particular group as whiskers. Shows 8 plots corresponding to attributes of the :class:`~.pca.core.PCA` subclasses (`x`, `Z`, `W`, `n_iter`, `mu`, `tau`, `loss`, `data_loss`).
 
         :param xaxis: Column of the ``results`` :class:`~pandas.DataFrame` whose values give rise to the groups displayed along the xaxis of the plots.
         :type xaxis: :obj:`dict` with the columns name as *one* key and the values to be included as a :obj:`list`, or a :obj:`str` if all occuring values should be included. (If a specific order of the items is desired, use the full dictionary specification).
@@ -237,7 +237,7 @@ def data_loss_vs_elbo(n_data=10, n_seed=10):
                 tests = tests.append({'data': i, 'seed': s, 'convergence_test': conv,
                                       'config': 0, 'covariance': 'full', 'W': 'all', 'Z': 'all'}
                                      , ignore_index=True)
-    c = pca.probPCA.configure()
+    c = core.probPCA.configure()
     c.loc[('prior', 'W', 'scale'), :] = [True, tf.random_normal_initializer]
     c.loc[('prior', 'Z', 'scale'), :] = [True, tf.random_normal_initializer]
     conf = pd.concat((c,), 0, keys=[0])

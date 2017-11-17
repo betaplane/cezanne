@@ -17,6 +17,9 @@ ToDo
 ----
 * what happens if the main data model (passed to KLqp) has full covariance?
 
+PCA
+---
+
 """
 
 import matplotlib.pyplot as plt
