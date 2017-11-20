@@ -10,7 +10,7 @@ import tensorflow as tf
 from datetime import datetime
 import joblib, os
 import matplotlib.pyplot as plt
-import core
+import pca.core
 
 
 class Data(object):
@@ -145,6 +145,9 @@ class Test(object):
         label = kwargs.pop('label', lab[0])
         color = kwargs.pop('color', None)
 
+        level, xlab = list(xaxis.items())[0]
+        xlabels = kwargs.pop('xlabels', xlab)
+
         # this makes boolean lists for each kwarg and .all() is True only if all conditions are true
         # keys are column names, values are lists against which the column values are checked via a 'isin' query
         combined = [i for j in [xaxis, colors, kwargs] for i in j.items()]
@@ -152,13 +155,14 @@ class Test(object):
 
         # this groups the conditions
         y = y.groupby([str(k) for k, v in combined])[column]
-        y = pd.concat((y.mean(), y.std()), 1, keys=['mean', 'std'])
+        y = pd.concat((y.mean(), y.std()), 1, keys=['mean_', 'std_'])
 
-        xlabels = y.index.get_level_values(list(xaxis.keys())[0])
+        ymean = [y['mean_'].xs(i, 0, level) for i in xlab]
+        ystd = [y['std_'].xs(i, 0, level) for i in xlab]
 
         x0 = np.arange(len(y))
         x = x0 + offset
-        p = ax.errorbar(x, y['mean'], yerr=y['std'], fmt='s', color=color, capsize=5, label=label)
+        p = ax.errorbar(x, ymean, yerr=ystd, fmt='s', color=color, capsize=5, label=label)
         ax.set_xticks(x0)
         ax.set_xticklabels(xlabels)
         ax.set_title(column)
