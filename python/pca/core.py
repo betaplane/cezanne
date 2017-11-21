@@ -55,7 +55,7 @@ class PCA(object):
         """A unique ID to identify instances of this class, e.g. in results tables. Constructe from :meth:`~datetime.datetime.utcnow`."""
 
     def critique(self, data=None, rotate=True, file_name=None, table_name=None, row=None):
-        """Compute various loss measures of the PCA reconstruction w.r.t. the original data if `data` is provided, otherwise juse print the training error (:attr:`data_loss`). Also optionally rotates the principal components `Z` and loadings `W` prior to comparison.
+        """Compute various loss measures of the PCA reconstruction w.r.t. the original data if `data` is provided, otherwise juse print the training error (:attr:`train_loss`). Also optionally rotates the principal components `Z` and loadings `W` prior to comparison.
 
         :param data: An object holding various components of the original data for comparison.
         :type data: :class:`.Data`
@@ -88,11 +88,11 @@ class PCA(object):
             results.update({'missing': data.missing_fraction, 'data_id': data.id})
 
         print('')
-        for v in ['data_loss', 'tau', 'alpha']:
+        for v in ['train_loss', 'tau', 'alpha']:
             print('{}: {}'.format(v, getattr(self, v, np.nan)))
 
         results.update({
-            'data_loss': self.data_loss,
+            'train_loss': self.train_loss,
             'rotated': rotate,
             'loss': self.loss,
             'logs': self.logsubdir,
@@ -337,7 +337,7 @@ class probPCA(PPCA):
             })
         return config
 
-    def __init__(self, shape, config=None, **kwargs):
+    def __init__(self, shape, config=None, test_data=False, **kwargs):
         model = {'W': 'none', 'Z': 'none', 'mu': 'full', 'tau': 'full'}
         self.model = {k: kwargs.pop(k, model[k]) for k in ['W', 'Z', 'mu', 'tau']}
         super().__init__(shape, **kwargs)
@@ -378,6 +378,8 @@ class probPCA(PPCA):
             KL.update({Z: QZ, W: QW})
 
             self.data = tf.placeholder(self.dtype, shape)
+            if test_data:
+                self.test_data = tf.placeholder(self.dtype)
             self.data_mean = tf.placeholder(self.dtype, (shape[0], 1))
             if self.model['mu'] == 'none':
                 m = self.param_init('mu', 'posterior', 'loc') # 'posterior' variables are by default trainable
@@ -411,17 +413,22 @@ class probPCA(PPCA):
             # this way, edward automatically writes out my own summaries
             summary_key = 'summaries_{}'.format(id(self.inference))
 
-            # data_loss is not instrumental in the procedure, I compute it solely to write it out to tensorboard
-            with tf.variable_scope('loss'):
+            # train_loss is not instrumental in the procedure, I compute it solely to write it out to tensorboard
+            with tf.variable_scope('losses'):
                 xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
-                data_loss = tf.losses.mean_squared_error(self.data_gathered, tf.boolean_mask(xm, i))
-                tf.summary.scalar('data_loss', data_loss, collections=[summary_key])
+                train_loss = tf.losses.mean_squared_error(self.data_gathered, tf.boolean_mask(xm, i))
+                tf.summary.scalar('train_loss', train_loss, collections=[summary_key])
+                if test_data:
+                    test_loss = tf.losses.mean_squared_error(
+                        tf.boolean_mask(self.test_data, i), tf.boolean_mask(xm, i))
+                    tf.summary.scalar('test_loss', test_loss, collections=[summary_key])
+                    self.variables.update({'test_loss': test_loss})
 
-            self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
+            self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'train_loss': train_loss})
             self.inference.initialize(n_samples=10, logdir=self.logdir)
 
 
-    def run(self, data, n_iter, open_session=True, convergence_test='data_loss'):
+    def run(self, data, n_iter, open_session=True, convergence_test='train_loss', test_data=None):
         """Run the actual inference after the graph has been constructed in the :class:`probPCA` init call.
 
         :param data: The data as a :class:`~numpy.ma.core.MaskedArray` in the shape (D, N) (see `Conventions`_)
@@ -430,7 +437,7 @@ class probPCA(PPCA):
         :param convergence_test: Which type of loss to use to test for convergence. Currently I take the StDev of the last 100 iterations of the loss function:
 
             * ``None`` - the training is run exactly the ``n_iter`` loops given as argument to :meth:`~probPCA.run`
-            * ``data_loss`` - :attr:`data_loss` is used, the training error w.r.t. to the data passed.
+            * ``train_loss`` - :attr:`train_loss` is used, the training error w.r.t. to the data passed.
             * ``elbo``, Edward_'s built-in loss is used (I think ELBO).
 
         """
@@ -441,13 +448,15 @@ class probPCA(PPCA):
 
         # if this is a repeated run, replace edward's FileWriter to write to a new directory
         try:
-            t = self.inference.t.eval()
+            t = self.inference.t.eval(session)
         except tf.errors.FailedPreconditionError:
             pass
         else:
             self.logsubdir = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
 
         feed_dict = {self.data: data, self.data_mean: np.nanmean(data, 1, keepdims=True)}
+        if test_data is not None:
+            feed_dict[self.test_data] = test_data
         tf.global_variables_initializer().run(feed_dict)
 
         # hack to use the progbar that edward allocates anyway, without giving n_iter to inference.initialize()
@@ -463,9 +472,9 @@ class probPCA(PPCA):
             for i in range(n_iter):
                 out = self.inference.update(feed_dict)
                 self.inference.print_progress(out)
-        elif convergence_test == 'data_loss':
-            thresh = 1e-4
-            loss = self.variables['data_loss']
+        elif convergence_test == 'train_loss':
+            thresh = 1e-3
+            loss = self.variables['train_loss']
             for i in range(n_iter):
                 out = self.inference.update(feed_dict)
                 self.inference.print_progress(out)
@@ -475,7 +484,7 @@ class probPCA(PPCA):
                     self.n_iter = i + 1
                     break
         elif convergence_test == 'elbo':
-            thresh = 30
+            thresh = 40
             for i in range(n_iter):
                 out = self.inference.update(feed_dict)
                 self.inference.print_progress(out)
