@@ -324,10 +324,11 @@ class probPCA(PPCA):
             index = pd.MultiIndex.from_product([['prior', 'posterior'], ['W', 'Z', 'tau', 'mu'], ['loc', 'scale']]),
             columns = ['trainable', 'initializer']
         ).sort_index()
-        config.loc[idx['prior', :, 'loc'], :]   = [False, tf.zeros_initializer]
-        config.loc[idx['prior', :, 'scale'], :] = [False, tf.ones_initializer]
-        config.loc['posterior', :]              = [True, tf.random_normal_initializer]
-        config.loc[idx[:, 'mu', 'loc'], 'initializer']   = 'data_mean'
+        config.loc[idx['prior', :, 'loc'], :]      = [False, tf.zeros_initializer]
+        config.loc[idx['prior', :, 'scale'], :]    = [False, tf.ones_initializer]
+        config.loc[idx['prior', 'mu', 'loc'], :]   = [True, 'data_mean']
+        config.loc[idx['prior', 'mu', 'scale'], :] = [True, tf.random_normal_initializer]
+        config.loc['posterior', :]                 = [True, tf.random_normal_initializer]
         if display:
             return config.replace({
                 tf.random_normal_initializer: 'random',
@@ -337,7 +338,8 @@ class probPCA(PPCA):
         return config
 
     def __init__(self, shape, config=None, **kwargs):
-        self.model = {k: kwargs.pop(k, 'none') for k in ['W', 'Z', 'mu', 'tau']}
+        model = {'W': 'none', 'Z': 'none', 'mu': 'full', 'tau': 'full'}
+        self.model = {k: kwargs.pop(k, model[k]) for k in ['W', 'Z', 'mu', 'tau']}
         super().__init__(shape, **kwargs)
         self.config = self.configure() if config is None else config
         KL = {}
@@ -364,7 +366,7 @@ class probPCA(PPCA):
 
             with tf.variable_scope('prior'):
                 Z = normal('Z')
-                if self.model['Z'] == 'prior' or self.model['Z'] == 'all':
+                if self.model['W'] == 'prior' or self.model['W'] == 'all':
                     W = ed.models.MultivariateNormalTriL(tf.zeros((self.D, self.K)),
                                                          a * self.param_init('W', kind='scale'), name='W')
                 else:
@@ -403,19 +405,19 @@ class probPCA(PPCA):
             x = tf.boolean_mask(tf.matmul(W, Z, transpose_b=True) + m, i)
             self.data_model = ed.models.Normal(x, tau * tf.ones(tf.shape(x)))
 
-            # data_loss is not instrumental in the procedure, I compute it solely to write it out to tensorboard
-            with tf.variable_scope('loss'):
-                xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
-                data_loss = tf.losses.mean_squared_error(self.data_gathered, tf.boolean_mask(xm, i))
-            self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
-
             self.inference = ed.KLqp(KL, data={self.data_model: self.data_gathered})
 
             # this comes from edward source (class VariationalInference)
             # this way, edward automatically writes out my own summaries
             summary_key = 'summaries_{}'.format(id(self.inference))
-            tf.summary.scalar('data_loss', data_loss, collections=[summary_key])
 
+            # data_loss is not instrumental in the procedure, I compute it solely to write it out to tensorboard
+            with tf.variable_scope('loss'):
+                xm = tf.add(tf.matmul(QW.mean(), QZ.mean(), transpose_b=True), m, name='x')
+                data_loss = tf.losses.mean_squared_error(self.data_gathered, tf.boolean_mask(xm, i))
+                tf.summary.scalar('data_loss', data_loss, collections=[summary_key])
+
+            self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'data_loss': data_loss})
             self.inference.initialize(n_samples=10, logdir=self.logdir)
 
 

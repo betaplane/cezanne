@@ -10,7 +10,7 @@ import tensorflow as tf
 from datetime import datetime
 import joblib, os
 import matplotlib.pyplot as plt
-import pca.core
+import core #pca.core as core
 
 
 class Data(object):
@@ -220,14 +220,19 @@ class Test(object):
         def wrap(func):
             def wrapped_func(*args, **kwargs):
                 out = func(*args, **kwargs)
+                arg_name = os.path.join(func.__name__, 'args')
                 with pd.HDFStore(file_name) as store:
                     if isinstance(out, pd.DataFrame):
-                        store[func.__name__ + '/args'] = out
+                        store[arg_name] = out
                     else:
                         # the 'config' values are sorted so that graphs need not be reconstructed unnecessarily
                         # (the graph only needs to be reconstructed if 'config' or the data shape changes)
-                        store[func.__name__ + '/args'] = out[0].sort_values(['config', 'seed']).reset_index(drop=True)
-                        store[func.__name__ + '/config'] = out[1]
+                        store[arg_name] = out[0]
+                        store[os.path.join(func.__name__, 'config')] = out[1]
+                args = store[arg_name]
+                s = [i for i in ['config', 'seed'] if i in args.columns]
+                if len(s) > 0:
+                    store[arg_name] = args.sort_values(s).reset_index(drop=True)
             return wrapped_func
         return wrap
 
@@ -238,7 +243,7 @@ def test0():
     return args
 
 @Test.case('convergence.h5')
-def data_loss_vs_elbo(n_data=10, n_seed=10):
+def convergence(n_data=10, n_seed=10):
     tests = pd.DataFrame()
 
     for i in range(n_data):
@@ -258,7 +263,7 @@ def data_loss_vs_elbo(n_data=10, n_seed=10):
     return tests, conf
 
 @Test.case('covariance.h5')
-def covariance_variations(n_seed=10):
+def mu_tau(n_seed=10):
     c = []
     t = pd.DataFrame()
     for i, mu in enumerate(['none', 'full']):
@@ -308,9 +313,36 @@ def covariance_variations(n_seed=10):
     config = pd.concat(c, 0, keys=range(len(c)))
     return t, config
 
+@Test.case('experiments_copy.h5')
+def covariance(n_data=10, n_seed=10):
+    t = pd.DataFrame()
+    c = []
+    for j, conf in enumerate([
+            [False, tf.ones_initializer],
+            [True, tf.ones_initializer],
+            [True, tf.random_normal_initializer],
+    ]):
+        c.append(core.probPCA.configure())
+        c[-1].loc[('prior', slice(None), 'scale'), :] = conf
+        for i, kv in enumerate([
+                {},
+                {'W': 'prior'},
+                {'Z': 'prior'},
+                {'W': 'prior', 'Z': 'prior'},
+                {'W': 'all'},
+                {'Z': 'all'},
+                {'W': 'all', 'Z': 'all'}
+        ]):
+            for s in range(n_seed):
+                for d in range(n_data):
+                    kv.update({'data': d, 'config': j, 'covariance': i, 'initialization': j, 'seed': s})
+                    t = t.append(kv, ignore_index=True)
+    config = pd.concat(c, 0, keys=range(len(c)))
+    return t, config
+
 if __name__=='__main__':
     out = 0
 
-    test = Test('covariance.h5', 'covariance_variations', data='covariance.pkl')
+    test = Test('experiments_copy.h5', 'covariance', data='covariance.pkl')
     while out == 0:
         out = test.run()
