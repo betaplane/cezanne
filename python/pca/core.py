@@ -1,6 +1,6 @@
 """
 Conventions
------------
+===========
 * The instance variables exposed by the various classes have the following meaning:
     * **W** (D, K) - the weights / loadings matrix_transpose
     * **Z** (N, K) - the principal components
@@ -8,13 +8,27 @@ Conventions
     * **x** (D, N) - the reconstructed data
 
 Notes for myself
-----------------
+================
+* Numpy eigenvalues are indeed **not** sorted.
+
+TensorFlow_
+-----------
 * :class:`tf.contrib.distributions.GammaWithSoftplusConcentrationRate` produced negative 'concentration'. I therefore went with using :class:`tf.nn.softplus`, also in the case of :class:`ed.models.Normal` (instead of :class:`ed.models.NormalWithSoftplusScale`).
+* For the tensorboard summaries to work in the presence of missing values, the input array needs to be of :class:`np.ma.MaskedArray` type **and** have NaNs at the missing locations - not clear why.
+
+Edward_
+-------
+* Edward constructs different type of approximations to the loss function to be optimized for variational Bayes. The summaries written to tensorboard (in the 'loss' scope) reveal if the variational approximation can be computed analytically or not:
+    * **analytic KL** (both prior and variational approx. are normal for all latent variables):
+        * p_log_lik
+        * kl_penalty
+    * **intractable KL**:
+        * p_log_prob
+        * q_log_prob
+    The reparameterization gradient method is used if all :attr:`edward.inference.latent_vars` have the :attr:`tensorflow.contrib.distributions.FULLY_REPARAMETERIZED` reparameterization type, otherwise the score function gradient method is used.
 * The black-box :class:`ed.inference.KLqp` algorithm used by Edward (score function gradient) doesn't deal well with Gamma and Dirichlet:
     * https://github.com/blei-lab/edward/issues/389
     * https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
-* For the tensorboard summaries to work in the presence of missing values, the input array needs to be of :class:`np.ma.MaskedArray` type **and** have NaNs at the missing locations - not clear why.
-* Numpy eigenvalues are indeed **not** sorted.
 
 .. todo::
 
@@ -222,6 +236,18 @@ class PPCA(PCA):
     def logsubdir(self, value):
         if self.logdir is not None:
             self.inference.train_writer = tf.summary.FileWriter(os.path.join(self.logdir, value))
+
+    @property
+    def is_reparameterizable(self):
+        """Taken from edward.inferences.klqp.KLqp.build_loss_and_gradients()."""
+        return all([rv.reparameterization_type == tf.contrib.distributions.FULLY_REPARAMETERIZED
+                    for rv in self.inference.latent_vars.values()])
+
+    @property
+    def is_analytic(self):
+        """Taken from edward.inferences.klqp.KLqp.build_loss_and_gradients()."""
+        return all([isinstance(z, ed.models.Normal) and isinstance(qz, ed.models.Normal)
+                    for z, qz in self.inference.latent_vars.items()])
 
 # NOTE: this class is completely out of date with the rest of the module and not expected to work
 class gradPCA(PPCA):

@@ -10,7 +10,7 @@ import tensorflow as tf
 from datetime import datetime
 import joblib, os
 import matplotlib.pyplot as plt
-import core #pca.core as core
+import pca.core as core
 
 
 class Data(object):
@@ -340,9 +340,9 @@ def covariance(n_data=10, n_seed=10):
     config = pd.concat(c, 0, keys=range(len(c)))
     return t, config
 
-if __name__=='__main__':
-    out = 0
+# if __name__=='__main__':
+#     out = 0
 
-    test = Test('experiments_copy.h5', 'covariance', data='covariance.pkl')
-    while out == 0:
-        out = test.run()
+#     test = Test('experiments_copy.h5', 'covariance', data='covariance.pkl')
+#     while out == 0:
+#         out = test.run()
