@@ -433,7 +433,8 @@ class probPCA(PPCA):
             x = tf.boolean_mask(tf.matmul(W, Z, transpose_b=True) + m, i)
             self.data_model = ed.models.Normal(x, tau * tf.ones(tf.shape(x)))
 
-            self.inference = ed.KLqp(KL, data={self.data_model: self.data_gathered})
+            # self.inference = ed.KLqp(KL, data={self.data_model: self.data_gathered})
+            self.inference = ed.ReparameterizationKLqp(KL, data={self.data_model: self.data_gathered})
 
             # this comes from edward source (class VariationalInference)
             # this way, edward automatically writes out my own summaries
@@ -453,8 +454,7 @@ class probPCA(PPCA):
             self.variables.update({'x': xm, 'W': QW.mean(), 'Z': QZ.mean(), 'train_loss': train_loss})
             self.inference.initialize(n_samples=10, logdir=self.logdir)
 
-
-    def run(self, data, n_iter, open_session=True, convergence_test='train_loss', test_data=None):
+    def run(self, data, n_iter, open_session=True, convergence_test=100, test_data=None):
         """Run the actual inference after the graph has been constructed in the :class:`probPCA` init call.
 
         :param data: The data as a :class:`~numpy.ma.core.MaskedArray` in the shape (D, N) (see `Conventions`_)
@@ -489,36 +489,27 @@ class probPCA(PPCA):
         self.inference.progbar.target = n_iter
 
         # for computing StDev of last 100 loss values as convergence criterion
-        deque = np.empty(100)
+        deque = np.empty(convergence_test)
+
+        self.conv = np.zeros(n_iter)
 
         self.n_iter = n_iter
         start_time = time.time()
 
-        if convergence_test == None:
-            for i in range(n_iter):
-                out = self.inference.update(feed_dict)
-                self.inference.print_progress(out)
-        elif convergence_test == 'train_loss':
-            thresh = 1e-3
-            loss = self.variables['train_loss']
-            for i in range(n_iter):
-                out = self.inference.update(feed_dict)
-                self.inference.print_progress(out)
-                j = i % 100
-                deque[j] = loss.eval(feed_dict)
-                if (j == 99) and (deque.std() < thresh):
-                    self.n_iter = i + 1
+        dq = np.Inf
+        n_conv = convergence_test - 1
+        sq_conv = convergence_test ** .5
+        for i in range(n_iter):
+            out = self.inference.update(feed_dict)
+            self.inference.print_progress(out)
+            j = i % convergence_test
+            deque[j] = out['loss']
+            self.conv[i] = out['loss']
+            if j == n_conv:
+                dqm = np.mean(deque)
+                if abs(dqm - dq) < (np.std(deque) / sq_conv):
                     break
-        elif convergence_test == 'elbo':
-            thresh = 40
-            for i in range(n_iter):
-                out = self.inference.update(feed_dict)
-                self.inference.print_progress(out)
-                j = i % 100
-                deque[j] = out['loss']
-                if (j == 99) and (deque.std() < thresh):
-                    self.n_iter = i + 1
-                    break
+                dq = dqm
 
         print('\nexecution time: {}\n'.format(time.time() -  start_time))
         self.inference.finalize() # this just closes the FileWriter
