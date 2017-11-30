@@ -20,6 +20,7 @@ To update the pca repo, execute::
 
 (from top level directory, i.e. ``code``).
 
+* https://lostechies.com/johnteague/2014/04/04/using-git-subtrees-to-split-a-repository/
 * http://www.paulwhippconsulting.com/blog/splitting-a-git-repository-into-two-projects-and-reintegrating-them/
 * https://www.atlassian.com/blog/git/alternatives-to-git-submodule-git-subtree
 
