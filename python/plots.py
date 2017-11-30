@@ -70,3 +70,28 @@ def title(fig, title, height=.94):
     ax.axis('off')
     ax.set_title(title)
     fig.draw_artist(ax)
+
+def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
+    """Wrapper to attach colorbar on either side of a :class:`~matplotlib.axes.Axes.plot` and to add coastlines and grids.
+
+    :param plot: Plot to attach the colorbar to.
+    :type plot: :class:`~matplotlib.axes.Axes.plot`
+    :param loc: 'left' or 'right'
+    :param center: Whether or not the colors should be centered (divergent).
+    :type center: :obj:`bool`
+    :param width: Width of the colorbar.
+    :param space: Space between edge of plot and colorbar.
+    :param lat: latitude circle at which to cut of the plot.
+
+    """
+    bb = p.axes.get_position()
+    x = bb.x0 - space - width if loc=='left' else bb.x1 + space
+    cax = p.figure.add_axes([x, bb.y0, width, bb.y1-bb.y0])
+    plt.colorbar(p, cax=cax)
+    cax.yaxis.set_ticks_position(loc)
+    p.axes.coastlines()
+    p.axes.gridlines()
+    p.axes.set_extent((-180, 180, -90, lat), crs.PlateCarree())
+    if center is not False:
+        lim = np.abs(p.get_clim()).max() if isinstance(center, bool) else center
+        p.set_clim(-lim, lim)

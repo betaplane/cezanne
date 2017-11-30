@@ -8,7 +8,6 @@ from pyproj import Geod
 
 def kml(name, lon, lat, code=None, nc=None):
     from simplekml import Kml, Style
-    from helpers import nearest
     if nc is not None:
         x = nc.variables['XLONG_M'][0,:,:]
         y = nc.variables['XLAT_M'][0,:,:]

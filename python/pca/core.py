@@ -25,7 +25,14 @@ Edward_
     * **intractable KL**:
         * p_log_prob
         * q_log_prob
+
     The reparameterization gradient method is used if all :attr:`edward.inference.latent_vars` have the :attr:`tensorflow.contrib.distributions.FULLY_REPARAMETERIZED` reparameterization type, otherwise the score function gradient method is used.
+* default gradient descent method:
+    * Adam
+    * learning_rate: start at 0.1, `exponential decay <https://www.tensorflow.org/api_docs/python/tf/train/exponential_decay>`_ with
+        * decay_steps = 100
+        * decay_rate = 0.9
+        * staircase = True
 * The black-box :class:`ed.inference.KLqp` algorithm used by Edward (score function gradient) doesn't deal well with Gamma and Dirichlet:
     * https://github.com/blei-lab/edward/issues/389
     * https://gist.github.com/pwl/2f3c3e240b477eac9a37b06791b2a659
