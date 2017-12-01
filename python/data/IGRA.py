@@ -55,11 +55,11 @@ def eat(head, data, var):
          zip(head['NUMLEV'], head['YEAR'], head['MONTH'], head['DAY'], head['HOUR'])]
     t = pd.DatetimeIndex([j for k in i for j in k])
     data.index = pd.MultiIndex.from_arrays([t,data['PRESS']], names=('datetime', 'p'))
-    data = data.drop(-9999, 0, 'p').drop('PRESS', 1)
+    data = data.drop(-9999, 0, level='p').drop('PRESS', 1)
     return data if var is None else data[var].unstack()
 
 def extract(file, var=None):
-    z = zipfile.ZipFile(file)
+    z = ZipFile(file)
     i = z.infolist()[0]
     b = z.open(i).read()
     z.close()
@@ -73,7 +73,7 @@ def extract(file, var=None):
     p = Popen(['sed', '-e', 's/^#.*$//'], stdin=PIPE, stdout=PIPE)
     out, err = p.communicate(input=b)
     with BytesIO(out) as g:
-        D = pd.read_fwf(g, d, names=c).dropna(0,'all')
+        D = pd.read_fwf(g, d, names=c, na_values='-9999').dropna(0,'all')
 
     return eat(H, D, var)
 

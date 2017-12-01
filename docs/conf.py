@@ -196,5 +196,6 @@ intersphinx_mapping = {
     'xr': ('http://xarray.pydata.org/en/stable', None),
     'pd': ('http://pandas.pydata.org/pandas-docs/stable/', None),
     'mpl': ('http://matplotlib.org/', None),
-    'bp': ('http://bayespy.org/', None)
+    'bp': ('http://bayespy.org/', None),
+    'kml': ('https://simplekml.readthedocs.io/en/latest', None)
 }

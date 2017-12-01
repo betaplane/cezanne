@@ -34,6 +34,35 @@ def kml(name, lon, lat, code=None, nc=None):
                 r = k.newlinestring(coords=coords)
     return k
 
+def df2kml(df, name, body=None, lon='lon', lat='lat'):
+    """Generate a :class:`~simplekml.Kml` object from a :class:`~pandas.DataFrame`. Save to file by calling :meth:`~simplekml.Kml.save` on the returned :class:`~simplekml.Kml` object. Example usage::
+
+        kml = df2kml(df, ('{} ({})', ['id', 'name']),
+                     body = ('From {} to {}', ['mindate', 'maxdate']),
+                     lon='longitude', lat='latitude')
+        kml.save('example.kml')
+
+    :param df: DataFrame containing the data from which to generate the :class:`~simplekml.Kml` object.
+    :type df: :class:`~pandas.DataFrame`
+    :param name: Tuple of the form (``format``, ``columns``) where format is a format string to be filled by the items in ``columns``. ``Columns`` should always be given as a list.
+    :type name: :obj:`tuple` or :obj:`list`
+    :param body: Same as for ``name``, but for the popup ballon text.
+    :type body: :obj:`tuple` or :obj:`list`
+    :param lon: Name of the column containing the longitude data.
+    :param lat: Name of the column containing the latitude data.
+    :rtype: :obj:`~simplekml.Kml` object
+
+    """
+    from simplekml import Kml, Style
+    k = Kml()
+    for _, s in df.iterrows():
+        p = k.newpoint(name=name[0].format(*s[name[1]]), coords=[s[[lon, lat]]])
+        p.style.iconstyle.icon.href = "http://maps.google.com/mapfiles/kml/paddle/red-circle.png"
+        if body is not None:
+            p.style.balloonstyle.text = body[0].format(*s[body[1]])
+    return k
+
+
 
 def cells(grid_lon, grid_lat, lon, lat, mask=None):
     """Get grid indexes corresponding to lat/lon points, using shapely polygons.
