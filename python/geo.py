@@ -215,6 +215,7 @@ A class to hold transformations from two Latitude/Longitue dimensions on a :clas
 
 class sshfs_shapereader(shapereader.Reader):
     def __init__(self, path, sshfs):
+        from shapefile import Reader
         self._sshfs = {k: sshfs.openbin('.'.join((path, k))) for k in ['shp', 'shx', 'dbf']}
         self._reader = Reader(**self._sshfs)
         self._geometry_factory = shapereader.GEOMETRY_FACTORIES.get(self._reader.shapeType)
