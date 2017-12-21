@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 import numpy as np
 from xarray import DataArray, open_dataset
-from shapely.geometry import Polygon, Point, MultiPoint, LinearRing
 from functools import singledispatch, partial
-from pyproj import Geod
-
+from cartopy.io import shapereader
 
 def kml(name, lon, lat, code=None, nc=None):
     from simplekml import Kml, Style
+    from shapely import Polygon, Point
     if nc is not None:
         x = nc.variables['XLONG_M'][0,:,:]
         y = nc.variables['XLAT_M'][0,:,:]
@@ -75,6 +74,7 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
     :returns: i, j arrays of grid cell indexes
 
     """
+    from shapely import MultiPoint, Polygon, LinearRing
     s = np.array(grid_lon.shape) - 1
     if mask is None:
         def ll(i, j):
@@ -94,6 +94,7 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
 
 
 def nearest(grid_lon, grid_lat, lon, lat):
+    from pyproj import Geod
     inv = partial(Geod(ellps='WGS84').inv, lon, lat)
 
     def dist(x, y):
@@ -115,6 +116,7 @@ def distance_matrix(grid_lon, grid_lat, lon, lat):
     :rtype: :class:`np.array`
 
     """
+    from pyproj import Geod
     inv = partial(Geod(ellps='WGS84').inv, lon, lat)
     def dist(x, y):
         return inv(x, y)[2]
@@ -122,6 +124,7 @@ def distance_matrix(grid_lon, grid_lat, lon, lat):
 
 @singledispatch
 def domain_bounds(ds, test=None):
+    from shapely import MultiPoint, Polygon, LinearRing
     coords = zip(ds.corner_lons[-4:], ds.corner_lats[-4:])
     p = Polygon(LinearRing(coords))
     if test is None:
@@ -208,3 +211,15 @@ A class to hold transformations from two Latitude/Longitue dimensions on a :clas
         if mask is not None: # check if this is even necessary if masked values are nan and stack() is used
             self.Y = self.Y.sel(space = s(mask).values.astype(bool).flatten())
         self.N, self.D = self.Y.shape
+
+
+class sshfs_shapereader(shapereader.Reader):
+    def __init__(self, path, sshfs):
+        self._sshfs = {k: sshfs.openbin('.'.join((path, k))) for k in ['shp', 'shx', 'dbf']}
+        self._reader = Reader(**self._sshfs)
+        self._geometry_factory = shapereader.GEOMETRY_FACTORIES.get(self._reader.shapeType)
+        self._fields = self._reader.fields
+
+    def __del__(self):
+        for f in self._sshfs.values():
+            f.close()

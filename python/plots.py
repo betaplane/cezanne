@@ -84,14 +84,18 @@ def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
     :param lat: latitude circle at which to cut of the plot.
 
     """
-    bb = p.axes.get_position()
+    try:
+        ax = plot.ax
+    except AttributeError:
+        ax = plot.axes
+    bb = ax.get_position()
     x = bb.x0 - space - width if loc=='left' else bb.x1 + space
-    cax = p.figure.add_axes([x, bb.y0, width, bb.y1-bb.y0])
-    plt.colorbar(p, cax=cax)
+    cax = ax.figure.add_axes([x, bb.y0, width, bb.y1-bb.y0])
+    plt.colorbar(plot, cax=cax)
     cax.yaxis.set_ticks_position(loc)
-    p.axes.coastlines()
-    p.axes.gridlines()
-    p.axes.set_extent((-180, 180, -90, lat), crs.PlateCarree())
+    ax.coastlines()
+    ax.gridlines()
+    ax.set_extent((-180, 180, -90, lat), crs.PlateCarree())
     if center is not False:
-        lim = np.abs(p.get_clim()).max() if isinstance(center, bool) else center
-        p.set_clim(-lim, lim)
+        lim = np.abs(plot.get_clim()).max() if isinstance(center, bool) else center
+        plot.set_clim(-lim, lim)
