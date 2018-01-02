@@ -5,14 +5,6 @@
 #include <boost/progress.hpp>
 #include <blitz/array.h>
 
-/** \namespace nb
-    Documentation / source repos:
-    -----------------------------
-    - [netCDF-C++ documentation](http://unidata.github.io/netcdf-cxx4/index.html)
-    - [netcdf-cxx4 github](https://github.com/Unidata/netcdf-cxx4)
-    - [Doxygen](http://www.stack.nl/~dimitri/doxygen/manual/index.html)
-*/
-
 namespace nb {
 
 typedef std::map<std::string, std::pair<std::string, size_t> > rpl_map;
@@ -31,6 +23,11 @@ class Clock: public boost::progress_display
 
 
 // Note: template members easiest to define in header, not implementation file
+
+/** \brief Wrapper containing a netCDF::NcVar as a member.
+
+On instantiation, the record dimension and the netCDF ``start`` and ``count`` parameters for the variable are determined.
+*/
 template <class T, int n=4>
 class Var
 {
@@ -49,7 +46,10 @@ class Var
 	public:
 	// if defined in nb.cpp, would need to be instantiated as, e.g.:
 	// template class Var<double>;
-	Var(const netCDF::NcVar &v): var(v), start(n,0), count(n,1)
+  /**
+     \param v The netCDF::NcVar.
+  */
+	Var(const netCDF::NcVar &v): var(v), start(n, 0), count(n, 1)
 	{
 		_reclen = 0;
 		std::vector< netCDF::NcDim > dims = var.getDims();
@@ -65,8 +65,25 @@ class Var
 	};
 
 	size_t reclen() { return _reclen; }
+  blitz::TinyVector<size_t, n> shape() {
+    blitz::TinyVector<size_t, n> c(count.data());
+    if (_reclen != 0)
+      c[_recdim] = _reclen;
+    return c;
+  }
+
+  blitz::Array<T, n> getFullArray()
+  {
+    blitz::Array<T, n> arr(shape());
+    var.getVar(start, count, arr.data());
+    return arr;
+  }
+
+  /**
+     Returns an empty blitz::Array with the same shape as the underlying variable, but with the record dimension removed.
+   */
 	template<int m=n-1>
-	blitz::Array<T,m> array()
+	blitz::Array<T, m> array()
 	{
 		blitz::TinyVector<int,m> s;
 		for (int i=0; i<m; ++i) s[i] = count[ndims[i]];

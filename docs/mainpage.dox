@@ -1,0 +1,36 @@
+/** \mainpage libnb ("netCDF - Blitz")
+
+This is my own small library providing some boilerplate code for reading netCDF files and loading the data into blitz arrays.
+
+Documentation / source repos:
+-----------------------------
+- [netCDF-C++ documentation](http://unidata.github.io/netcdf-cxx4/index.html)
+- [netcdf-cxx4 github](https://github.com/Unidata/netcdf-cxx4)
+- [Doxygen](http://www.stack.nl/~dimitri/doxygen/manual/index.html)
+
+Steps to include other Doxygen documentation
+--------------------------------------------
+- Run the configure script of the respective library with the --enable-doxygen flag.
+- Edit the created Doxyfile:
+  - make sure the GENERATE_TAGFILE tag is set to a filename.
+  - make sure the GENERATE_HTML (or GENERATE_LATEX or whichever) tag is set to yes.
+- Run doxygen Doxyfile
+- add the tagfiles and documentation directory to your own Doxyfile in the form:
+  \code{.cpp}  
+  TAGFILES = tagfile=documentation directory
+  \endcode
+  The relative paths for both probably start from different directories, [see here](https://www.stack.nl/~dimitri/doxygen/manual/external.html).
+
+Simple example program
+----------------------
+This prints information on the variables contained in a netCDF file (whose name is given as an argument to the executable.
+
+\code{.cpp}
+#include "nb.h"
+
+int main(int argc, char* argv[]) {
+  nb::File file(argv[1]);
+  file.vars();
+}
+\endcode
+*/
