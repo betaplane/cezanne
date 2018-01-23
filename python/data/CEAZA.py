@@ -127,7 +127,8 @@ class Downloader(object):
             'valor_nan': 'nan',
             's_cod': code,
             'fecha_inicio': from_date.strftime('%Y-%m-%d'),
-            'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d')
+            'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
+            'user': 'arno.hammann@ceaza.cl'
             }
         for trial in self.trials:
             r = requests.get(self.url, params=params)

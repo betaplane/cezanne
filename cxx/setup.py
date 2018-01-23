@@ -9,9 +9,9 @@ setup(
         Extension('netblitz', ['netblitz.pyx'], language = 'c++',
                   include_dirs = [
                       '/usr/local/include/',
-                      '/sata1_ceazalabs/arno/HPC/uvHome/miniconda3/envs/cxx/include'],
+                      '/home/arno/Documents/code/conda/envs/cxx/include'],
                   libraries = ['netcdf_c++4', 'blitz', 'nb'],
-                  library_dirs = ['/sata1_ceazalabs/arno/HPC/uvHome/miniconda3/envs/cxx/lib',
+                  library_dirs = ['/home/arno/Documents/code/conda/envs/cxx/lib',
                                   '/usr/local/lib',
                                   '.'],
                   extra_compile_args = ['-std=c++0x'],
