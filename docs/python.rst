@@ -18,6 +18,10 @@ To update the pca repo, execute::
 
   git subtree push --prefix python/pca pca master
 
+or for Antarctica::
+
+  git subtree push --prefix notebooks/Antarctica ant master
+
 (from top level directory, i.e. ``code``).
 
 * https://lostechies.com/johnteague/2014/04/04/using-git-subtrees-to-split-a-repository/
