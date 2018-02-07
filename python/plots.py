@@ -57,8 +57,8 @@ def annotated(df, ax=None, color=None):
 
     """
     ax = plt.gca() if ax is None else ax
-    p = ax.scatter(*x.as_matrix().T, marker='o', transform=crs.PlateCarree(), color=color)
-    for i, st in x.dropna().iterrows():
+    p = ax.scatter(*df.as_matrix().T, marker='o', transform=crs.PlateCarree(), color=color)
+    for i, st in df.dropna().iterrows():
         ax.annotate(i, xy=st, xycoords=crs.PlateCarree()._as_mpl_transform(ax), color=p.get_facecolor()[0])
     ax.coastlines()
     ax.gridlines()

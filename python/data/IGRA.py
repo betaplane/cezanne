@@ -13,90 +13,146 @@ import tarfile
 # curl -O https://www1.ncdc.noaa.gov/pub/data/igra/data/data-por/CIM00085586-data.txt.zip
 # curl -O https://www1.ncdc.noaa.gov/pub/data/igra/data/data-por/ARM00087418-data.txt.zip
 
-head = (
-    ('HEADREC', 1, 1),
-    ('ID', 2, 12),
-    ('YEAR', 14, 17),
-    ('MONTH', 19, 20),
-    ('DAY', 22, 23),
-    ('HOUR', 25, 26),
-    ('RELTIME', 28, 31),
-    ('NUMLEV', 33, 36),
-    ('P_SRC', 38, 45),
-    ('NP_SRC', 47, 54),
-    ('LAT', 56, 62),
-    ('LON', 64, 71)
-)
+class Raw(object):
+    head = (
+        ('HEADREC', 1, 1),
+        ('ID', 2, 12),
+        ('YEAR', 14, 17),
+        ('MONTH', 19, 20),
+        ('DAY', 22, 23),
+        ('HOUR', 25, 26),
+        ('RELTIME', 28, 31),
+        ('NUMLEV', 33, 36),
+        ('P_SRC', 38, 45),
+        ('NP_SRC', 47, 54),
+        ('LAT', 56, 62),
+        ('LON', 64, 71)
+    )
 
-cols = (
-    ('LVLTYP1', 1, 1),
-    ('LVLTYP2', 2, 2),
-    ('ETIME', 4, 8),
-    ('PRESS', 10, 15),
-    ('PFLAG', 16, 16),
-    ('GPH', 17, 21),
-    ('ZFLAG', 22, 22),
-    ('TEMP', 23, 27),
-    ('TFLAG', 28, 28),
-    ('RH', 29, 33),
-    ('DPDP', 35, 39),
-    ('WDIR', 41, 45),
-    ('WSPD', 47, 51)
-)
+    cols = (
+        ('LVLTYP1', 1, 1),
+        ('LVLTYP2', 2, 2),
+        ('ETIME', 4, 8),
+        ('PRESS', 10, 15),
+        ('PFLAG', 16, 16),
+        ('GPH', 17, 21),
+        ('ZFLAG', 22, 22),
+        ('TEMP', 23, 27),
+        ('TFLAG', 28, 28),
+        ('RH', 29, 33),
+        ('DPDP', 35, 39),
+        ('WDIR', 41, 45),
+        ('WSPD', 47, 51)
+    )
 
+    @staticmethod
+    def uz(x):
+        c, a, b = zip(*x)
+        d = list(zip(np.array(a)-1, b))
+        return d, c
 
-def uz(x):
-    c,a,b = zip(*x)
-    d = list(zip(np.array(a)-1,b))
-    return d,c
+    @staticmethod
+    def eat(head, data, var):
+        i = [np.repeat(pd.datetime(*t[1:]),t[0]) for t in
+             zip(head['NUMLEV'], head['YEAR'], head['MONTH'], head['DAY'], head['HOUR'])]
+        t = pd.DatetimeIndex([j for k in i for j in k])
+        data.index = pd.MultiIndex.from_arrays([t, data['PRESS']], names=('datetime', 'p'))
+        data = data.drop(-9999, 0, level='p').drop('PRESS', 1)
+        return data if var is None else data[var].unstack()
 
-def eat(head, data, var):
-    i = [np.repeat(pd.datetime(*t[1:]),t[0]) for t in
-         zip(head['NUMLEV'], head['YEAR'], head['MONTH'], head['DAY'], head['HOUR'])]
-    t = pd.DatetimeIndex([j for k in i for j in k])
-    data.index = pd.MultiIndex.from_arrays([t,data['PRESS']], names=('datetime', 'p'))
-    data = data.drop(-9999, 0, level='p').drop('PRESS', 1)
-    return data if var is None else data[var].unstack()
+    @classmethod
+    def extract(cls, file, var=None):
+        z = ZipFile(file)
+        i = z.infolist()[0]
+        b = z.open(i).read()
+        z.close()
+        d, c = cls.uz(cls.head)
+        p = Popen(['grep', '#'], stdin=PIPE, stdout=PIPE)
+        out, err = p.communicate(input=b)
+        with BytesIO(out) as g:
+            H = pd.read_fwf(g, d, names=c)
 
-def extract(file, var=None):
-    z = ZipFile(file)
-    i = z.infolist()[0]
-    b = z.open(i).read()
-    z.close()
-    d,c = uz(head)
-    p = Popen(['grep', '#'], stdin=PIPE, stdout=PIPE)
-    out,err = p.communicate(input=b)
-    with BytesIO(out) as g:
-        H = pd.read_fwf(g,d,names=c)
+        d, c = cls.uz(cls.cols)
+        p = Popen(['sed', '-e', 's/^#.*$//'], stdin=PIPE, stdout=PIPE)
+        out, err = p.communicate(input=b)
+        with BytesIO(out) as g:
+            D = pd.read_fwf(g, d, names=c, na_values='-9999').dropna(0,'all')
 
-    d, c = uz(cols)
-    p = Popen(['sed', '-e', 's/^#.*$//'], stdin=PIPE, stdout=PIPE)
-    out, err = p.communicate(input=b)
-    with BytesIO(out) as g:
-        D = pd.read_fwf(g, d, names=c, na_values='-9999').dropna(0,'all')
+        return cls.eat(H, D, var)
 
-    return eat(H, D, var)
+    @staticmethod
+    def get(name):
+        base = 'https://www1.ncdc.noaa.gov/pub/data/igra/data/data-por/{}-data.txt.zip'
+        buf = BytesIO()
+        c = Curl()
+        c.setopt(c.URL, base.format(name))
+        c.setopt(c.WRITEDATA, buf)
+        c.perform()
+        c.close()
+        z = ZipFile(buf)
+        out = z.open(z.infolist()[0]).read()
+        z.close()
+        return out.decode()
 
-def get(name):
-    base = 'https://www1.ncdc.noaa.gov/pub/data/igra/data/data-por/{}-data.txt.zip'
-    buf = BytesIO()
-    c = Curl()
-    c.setopt(c.URL, base.format(name))
-    c.setopt(c.WRITEDATA, buf)
-    c.perform()
-    c.close()
-    z = ZipFile(buf)
-    out = z.open(z.infolist()[0]).read()
-    z.close()
-    return out.decode()
+    @classmethod
+    def parse(cls, string, var=None):
+        l = string.splitlines()
+        d, c = cls.uz(cls.head)
+        H = pd.read_fwf(StringIO('\n'.join([r for r in l if r[0]=='#'])), d, names=c)
+        d, c = cls.uz(cls.cols)
+        D = pd.read_fwf(StringIO('\n'.join([r for r in l if r[0]!='#'])), d, names=c)
+        return cls.eat(H, D, var)
 
-def parse(string, var=None):
-    l = string.splitlines()
-    d, c = uz(head)
-    H = pd.read_fwf(StringIO('\n'.join([r for r in l if r[0]=='#'])), d, names=c)
-    d, c = uz(cols)
-    D = pd.read_fwf(StringIO('\n'.join([r for r in l if r[0]!='#'])), d, names=c)
-    return eat(H, D, var)
+    @classmethod
+    def concat(cls, files, surface_only=False, check_integrity=False):
+        def ingest(f):
+            d = cls.extract(f)
+            if surface_only:
+                x = d[d['LVLTYP2']==1].dropna(1, 'all').reset_index(1)
+                return xr.DataArray(x)
+            else:
+                x = d.reset_index().pivot_table(index='datetime', columns='p')
+                x.columns.names = ['var', 'p']
+                if check_integrity:
+                    print('checking {}'.format(f))
+                    for i, c in x.iteritems():
+                        assert (d[i[0]].xs(i[1], level='p').dropna() == c.dropna()).all(), i
+                return xr.DataArray(x, coords=[
+                    ('time', x.index), ('cols', x.columns)
+                ]).unstack('cols').to_dataset('var')
+        stations = [int(re.search('\d+', f).group()) for f in files]
+        return xr.concat([ingest(f) for f in files], pd.Index(stations, name='station')).to_dataset('dim_1')
+
+    @staticmethod
+    def replace_nan(x, value=-8888., fact=0.1):
+        v = x.values.copy()
+        v[v==value] = np.nan
+        return xr.DataArray(v * fact, coords=x.coords).astype(float)
+
+    @classmethod
+    def mixing_ratio_surface(cls, ds):
+        t = cls.replace_nan(ds['TEMP'])
+        d = cls.replace_nan(ds['DPDP'])
+        p = cls.replace_nan(ds['p'], 0, 1.)
+
+        # dewpoint (dewpoint depression dpdp = temp - dewpt)
+        dp = (t - d).dropna('datetime', 'all')
+
+        # vapor pressure (saturation vapor pressure at dewpoint temperature)
+        e = 610.94 * np.exp(17.625 * dp / (243.04 + dp))
+
+        # from dewpoint depression
+        w_dp = 0.622 * e / (p - e)
+
+        # from relative humidity
+        rh = replace_nan(ds['RH'])
+        es = 610.94 * np.exp(17.625 * t / (243.04 + t))
+        e = es * rh / 100
+        w_rh = 0.622 * e / (p - e)
+
+        ds['w_rh'] = w_rh
+        ds['w_dp'] = w_dp
+
 
 class Monthly(object):
     """
@@ -179,6 +235,9 @@ Some methods to parse monthly `IGRA (Integrated Global Radiosonde Archive) <http
     @classmethod
     def station_to_int(cls, c):
         return [int(cls.num.search(a).group(1)) for a in c.values]
+
+
+
 
 if __name__ == "__main__":
     df = extract(sys.argv[1])
