@@ -82,11 +82,14 @@ def soi(buf):
 def download(name):
     with pd.HDFStore(name) as f:
         for k, url in urls.items():
-            print('downloading {}'.format(k))
-            buf = getc(url)
-            buf.seek(0)
-            if k == 'soi':
-                f['soi'], f['soi_stand'] = soi(buf)
-            else:
-                f[k] = {'aao': aao, 'sam': sam, 'nin': nino}[k[:3]](k, buf)
-            buf.close()
+            try:
+                print('downloading {}'.format(k))
+                buf = getc(url)
+                buf.seek(0)
+                if k == 'soi':
+                    f['soi'], f['soi_stand'] = soi(buf)
+                else:
+                    f[k] = {'aao': aao, 'sam': sam, 'nin': nino}[k[:3]](k, buf)
+                buf.close()
+            except:
+                print('problems with {}'.format(k))

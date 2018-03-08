@@ -60,25 +60,71 @@ class Raw(object):
         data = data.drop(-9999, 0, level='p').drop('PRESS', 1)
         return data if var is None else data[var].unstack()
 
-    @classmethod
-    def extract(cls, file, var=None):
+    def __init__(self, file, var=None):
         z = ZipFile(file)
         i = z.infolist()[0]
         b = z.open(i).read()
         z.close()
-        d, c = cls.uz(cls.head)
+        d, c = self.uz(self.head)
         p = Popen(['grep', '#'], stdin=PIPE, stdout=PIPE)
         out, err = p.communicate(input=b)
         with BytesIO(out) as g:
             H = pd.read_fwf(g, d, names=c)
 
-        d, c = cls.uz(cls.cols)
+        d, c = self.uz(self.cols)
         p = Popen(['sed', '-e', 's/^#.*$//'], stdin=PIPE, stdout=PIPE)
         out, err = p.communicate(input=b)
         with BytesIO(out) as g:
             D = pd.read_fwf(g, d, names=c, na_values='-9999').dropna(0,'all')
 
-        return cls.eat(H, D, var)
+        self.data = self.eat(H, D, var)
+
+    def mixing_ratio(self):
+        d = self.data.reset_index(level='p').replace(-8888., np.nan)
+        t = d['TEMP'] / 10.
+        p = d['p']
+
+        # dewpoint (dewpoint depression dpdp = temp - dewpt)
+        dewp = (t - d['DPDP'] / 10.)
+
+        # vapor pressure (saturation vapor pressure at dewpoint temperature)
+        e = 610.94 * np.exp(17.625 * dewp / (243.04 + dewp))
+
+        # mixing ratio
+        w_dp = 0.622 * e / (p - e)
+
+        # saturation vapor pressure
+        es = 610.94 * np.exp(17.625 * t / (243.04 + t))
+
+        e = es * d['RH'] / 1000 # rh in tenths as everything except pressure
+
+        w_rh = 0.622 * e / (p - e)
+
+        w = pd.concat((p, w_dp, w_rh, d['LVLTYP2']), 1)
+        w.columns = ['p', 'dpdp', 'rh', 'LVLTYP2']
+        return w.loc[w[['rh', 'dpdp']].notnull().any(1)]
+
+    def vertint(self, w, mixing_ratio='dpdp', pressure='p', name='vertint'):
+        b = w[[pressure, mixing_ratio]].pivot(columns='p')
+        na = b.isnull().values
+        nb = b.notnull().values
+        b.fillna(axis=1, method='ffill', inplace=True)
+        p = b.columns.get_level_values('p').values.reshape((1, -1)).repeat(b.shape[0], 0)
+        p[na] = np.nan
+        p = pd.DataFrame(p, index=b.index, columns=b.columns)
+        dp = p.fillna(axis=1, method='ffill').diff(1, 1)
+        dp.values[na] = np.nan
+        self.dp = dp.iloc[:, 1:]
+        bsum = b.values[:, :-1] + b.values[:, 1:]
+        dpv = self.dp.values
+        s = np.nansum(dpv * bsum, 1) / 2
+
+        # some sanity checks
+        i = np.isfinite(dpv).sum(1) > 5
+        j = np.nanmean(dpv, 1) < 20000
+        k = np.nanstd(dpv, 1) < 20000
+
+        return pd.Series(s, index=b.index, name=name).loc[i * j * k]
 
     @staticmethod
     def get(name):
@@ -103,55 +149,31 @@ class Raw(object):
         D = pd.read_fwf(StringIO('\n'.join([r for r in l if r[0]!='#'])), d, names=c)
         return cls.eat(H, D, var)
 
-    @classmethod
-    def concat(cls, files, surface_only=False, check_integrity=False):
-        def ingest(f):
-            d = cls.extract(f)
-            if surface_only:
-                x = d[d['LVLTYP2']==1].dropna(1, 'all').reset_index(1)
-                return xr.DataArray(x)
-            else:
-                x = d.reset_index().pivot_table(index='datetime', columns='p')
-                x.columns.names = ['var', 'p']
-                if check_integrity:
-                    print('checking {}'.format(f))
-                    for i, c in x.iteritems():
-                        assert (d[i[0]].xs(i[1], level='p').dropna() == c.dropna()).all(), i
-                return xr.DataArray(x, coords=[
-                    ('time', x.index), ('cols', x.columns)
-                ]).unstack('cols').to_dataset('var')
-        stations = [int(re.search('\d+', f).group()) for f in files]
-        return xr.concat([ingest(f) for f in files], pd.Index(stations, name='station')).to_dataset('dim_1')
+    # @classmethod
+    # def concat(cls, files, surface_only=False, check_integrity=False):
+    #     def ingest(f):
+    #         d = cls.extract(f)
+    #         if surface_only:
+    #             x = d[d['LVLTYP2']==1].dropna(1, 'all').reset_index(1)
+    #             return xr.DataArray(x)
+    #         else:
+    #             x = d.reset_index().pivot_table(index='datetime', columns='p')
+    #             x.columns.names = ['var', 'p']
+    #             if check_integrity:
+    #                 print('checking {}'.format(f))
+    #                 for i, c in x.iteritems():
+    #                     assert (d[i[0]].xs(i[1], level='p').dropna() == c.dropna()).all(), i
+    #             return xr.DataArray(x, coords=[
+    #                 ('time', x.index), ('cols', x.columns)
+    #             ]).unstack('cols').to_dataset('var')
+    #     stations = [int(re.search('\d+', f).group()) for f in files]
+    #     return xr.concat([ingest(f) for f in files], pd.Index(stations, name='station')).to_dataset('dim_1')
 
     @staticmethod
     def replace_nan(x, value=-8888., fact=0.1):
         v = x.values.copy()
         v[v==value] = np.nan
         return xr.DataArray(v * fact, coords=x.coords).astype(float)
-
-    @classmethod
-    def mixing_ratio_surface(cls, ds):
-        t = cls.replace_nan(ds['TEMP'])
-        d = cls.replace_nan(ds['DPDP'])
-        p = cls.replace_nan(ds['p'], 0, 1.)
-
-        # dewpoint (dewpoint depression dpdp = temp - dewpt)
-        dp = (t - d).dropna('datetime', 'all')
-
-        # vapor pressure (saturation vapor pressure at dewpoint temperature)
-        e = 610.94 * np.exp(17.625 * dp / (243.04 + dp))
-
-        # from dewpoint depression
-        w_dp = 0.622 * e / (p - e)
-
-        # from relative humidity
-        rh = replace_nan(ds['RH'])
-        es = 610.94 * np.exp(17.625 * t / (243.04 + t))
-        e = es * rh / 100
-        w_rh = 0.622 * e / (p - e)
-
-        ds['w_rh'] = w_rh
-        ds['w_dp'] = w_dp
 
 
 class Monthly(object):
