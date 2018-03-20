@@ -54,7 +54,6 @@ class GLR(object):
         # takes care of broadcasting too
         x = X * W
         y = Y * W
-        # from IPython.core.debugger import Tracer; Tracer()()
         # instead of fitting intercept (not desirable for regularized regression)
         # remove mean from predictors, estimate intercept as mean of target
         # (see Hastie et al.)
@@ -64,8 +63,9 @@ class GLR(object):
 
         x = x - xm * W # important!
         y = y - ym * W # mean needs to be multiplied by mask
-        C = (x * y).sum(('time', 'space')).transpose('i', 'var')
-        a = x.transpose('i','var','space','time')
+        C = (x * y).sum(('time', 'space')).transpose('i', 'var') # NOTE: 'i' dim comes from W / self.W
+        # from IPython.core.debugger import Tracer; Tracer()()
+        a = x.transpose('i', 'var', 'space', 'time')
         A = la.block_diag(*np.einsum('ijkl,imkl->ijm', a, a))
         return A, C, xm.transpose('i', 'var'), ym
 
@@ -84,8 +84,9 @@ class GLR(object):
         """
         self._var = X['var']
 
-        # let's just assume that the most limiting spatial set is that of the targets
-        i = Y['space']
+        # use only spatial locations common to predictors and targets
+        i = np.intersect1d(X.space, Y.space)
+        i.sort()
 
         try:
             w = len(window)
@@ -111,7 +112,7 @@ class GLR(object):
         T = 1 - la.toeplitz(r) / len(r) # shold be 1 if len(r)==1
         if laplacian is not None:
             T = laplacian(T)
-        L = np.kron(T, self.L.loc[i, i])
+        L = np.kron(T, self.L.sel(space=i, i=i))
         self.LPL = np.kron(np.diag(L.sum(1)) - L, np.identity(self._var.size))
 
         self.A = la.block_diag(*A)
@@ -191,7 +192,7 @@ if __name__=="__main__":
     import helpers as hh
     D = hh.data('station_data_new.h5')
     S = hh.data('LinearLinear.h5')
-    t = hh.stationize(D['ta_c'].xs('prom', 1, 'aggr').drop('10', 1, 'elev')) + 273.15
+    t = hh.stationize(D['ta_c'].xs('prom', 1, 'aggr').drop('10', 1, level='elev')) + 273.15
     Tm = S['T2n']
     sta = D['sta']
     dist = D['dist']

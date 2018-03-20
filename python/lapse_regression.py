@@ -112,7 +112,7 @@ class GLR(reg_base):
             index = j, columns = j)
 
         # This is problem-specifc: the construction of the design matrix from
-        # constant and dz, which is constant in time. 
+        # constant and dz, which is constant in time.
         # [ 1]
         # [dz]
         self._m = pd.concat((m, m.mul(self._dz, 1)), 0)

@@ -147,7 +147,7 @@ class Downloader(object):
     def fetch_raw(self, code, from_date=None):
         from_date = self.from_date if from_date is None else from_date
         params = {'fi': from_date.strftime('%Y-%m-%d'),
-                  'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'), 
+                  'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
                   's_cod': code}
         for trial in self.trials:
             r = requests.get(self.raw_url, params=params)
