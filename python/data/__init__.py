@@ -1,10 +1,13 @@
 """
+.. automodule:: python.data.CEAZA
+    :members:
+
 .. automodule:: python.data.IGRA
-   :members:
+    :members:
 
 .. automodule:: python.data.NCDC
-   :members:
+    :members:
 
 .. automodule:: python.data.compare
-   :members:
+    :members:
 """

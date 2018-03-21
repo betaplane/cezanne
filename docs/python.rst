@@ -35,6 +35,12 @@ Data
 .. automodule:: python.data
    :members:
 
+Spatial Regression
+===================
+
+.. automodule:: python.laplace
+   :members:
+
 Various linear stats
 ====================
 .. automodule:: python.linear

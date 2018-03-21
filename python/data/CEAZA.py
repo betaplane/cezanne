@@ -101,7 +101,7 @@ class Downloader(object):
         :param from_date: initial date from which onward to request data
         :param raw: False (default) or True whether raw data should be collected
         :returns: data for one variable and all stations given by var_table
-        :rtype: pandas.DataFrame or dict with DataFrames if raw==True
+        :rtype: :class:`~pandas.DataFrame` or :obj:`dict` of DataFrames if raw==True
 
         """
         with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
@@ -172,6 +172,16 @@ class Downloader(object):
                 return d.astype(float) # important
 
     def get_stations(self, sta=None, fields=True):
+        """Query CEAZA webservice for a list of the stations (and all available meteorological variables for each field if ``field=True``) and return :class:`DataFrame(s)<pandas.DataFrame>` with the data.
+
+        :param sta: existing 'stations' DataFrame to update
+        :type sta: :class:`~pandas.DataFrame`
+        :param fields: whether or not to return a 'fields' DataFrame (if ``True``, a tuple of (stations, fields) DataFrames is returned)
+        :type fields: :obj:`bool`
+        :returns: 'stations' (and optionally 'fields') DataFrame(s)
+        :rtype: :class:`~pandas.DataFrame` or :obj:`tuple` of two DataFrames
+
+        """
         for trial in self.trials:
             req = requests.get(self.url, params=self.station)
             if not req.ok:

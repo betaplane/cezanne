@@ -1,3 +1,10 @@
+"""
+Note
+----
+
+The 'file' field in the bibtex file caused problems for sphinxcontrib.bibtex.
+
+"""
 #!/usr/bin/env python
 import numpy as np
 import pandas as pd
@@ -6,25 +13,26 @@ import scipy.linalg as la
 import matplotlib.pyplot as plt
 
 
-# This is an implementation of a linear regression local in space and time (but over some neighborhood), with
-# spatial smoothness of the regression coefficients enforced by regularization via a spatial graph Laplacian.
-# Based on:
-# Subbian, Karthik, and Arindam Banerjee. “Climate Multi-Model Regression Using Spatial Smoothing.”
-# In SDM, 324–332. SIAM, 2013. http://epubs.siam.org/doi/abs/10.1137/1.9781611972832.36.
+class LRLR(object):
+    """Laplacian-regularized local regression: combines space-time localized regression (i.e., weights over a spatial and temporal neighborhood can be specified) with graph-Laplacian regularization of the regression coefficients (also in space and time). If no callables are given for weights and laplacian, both will be set to the linear inverse of the distances normalized to 1. See :cite:`subbian_climate_2013` for details on the graph-Laplacian regularization.
 
-class GLR(object):
-    def __init__(self, distances, weights=None, laplacian=None):
-        """
-        Initialize a regression object. The distance matrix needs to have labels which
-        match those of the data's spatial dimension. If no callables are given for weights
-        and laplacian, both will be set to the linear inverse of the distances normalized to 1.
-        :param distances: symmetric matrix of spatial distances (labeled)
-        :type distances: pandas.DataFrame or xarray.DataArray
-        :param weights: function to apply to distances for spatial weighting of regression
-        :type weights: callable or None
-        :param laplacian: function to apply to distances for weighting of the spatial Laplacian
-        """
-        d = xr.DataArray(distances, dims=('space', 'i'))
+    Usage example::
+
+        DL = data.CEAZA.Downloader()
+        stations = DL.get_stations(fields=False)
+        LR = LRLR(stations)
+
+    :param stations: 'stations' DataFrame as returned from :meth:`.data.CEAZA.Downloader.get_stations`
+    :type stations: :class:`~pandas.DataFrame`
+    :param weights: function to apply to distances for spatial weighting of regression
+    :type weights: callable or None
+    :param laplacian: function to apply to distances for weighting of the spatial Laplacian
+
+    .. bibliography:: refs.bib
+
+    """
+    def __init__(self, stations, weights=None, laplacian=None):
+        d = self.distance_matrix(stations)
         if weights is None:
             self.D = 1 - d / d.max()
         else:
@@ -33,6 +41,17 @@ class GLR(object):
             self.L = self.D
         else:
             self.L = laplacian(d)
+
+    @staticmethod
+    def distance_matrix(stations):
+        from pyproj import Geod
+        g = Geod(ellps='WGS84')
+        d = pd.DataFrame()
+        for i, a in stations.iterrows():
+            for j, b in stations.iterrows():
+                d.loc[i, j] = g.inv(float(a.lon), float(a.lat), float(b.lon), float(b.lat))[2]
+        return xr.DataArray(d, dims=('space', 'i'))
+
 
     def _block(self, X, Y, t):
         # nuke time indexes here so that broadcasted multiplication with weights works
