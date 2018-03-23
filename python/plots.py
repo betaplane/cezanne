@@ -2,18 +2,21 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from cartopy import crs
+from helpers import stationize
 
 
 def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, **kwargs):
     """Plot a matrix of the times when a given :class:`~pandas.DataFrame` has valid observations. Not sure with what data types it'll still work, but in general 0/False(/nan?) should work for nonexistent times, and 1/count for exisitng ones. Figure size is automatically computed, but can be overridden with the **figsize** or **fig_width** arguments.
 
-    :param df: DataFrame with time in index and station labels as columns. The columns labels are used to label the rows of the plotted matrix.
+    :param df: DataFrame with time in index and station labels as columns. The columns labels are used to label the rows of the plotted matrix. The given DataFrame is attempted to pass through :meth:`python.helpers.stationize` first.
     :type df: :class:`~pandas.DataFrame`
     :param ax: :obj:`~matplotlib.axes.Axes.axes` if subplots are used
     :param label: if `False`, plot no row labels
     :type label: :obj:`bool`
     :param color: mapping from color values to row indexes whose labels should be printed in the given color
     :type color: :obj:`dict` {color spec: [row indexes]}
+    :param bottom: equivalent to ``bottom`` keyword in :class:`matplotlib.figure.SubplotParams`
+    :param top: equivalent to ``top`` keyword in :class:`matplotlib.figure.SubplotParams`
 
     :Keyword Arguments:
         Same as for :class:`matplotlib.figure.SubplotParams`, plus:
@@ -26,6 +29,9 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
         fig, ax = plt.subplots(figsize=figsize)
     else:
         fig = ax.figure
+
+    try: df = stationize(df)
+    except: pass
     fig.subplots_adjust(bottom=bottom, top=top, **kwargs)
     plt.set_cmap('viridis')
     y = np.arange(df.shape[1] + 1)

@@ -1,3 +1,7 @@
+"""
+CEAZAMet station data comparison tools
+--------------------------------------
+"""
 import pandas as pd
 import numpy as np
 

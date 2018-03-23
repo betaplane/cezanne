@@ -2,10 +2,10 @@
 import numpy as np
 import pandas as pd
 from scipy import interpolate as ip
-from geo import affine, proj_params
+from .geo import affine, proj_params
 from pyproj import Proj
 from functools import singledispatch
-import helpers as hh
+from . import helpers as hh
 import xarray as xr
 import re
 
@@ -122,7 +122,7 @@ def xr_interp(v, proj_params, stations, time=True, method='linear',  dt=-4):
     xy = p(hh.g2d(v.coords[lon]), hh.g2d(v.coords[lat]))
     x = np.array(v).squeeze()
     if time:
-        t = ds[tv] + np.timedelta64(dt, 'h')
+        t = v[tv] + np.timedelta64(dt, 'h')
         df = grid_interp(xy, x, ij, stations.index, t, method=method)
     else:
         df = grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)

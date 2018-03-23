@@ -148,15 +148,24 @@ def avg(df, interval):
     return m
 
 
-def stationize(df):
-    """
-    Return a copy of a DataFrame with only station codes as labels (either columns or index).
+def stationize(df, aggr='prom'):
+    """ Return a copy of a DataFrame with only station codes as labels (either columns or index).
     Careful with multiple columns for same station.
+
+    :param aggr: if the input DataFrame has several ``aggr`` levels (e.g. ``prom``, ``min``, ``max``), return this one
+    :type aggr: :obj:`str`
+    :returns: DataFrame with simple column index (containing station labels)
+    :rtype: :class:`~pandas.DataFrame`
+
     """
-    c = df.copy()
     if isinstance(df.columns, pd.MultiIndex):
-        c.columns = df.columns.get_level_values('station')
+        try:
+            c = df.xs(aggr, 1, 'aggr')
+        except KeyError:
+            c = df.copy()
+        c.columns = c.columns.get_level_values('station')
     elif isinstance(df.index, pd.MultiIndex):
+        c = df.copy()
         c.index = df.index.get_level_values('station')
     return c
 
