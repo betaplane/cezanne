@@ -2,10 +2,10 @@
 import numpy as np
 import pandas as pd
 from scipy import interpolate as ip
-from .geo import affine, proj_params
+from geo import affine, proj_params
 from pyproj import Proj
 from functools import singledispatch
-from . import helpers as hh
+import helpers as hh
 import xarray as xr
 import re
 
@@ -115,7 +115,7 @@ def nc_interp(nc,
 
 
 @singledispatch
-def xr_interp(v, proj_params, stations, time=True, method='linear',  dt=-4):
+def xr_interp(v, proj_params, stations, time=True, method='linear', return_type='pandas', dt=-4):
     p = Proj(**proj_params)
     ij = p(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
     lon, lat, tv = hh.coord_names(v, 'lon', 'lat', 'time')
@@ -126,7 +126,7 @@ def xr_interp(v, proj_params, stations, time=True, method='linear',  dt=-4):
         df = grid_interp(xy, x, ij, stations.index, t, method=method)
     else:
         df = grid_interp(xy, hh.g2d(x), ij, stations.index, method=method)
-    return df
+    return df if return_type == 'pandas' else xr.DataArray(df)
 
 @xr_interp.register(str)
 def _(fn, var, *args, **kwargs):

@@ -6,148 +6,163 @@ WRFOUT concatenation
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * Data for the tests is in the same directory as this file, but the config file (**tests.cfg**) is in ~/Documents/code
-    * This directory is also from where the tests have to be run, e.g.::
+    * Data for the tests is in the same directory as this file, as is the config file (**WRF.cfg**)
+    * Test are run e.g. by::
 
-        python -m python.data.WRF
+        python -m WRF
+
+    * For now, import troubles (can't import from higher level than package) are circumvented with sys.path.append().
 
 .. TODO::
 
-    * remove the ``hour`` keyword
+    * interpolation by precomputed spatial matrix
 
 """
+import re, sys, unittest
+sys.path.append('..')
 from glob import glob
 import os.path as pa
 import xarray as xr
 import pandas as pd
 import numpy as np
-import re
 from functools import partial
-from ..interpolation import xr_interp
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
 from datetime import datetime, timedelta
-import unittest
 from configparser import ConfigParser
+from pyproj import Proj
+from scipy import interpolate as ip
+from geo import proj_params, affine
+import helpers as hh
 
 
 class OUT(object):
-    """WRFOUT file concatenator, for a specifc forecast lead day only (I believe), and with (optional) interpolation to station locations (see :meth:`.netcdf`). Class variable *max_workers* controls how many threads are used.
+    """WRFOUT file concatenator, for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
+    Class variable *max_workers* controls how many threads are used.
 
     :param paths: list of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs
-    :param domain: domain specifier for which to search among WRFOUT-files
-    :param lead_day: lead day of the forecast for which to search
-    :param hour: hour at which the forecast starts (because we switched from 0h to 12h UTC)
-    :param from_date: from what date onwards to search
+    :param hour: hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
 
     """
     max_workers = 16
+    config_file = './WRF.cfg'
 
-    def __init__(self, paths):
-        self.dirs = []
+    def __init__(self, paths=None, hour=None):
+        dirs = []
+        if paths is None:
+            self.config = ConfigParser()
+            self.config.read(self.config_file)
+            paths = [p for p in self.config['wrfout'].values() if pa.isdir(p)]
         for p in paths:
-            self.dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
+            dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
+        self.dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
         print('WRF.OUT initialized with {} directories'.format(len(self.dirs)))
 
-    def get_files(self, domain, lead_day, hour, from_date=None, prefix='wrfout'):
-        name = partial(self._name, domain, lead_day, prefix)
-        if from_date is None:
-            files = [name(d) for d in self.dirs if d[-2:] == '{:02}'.format(hour)]
-        else:
-            dh = (from_date - timedelta(days=lead_day)).strftime('%Y%m%d%H')
-            files = [name(d) for d in self.dirs if d[-10:] >= dh]
-        return [f for f in files if pa.isfile(f)]
-
-    @staticmethod
-    def _name(dom, lead, prefix, d):
-        dt = datetime.strptime(pa.split(d)[1], 'c01_%Y%m%d%H')
-        f = glob(pa.join(d, '*_{}_*'.format(dom)))
-        s = (dt + timedelta(days=lead)).strftime('%Y-%m-%d_%H:%M:%S')
-        return pa.join(d, '{}_{}_{}'.format(prefix, dom, s))
-
-    @staticmethod
-    def _extract(var, dt, fp):
-        with xr.open_dataset(fp) as ds:
-            out = xr.merge([ds[v].load() for v in var])
-            out['XTIME'] = out['XTIME'] + pd.Timedelta(dt, 'h')
-            return out
+    def run(self, outfile, **kwargs):
+        i = 0
+        while len(self.dirs) > 0:
+            try:
+                self.concat(**kwargs)
+            except:
+                self.data.to_netcdf('{}{}.nc'.format(outfile, i))
+                t = self.data.indexes['start'] - pd.Timedelta(kwargs['dt'], 'h')
+                s = [d.strftime('%Y%m%d%H') for d in t]
+                self.dirs = [d for d in self.dirs if d[-10:] not in s]
+                del self.data
+                i += 1
 
     def concat(self, var, domain, stations=None, lead_day=None, hour=None, from_date=None, dt=-4, prefix='wrfout'):
-        """Concatenate the found WRFOUT files.
+        """Concatenate the found WRFOUT files. If ``stations`` is given as a DataFrame as returned by :meth:`.CEAZA.Downloader.get_stations`, the variables are spatially interpolated to the lat/lon values in that DataFrame. If ``stations`` is set to any expression that evaluates to ``True``, the default stations data is loaded as given in a config file (class variable :attr:`.config_file`). If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
-        :param var: Name of variable to extract. Can be an :obj:`iterable` if ``stations=None`` (in which case several variables can be extracted at the same time).
-        :param stations: 'stations' DataFrame with locations (as returned by a call to :meth:`.CEAZA.Downloader.get_stations`) to which the variable is to be interpolated
-        :param dt: time difference to UTC in hours by which to shift the time index
+        :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
+        :param domain: Domain specifier for which to search among WRFOUT-files.
+        :param lead_day: Lead day of the forecast for which to search, if only one particular lead day is desired.
+        :param stations: 'stations' DataFrame with locations (as returned by a call to :meth:`.CEAZA.Downloader.get_stations`) to which the variable(s) is (are) to be interpolated, or expression which evaluates to ``True`` if the default station data is to be used (as saved in **WRF.cfg**).
+        :param from_date: From what date onwards to search, if a start date is desired.
+        :param dt: Time difference to UTC in hours by which to shift the time index
+        :param prefix: Prefix of the WRFOUT files (default **wrfout**).
         :returns: concatenated data object
-        :rtype: pandas.DataFrame if *stations* is given, xarray.DataFrame otherwise
+        :rtype: :class:`~xarray.Dataset`
 
         """
         start = timer()
-        if lead_day is None:
-            glob_pattern = '{}_{}_*'.format(prefix, domain)
-            func = partial(self.by_sim, var, glob_pattern, dt)
-            iter = self.dirs
-        else:
-            try:
-                iter = self.files
-            except:
-                iter = self.select_files(domain, lead_day, hour, from_date, prefix)
-                self.files = iter
+        glob_pattern = '{}_{}_*'.format(prefix, domain)
 
-            if stations is None:
-                func = partial(self._extract, np.asarray([var]).flatten(), dt)
-            else:
-                func = partial(xr_interp, var=var, stations=stations, dt=dt)
+        if stations is True:
+            with pd.HDFStore(self.config['stations']['sta']) as sta:
+                stations = sta['stations']
 
-        dim = 'start' if lead_day is None else 'Time'
-        ds = func(iter[0])
-        with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
-            for i, f in enumerate(exe.map(func, iter[1:])):
-                print(iter[i])
-                ds = xr.concat((ds, f), dim) if stations is None else pd.concat((ds, f), 0)
-        ds = ds.sortby('Time') if stations is None else ds.sort_index()
+        func = partial(self._extract, var, glob_pattern, lead_day, stations, dt)
+
+        self.data = func(self.dirs[0])
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self.dirs)-1)) as exe:
+            for i, f in enumerate(exe.map(func, self.dirs[1:])):
+                self.data = xr.concat((self.data, f), 'start' if lead_day is None else 'Time')
+        self.data = self.data.sortby('start' if lead_day is None else 'XTIME')
         print('Time taken: {:.2f}'.format(timer() - start))
-        return ds
 
     @staticmethod
-    def by_sim(var, s, dt, d):
-        with xr.open_mfdataset(pa.join(d, s)) as ds:
-            x = ds[var].load().sortby('Time')
-            x['XTIME'] = x.XTIME + np.timedelta64(dt, 'h')
+    def _extract(var, glob_pattern, lead_day, stations, dt, d):
+        with xr.open_mfdataset(pa.join(d, glob_pattern)) as ds:
             print('using: {}'.format(ds.START_DATE))
+            x = ds[np.array([var]).flatten()].to_array().sortby('Time') # this seems to be at the root of Dask warnings
+            x['XTIME'] = x.XTIME + np.timedelta64(dt, 'h')
+            if lead_day is not None:
+                t = x.XTIME.to_index()
+                x = x.isel(Time = (t - t.min()).days == lead_day)
+            if stations is not None:
+                x = xr_interp(x, proj_params(ds), stations)
+            x.load()
             x.expand_dims('start')
-            x['start'] = x.XTIME.values.min()
-            return x
+            x['start'] = x.XTIME.min()
+            return x.load().to_dataset('variable')
+
+def grid_interp(xy, data, ij, method='linear'):
+    "Interpolation for data on a sufficiently regular mesh."
+    m, n = data.shape[:2]
+    tg = affine(*xy)
+    coords = np.roll(tg(np.r_['0,2', ij]).T, 1, 1)
+    return [ip.interpn((range(m), range(n)), data[:, :, k], coords, method, bounds_error=False)
+         for k in range(data.shape[2])]
+
+def xr_interp(v, proj_params, stations, method='linear'):
+    p = Proj(**proj_params)
+    ij = p(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
+    xy = p(hh.g2d(v['XLONG']), hh.g2d(v['XLAT']))
+    x = v.stack(n = v.dims[:-2]).transpose(*v.dims[-2:], 'n')
+    y = grid_interp(xy, x.values, ij, method=method)
+    ds = xr.DataArray(y, coords=[('n', x.indexes['n']), ('station', stations.index)]).unstack('n')
+    ds.coords['XTIME'] = ('Time', v.XTIME)
+    return ds
+
 
 class ConcatTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        config = ConfigParser()
-        config.read('tests.cfg')
-        paths = [p for p in config['wrfout'].values() if pa.isdir(p)]
-        with pd.HDFStore(config['stations']['sta']) as S:
-            cls.sta = S['stations']
-        cls.h5_data = pd.HDFStore(config['data']['h5'])
-        cls.nc_data = xr.open_dataset(config['data']['nc'])
-        cls.wrf = OUT(paths)
-        cls.wrf.files = cls.wrf.get_files('d03', 1, 12, None, 'wrfout')[:3]
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.h5_data.close()
-        cls.nc_data.close()
+        cls.wrf = OUT(hour=0)
+        cls.wrf.dirs = cls.wrf.dirs[:3]
 
     def test_lead_day_interpolated(self):
-        ds = self.wrf.concat('T2', 'd03', self.sta, 1, 12)
-        pd.testing.assert_frame_equal(ds, self.h5_data['test_lead_day_interpolated'])
+        with xr.open_dataset(self.wrf.config['tests']['lead_intp']) as data:
+            self.wrf.concat('T2', 'd03', True, 1, 0)
+            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
 
     def test_lead_day_whole_domain(self):
-        ds = self.wrf.concat('T2', 'd03', lead_day=1, hour=12)
-        # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
-        np.testing.assert_allclose(ds['T2'], self.nc_data['T2'])
+        with xr.open_dataset(self.wrf.config['tests']['lead_whole']) as data:
+            self.wrf.concat('T2', 'd03', lead_day=1, hour=0)
+            # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
+            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
 
     def test_all_whole_domain(self):
-        pass
+        with xr.open_dataset(self.wrf.config['tests']['all_whole']) as data:
+            self.wrf.concat('T2', 'd03')
+            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
+
+    def test_all_interpolated(self):
+        with xr.open_dataset(self.wrf.config['tests']['all_intp']) as data:
+            self.wrf.concat('T2', 'd03', True)
+            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
+
 
 class lead(object):
     max_workers = 16
