@@ -95,17 +95,18 @@ class OUT(object):
         func = partial(self._extract, var, glob_pattern, lead_day, stations, dt)
 
         self.data = func(self.dirs[0])
-        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self.dirs)-1)) as exe:
-            for i, f in enumerate(exe.map(func, self.dirs[1:])):
-                self.data = xr.concat((self.data, f), 'start' if lead_day is None else 'Time')
-        self.data = self.data.sortby('start' if lead_day is None else 'XTIME')
+        if len(self.dirs) > 1:
+            with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self.dirs)-1)) as exe:
+                for i, f in enumerate(exe.map(func, self.dirs[1:])):
+                    self.data = xr.concat((self.data, f), 'start' if lead_day is None else 'Time')
+            self.data = self.data.sortby('start' if lead_day is None else 'XTIME')
         print('Time taken: {:.2f}'.format(timer() - start))
 
     @staticmethod
     def _extract(var, glob_pattern, lead_day, stations, dt, d):
         with xr.open_mfdataset(pa.join(d, glob_pattern)) as ds:
             print('using: {}'.format(ds.START_DATE))
-            x = ds[np.array([var]).flatten()].to_array().sortby('Time') # this seems to be at the root of Dask warnings
+            x = ds[np.array([var]).flatten()].to_array().sortby('XTIME') # this seems to be at the root of Dask warnings
             x['XTIME'] = x.XTIME + np.timedelta64(dt, 'h')
             if lead_day is not None:
                 t = x.XTIME.to_index()

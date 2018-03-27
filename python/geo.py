@@ -123,9 +123,16 @@ def distance_matrix(grid_lon, grid_lat, lon, lat):
     return np.vectorize(dist)(grid_lon, grid_lat)
 
 @singledispatch
-def domain_bounds(ds, test=None):
-    from shapely import MultiPoint, Polygon, LinearRing
-    coords = zip(ds.corner_lons[-4:], ds.corner_lats[-4:])
+def domain_bounds(ds, project=True, test=None):
+    from shapely.geometry import MultiPoint, Polygon, LinearRing
+    if project:
+        from pyproj import Proj
+        pr = Proj(**proj_params(ds))
+        coords = np.vstack(pr(ds.corner_lons[-4:], ds.corner_lats[-4:])).T
+        if test is not None:
+            test = np.vstack(pr(*test.T)).T
+    else:
+        coords = np.vstack((ds.corner_lons[-4:], ds.corner_lats[-4:])).T
     p = Polygon(LinearRing(coords))
     if test is None:
         return p
