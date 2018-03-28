@@ -35,12 +35,16 @@ import numpy as np
 import pandas as pd
 import scipy.interpolate as ip
 from pyproj import Proj
-from geo import proj_params, affine
+from geo import proj_params
 import helpers as hh
 import unittest
 
+class InterpolatorBase(object):
+    spatial_dims = ['south_north', 'west_east']
+    """The names of the latitude / longitude dimensions"""
 
-class GridInterpolator(object):
+
+class GridInterpolator(InterpolatorBase):
     """Uses :mod:`scipy.interpolate` to interpolate a model field horizontally to station locations. Loops over the non-lon/lat dimensions. Once per instantiation, the following steps are performed:
 
         #. Project model ``XLONG``/``XLAT`` coordinates according to the grid parameters given as netCDF attributes in the :class:`xarray.Dataset`.
@@ -54,8 +58,10 @@ class GridInterpolator(object):
     :type stations: :class:`~pandas.DataFrame`
     :param method: Maps directly to the param of the same name in :func:`~scipy.interpolate.interpn`.
 
+    Interpolation is carried out by calling the instantiated class as described for :class:`.BilinearInterpolator`.
     """
     def __init__(self, ds, stations, method='linear'):
+        from geo import affine
         self.method = method
         proj = Proj(**proj_params(ds))
         xy = proj(hh.g2d(ds['XLONG']), hh.g2d(ds['XLAT']))
@@ -69,59 +75,72 @@ class GridInterpolator(object):
         return [ip.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
              for k in range(data.shape[2])]
 
-    def __call__(self, v):
-        x = v.stack(n = v.dims[:-2]).transpose(*v.dims[-2:], 'n')
-        y = self._grid_interp(x.values)
-        ds = xr.DataArray(y, coords=[('n', x.indexes['n']), ('station', self.index)]).unstack('n')
-        ds.coords['XTIME'] = ('Time', v.XTIME)
+    def __call__(self, x):
+        dims = set(x.dims).symmetric_difference(self.spatial_dims)
+        X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
+        y = self._grid_interp(X.values)
+        ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
+        ds.coords['XTIME'] = ('Time', x.XTIME)
         return ds
 
-class BilinearInterpolator(object):
+class BilinearInterpolator(InterpolatorBase):
+    """Implements bilinear interpolation in two spatial dimensions by precomputing a weight matrix which can be used repeatedly to interpolate to the same spatial locations. The input :class:`xarray.Dataset` is reshaped into a two-dimensional matrix, with one dimension consisting of the stacked two spatial dimensions (longitude / latitude), and the other dimension consisting of all other dimensions stacked. Hence, interpolation to fixed locations in the horizontal (longitude / latitude) plane can be carried out by a simple matrix multiplication with the precomputed weights matrix. Different model levels, variables and other potential dimensions can be stacked without the need to write loops in python. The interpolation weights are computed in **projected** coordinates.
+
+    :param ds: dataset to be interpolated (with projection information as netCDF attributes)
+    :type ds: :class:`~xarray.Dataset`
+    :param stations: DataFrame containing the longitue / latitude locations to which the data should be interpolated (as returned from a call to :meth:`.CEAZA.Downloader.get_stations`)
+    :type station: :class:`~pandas.DataFrame`
+
+    Interpolation is carried out by calling the instantiated class with the :class:`~xarray.DataArray` containing the data::
+
+        import pandas as pd
+        import xarray as xr
+
+        with pd.HDFStore(...) as S:
+            stations = S['stations']
+        with xr.open_dataset(...) as ds:
+            BLI = BilinearInterpolator(ds, stations)
+            result = BLI(ds['T2'])
+
+    If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array`::
+
+        result = BLI(ds[['T2', 'Q2']].to_array())
+
+    """
+
     def __init__(self, ds, stations):
+        from geo import Squares
         pr = Proj(**proj_params(ds))
         self.x, self.y = pr(hh.g2d(ds.XLONG), hh.g2d(ds.XLAT))
         self.index = stations.index
         self.i, self.j = pr(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
-        self.dx = self.i.reshape((1, 1, -1)) - np.expand_dims(self.x, 2)
-        self.dy = self.j.reshape((1, 1, -1)) - np.expand_dims(self.y, 2)
+        self.points = Squares.compute(self.x, self.y, self.i, self.j)
+        K = np.ravel_multi_index(self.points.sel(var='indexes').astype(int).values,
+                                 self.x.shape[:2]).reshape((4, -1))
 
-        D = (self.dx**2 + self.dy**2) ** .5
-        # this is the sum over all distances of four points arranged in a square
-        self.D = D[:-1, :-1, :] + D[1:, :-1, :] + D[:-1, 1:, :] + D[1:, 1:, :]
-
-        self.outliers = []
-        self.W = np.zeros((stations.shape[0], np.prod(self.x.shape)))
-        for k in range(stations.shape[0]):
-            self._weights(k)
+        n = stations.shape[0]
+        self.W = np.zeros((n, np.prod(self.x.shape)))
+        self.W[range(n), K] = self.points.groupby('station').apply(self._weights).transpose('square', 'station')
 
     def __call__(self, x):
-        X = x.stack(s=x.dims[-2:], t=x.dims[:-2])
+        X = x.stack(s=self.spatial_dims, t=set(x.dims).symmetric_difference(self.spatial_dims))
         y =  xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
         y.coords['XTIME'] = x.coords['XTIME']
         return y
 
     def plot(self, k):
         import matplotlib.pyplot as plt
-        i, j = np.unravel_index(self.D[:, :, r].argmin(), self.D.shape[:2])
-        ij = [(i, j), (i, j+1), (i+1, j), (i+1, j+1)]
-        p = np.array([(self.x[j], self.y[j]) for j in ij])
+        p = self.points.sel(var='points').isel(station=k).transpose('xy', 'square').values
         plt.figure()
         plt.scatter(self.x, self.y, marker='.')
-        plt.scatter(*p.T, marker='o')
+        plt.scatter(*p, marker='o')
         plt.scatter(self.i[k], self.j[k], marker='x')
         plt.show()
 
-    def _weights(self, r):
-        # this finds the square with the lowest sum of distances to any interpolation point
-        i, j = np.unravel_index(self.D[:, :, r].argmin(), self.D.shape[:2])
-        # this sorts the points in the sense of the drawing at the beginning of file
-        ij = [(i, j), (i, j+1), (i+1, j), (i+1, j+1)]
-
+    def _weights(self, D):
         # this are the 4 'square' point coordinates
-        p = np.array([(self.x[j], self.y[j]) for j in ij])
-
-        DX = [self.dx[m, n, r] for m, n in ij]
-        DY = [self.dy[m, n, r] for m, n in ij]
+        p = D.sel(var='points').transpose('square', 'xy').values
+        DX, DY = D.sel(var='distances').transpose('xy', 'square').values
 
         # x-direction
         dx0 = p[1] - p[0] # vector p0 -> p1
@@ -139,7 +158,7 @@ class BilinearInterpolator(object):
         # projections of the vectors p0 -> ipp and p2 -> ipp need to be positive,
         # of p1 -> ipp and p3 -> ipp negative, otherwise the point is outside the domain
         if (a < 0) or (b < 0) or (c > 0) or (d > 0):
-            self.W[r, :] = np.nan
+            return xr.DataArray(np.zeros(4) * np.nan, dims=['square'])
 
         # we compute two interpolates along the lines 'x0' and 'x1' ('X0' and 'X1' on drawing),
         # one between p0 and p1 and one between p2 and p3
@@ -158,14 +177,12 @@ class BilinearInterpolator(object):
         d = np.dot(dy1, [DX[3], DY[3]]) / y1
 
         if (a < 0) or (b < 0) or (c > 0) or (d > 0):
-            self.W[r, :] = np.nan
+            return xr.DataArray(np.zeros(4) * np.nan, dims=['square'])
 
         # we use the mean of the two sets of weights computed for the y-direction (along 'y0' and 'y1')
         wy = np.vstack(([-c, a] / y0, [-d, b] / y1)).mean(0)
+        return xr.DataArray(np.r_[wy[0] * w1, wy[1] * w2], dims=['square'])
 
-        # this is the new order in the flattened arrays
-        k = np.ravel_multi_index(list(zip(*ij)), self.x.shape)
-        self.W[r, k] = np.r_[wy[0] * w1, wy[1] * w2]
 
 class Test(unittest.TestCase):
     def setUp(self):

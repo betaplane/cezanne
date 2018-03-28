@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import numpy as np
-from xarray import DataArray, open_dataset
+from xarray import DataArray, open_dataset, concat
 from functools import singledispatch, partial
 from cartopy.io import shapereader
 
@@ -91,6 +91,71 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
     c = [[l for l, r in enumerate(lr) if r.contains(p)] for p in mp]
     c = [r[0] for r in c if len(r)>0]
     return np.unravel_index(c, s) if mask is None else (i[c], j[c])
+
+class Squares(object):
+    """Determine the 4 points in a model grid which form a rectangular grid cell containing any points of interest, for example for interpolation (see :mod:`.data.interpolate`). All methods return a DataArray containing:
+
+            * projected coordinates (*x* and *y*) of the four 'square' points for each point of interest (dimension ``var='points'``)
+            * *x* and *y* distances of the four 'square' points from POI (``var='distances'``)
+            * indexes of the four points in the shape of the ``x`` and ``y`` variables (``var='indexes'``)
+
+The *x* and *y* components of each of these ``var`` dimensions are accessed via a dimension called ``xy``.
+
+    """
+    @classmethod
+    def project(cls, ds, stations):
+        """Project coordinates from a netCDF file and station longitude / latitude data first, then call :meth:`.compute`.
+
+        :param ds: Dataset containing the coordinate variables and projection paramters
+        :type ds: :class:`~xarray.Dataset`
+        :param stations: DataFrame containing the locations (longitude / latitude) for which the surrounding 4 points should be determined (as returned from :meth:`.CEAZA.Downloader.get_stations`)
+        :type stations: :class:`~pandas.DataFrame`
+        :returns: see :class:`.Squares` for description of returned DataArray
+        :rtype: :class:`~xarray.DataArray`
+
+        """
+        from helpers import g2d
+        from pyproj import Proj
+
+        pr = Proj(**proj_params(ds))
+        x, y = pr(g2d(ds.XLONG), g2d(ds.XLAT))
+        k, l = pr(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
+        return cls.compute(x, y, k, l)
+
+    @staticmethod
+    def compute(x, y, k, l):
+        """Compute the actual containing 'squares' surrounding a point of interest (POI) from projected coordinates.
+
+        :param lon: 2-dimensional (matrix-ordered) projected x (longitude) coordinates
+        :param lat: 2-dimensional (matrix-ordered) projected y (latitude) coordinates
+        :param k: 1-dimensional array of projected x-direction coordinates of the POI
+        :param l: 1-dimensional array of projected y-direction coordinates of the POI
+        :returns: see :class:`.Squares` for description of returned DataArray
+        :rtype: :class:`~xarray.DataArray`
+
+        """
+        from pandas import Index
+        dx = k.reshape((1, 1, -1)) - np.expand_dims(lon, 2)
+        dy = l.reshape((1, 1, -1)) - np.expand_dims(lat, 2)
+
+        d = (dx**2 + dy**2) ** .5
+        # this is the sum over all distances of four points arranged in a square
+        D = d[:-1, :-1, :] + d[1:, :-1, :] + d[:-1, 1:, :] + d[1:, 1:, :]
+        i, j = np.unravel_index(D.reshape((-1, D.shape[-1])).argmin(0), D.shape[:2])
+
+        n = np.arange(k.shape[0])
+        x = DataArray(x[[i, i, i+1, i+1], [j, j+1, j, j+1]], dims=['square', 'station'])
+        y = DataArray(y[[i, i, i+1, i+1], [j, j+1, j, j+1]], dims=['square', 'station'])
+        DX = DataArray(dx[[i, i, i+1, i+1], [j, j+1, j, j+1], n], dims=['square', 'station'])
+        DY = DataArray(dy[[i, i, i+1, i+1], [j, j+1, j, j+1], n], dims=['square', 'station'])
+        I = DataArray([i, i, i+1, i+1], dims=['square', 'station'])
+        J = DataArray([j, j+1, j, j+1], dims=['square', 'station'])
+
+        points = concat((x, y), Index(['x', 'y'], name='xy'))
+        dists = concat((DX, DY), Index(['x', 'y'], name='xy'))
+        indexes = concat((I, J), Index(['x', 'y'], name='xy'))
+        return concat((points, dists, indexes), Index(['points', 'distances', 'indexes'], name='var'))
+
 
 
 def nearest(grid_lon, grid_lat, lon, lat):
@@ -206,7 +271,7 @@ class box(object):
 
 class GeoBase(object):
     """
-A class to hold transformations from two Latitude/Longitue dimensions on a :class:`xr.DataArray` to a single dimension (e.g. for regression purposes).
+A class to hold transformations from two Latitude/Longitue dimensions on a :class:`xarray.DataArray` to a single dimension (e.g. for regression purposes).
     """
     def __init__(self, Y, mask=None, mean=False, std=False):
         s = lambda x: x.stack(space = ('lat', 'lon'))

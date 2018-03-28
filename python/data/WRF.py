@@ -6,14 +6,10 @@ WRFOUT concatenation
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * Data for the tests is in the same directory as this file, as is the config file (**WRF.cfg**)
+    * Data for the tests is in the same directory as this file, as is the config file (*WRF.cfg*)
     * Test are run e.g. by::
 
         python -m WRF
-
-.. TODO::
-
-    * interpolation by precomputed spatial matrix
 
 """
 import re, unittest
@@ -25,12 +21,38 @@ import numpy as np
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
-from datetime import datetime, timedelta
 from configparser import ConfigParser
 from pyproj import Proj
 
+config_file = 'WRF.cfg'
+"name of the config file (in the same directory as this module)"
 
-class OUT(object):
+
+def get_files(domain=None, lead_day=None, hour=None, from_date=None, prefix='wrfout'):
+    """Function which mimics the way :class:`.Concatenator` retrieves the files to concatenate from the :data:`.config_file`, with the same keywords.
+
+    """
+    config = ConfigParser()
+    config.read(pa.join(pa.dirname(__file__), config_file))
+    dirs = []
+    for p in config['wrfout'].values():
+        if pa.isdir(p):
+            dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
+    dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
+    dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+
+    def name(d):
+        if lead_day is None:
+            return glob(pa.join(d, '{}_{}_*'.format(prefix, domain)))
+        else:
+            ts = pd.Timestamp.strptime(pa.split(d)[1], 'c01_%Y%m%d%H')
+            s = (ts + pd.Timedelta(lead_day, 'D')).strftime('%Y-%m-%d_%H:%M:%S')
+            return glob(pa.join(d, '{}_{}_{}'.format(prefix, domain, s)))
+    return [f for d in dirs for f in name(d) if pa.isfile(f)]
+
+
+
+class Concatenator(object):
     """WRFOUT file concatenator, for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
     Class variable *max_workers* controls how many threads are used.
 
@@ -44,14 +66,15 @@ class OUT(object):
 
     """
     max_workers = 16
-    config_file = './WRF.cfg'
+    "number of threads to be used"
+
 
     def __init__(self, paths=None, domain=None, hour=None, from_date=None, stations=None, interpolator=None, prefix='wrfout'):
         dirs = []
         self._glob_pattern = '{}_{}_*'.format(prefix, domain)
         if paths is None:
             self.config = ConfigParser()
-            self.config.read(self.config_file)
+            self.config.read(pa.join(pa.dirname(__file__), config_file))
             paths = [p for p in self.config['wrfout'].values() if pa.isdir(p)]
         for p in paths:
             dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
@@ -72,7 +95,7 @@ class OUT(object):
                 with xr.open_dataset(f[0]) as ds:
                     self.intp = BilinearInterpolator(ds, self.stations)
 
-        print('WRF.OUT initialized with {} directories'.format(len(self.dirs)))
+        print('WRF.Concatenator initialized with {} directories'.format(len(self.dirs)))
 
     @property
     def stations(self):
@@ -84,23 +107,38 @@ class OUT(object):
             return self._stations
 
     def run(self, outfile, **kwargs):
+        """Wrapper around the :meth:`.concat` call which writes out a netCDF file whenever an error occurs and restarts with all already processed directories removed from :attr:`.dirs`
+
+        :param outfile: base name of the output netCDF file (no extension, numberings are added in case of restarts)
+        :Keyword arguments:
+
+            Are all passed to :meth:`.concat`
+
+        """
+
         i = 0
         while len(self.dirs) > 0:
             try:
+                start = timer()
+                len_dirs = len(self.dirs)
                 self.concat(**kwargs)
             except:
-                self.data.to_netcdf('{}{}.nc'.format(outfile, i))
+                filename = '{}{}.nc'.format(outfile, i)
+                self.data.to_netcdf(filename)
                 t = self.data.indexes['start'] - pd.Timedelta(kwargs['dt'], 'h')
                 s = [d.strftime('%Y%m%d%H') for d in t]
                 self.dirs = [d for d in self.dirs if d[-10:] not in s]
                 del self.data
                 i += 1
+                with open('timing.txt') as f:
+                    f.write('{} dirs in {} seconds, file {}'.format(
+                        len_dirs - len(self.dirs), timer() - start), filename)
 
     def concat(self, var, interpolate=None, lead_day=None, dt=-4):
-        """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.OUT` or read in from the :class:`~pandas.HDFStore` specified in the :attr:`.config_file`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
+        """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config_file`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
         :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
-        :param interpolate: Whether or not to interpolate to station locations (see :class:`.OUT`).
+        :param interpolate: Whether or not to interpolate to station locations (see :class:`.Concatenator`).
         :type interpolated: :obj:`bool`
         :param lead_day: Lead day of the forecast for which to search, if only one particular lead day is desired.
         :param dt: Time difference to UTC *in hours* by which to shift the time index.
@@ -142,89 +180,30 @@ class OUT(object):
 class ConcatTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.wrf = OUT(domain='d03', hour=0, interpolator='intp')
+        cls.wrf = Concatenator(domain='d03', hour=0, interpolator='intp')
         cls.wrf.dirs = cls.wrf.dirs[:3]
 
     def test_lead_day_interpolated(self):
-        with xr.open_dataset(self.wrf.config['tests']['lead_intp']) as data:
+        with xr.open_dataset(self.wrf.config['tests']['lead_day1']) as data:
             self.wrf.concat('T2', True, 1)
-            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'], rtol=1e-4)
+            np.testing.assert_allclose(self.wrf.data['T2'], data['interp'], rtol=1e-4)
 
     def test_lead_day_whole_domain(self):
-        with xr.open_dataset(self.wrf.config['tests']['lead_whole']) as data:
+        with xr.open_dataset(self.wrf.config['tests']['lead_day1']) as data:
             self.wrf.concat('T2', lead_day=1)
             # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
-            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
+            np.testing.assert_allclose(self.wrf.data['T2'], data['field'])
 
     def test_all_whole_domain(self):
-        with xr.open_dataset(self.wrf.config['tests']['all_whole']) as data:
+        with xr.open_dataset(self.wrf.config['tests']['all_days']) as data:
             self.wrf.concat('T2')
-            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
+            np.testing.assert_allclose(self.wrf.data['T2'], data['field'])
 
     def test_all_interpolated(self):
-        with xr.open_dataset(self.wrf.config['tests']['all_intp']) as data:
+        with xr.open_dataset(self.wrf.config['tests']['all_days']) as data:
             self.wrf.concat('T2', True)
-            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'], rtol=1e-4)
+            np.testing.assert_allclose(self.wrf.data['T2'], data['interp'], rtol=1e-4)
 
-
-class lead(object):
-    max_workers = 16
-    def __init__(self, paths, domain, prefix='wrfout'):
-        self.dirs = []
-        self._s = '{}_{}_*'.format(prefix, domain)
-        for p in paths:
-            self.dirs.extend(sorted(glob(pa.join(p, 'c01_*'))))
-        self.dirs = [d for d in self.dirs if pa.isdir(d)]
-        self.files = [glob(pa.join(d, self._s)) for d in self.dirs]
-
-    def remove_from_list(self, nc_var):
-        self.dirs = [d for d in self.dirs
-                if np.datetime64(datetime.strptime(re.search('c01_(.+)', d).group(1), '%Y%m%d%H'))
-                  not in nc_var.start.values]
-
-    def set_dirs(self, dirs):
-        self.dirs = [d for d in dirs if pa.isdir(d)]
-
-
-    def concat(self, var, path, dt=-4):
-        sim = partial(self.by_sim, var, self._s, dt)
-        x = sim(self.dirs.pop(0))[1]
-        self.x = xr.concat((self.x, x), 'start') if hasattr(self, 'x') else x
-        with ThreadPoolExecutor(max_workers = self.max_workers) as exe:
-            for i, r in enumerate(exe.map(sim, self.dirs)):
-                d, x = r
-                self.x = xr.concat((self.x, x), 'start')
-                self.dirs.remove(d)
-                if (i + 1) % 50 == 0:
-                    self.x.to_netcdf(path)
-        self.x.reindex(start = self.x.start[self.x.start.argsort()]).to_netcdf(path)
-
-    @staticmethod
-    def by_sim(var, s, dt, d):
-        with xr.open_mfdataset(pa.join(d, s)) as ds:
-            ds['XTIME'] = ds.XTIME + np.timedelta64(dt, 'h')
-            x = ds[var]
-            x = x.reindex(Time = np.argsort(x.XTIME.load()))
-            print('using: {}'.format(ds.START_DATE))
-            # x.coords['timestep'] = ('Time', np.arange(len(x.Time)))
-            # x.swap_dims({'Time': 'timestep'})
-            x.expand_dims('start')
-            x['start'] = x.XTIME.values.min()
-            return d, x.load()
-
-
-def run_lead(paths, var):
-    l = lead(paths, 'd03')
-    i = 0
-    while len(l.dirs) > 0:
-        fn = '{}{}.nc'.format(var, i)
-        try:
-            l.concat(var, fn)
-        except:
-            l.x.to_netcdf(fn)
-            del l.x
-            i += 1
-            continue
 
 if __name__ == '__main__':
     unittest.main()
