@@ -195,6 +195,7 @@ texinfo_documents = [
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3', None),
     'np': ('http://docs.scipy.org/doc/numpy/', None),
+    'scipy': ('http://docs.scipy.org/doc/scipy/reference/', None),
     'xr': ('http://xarray.pydata.org/en/stable', None),
     'pd': ('http://pandas.pydata.org/pandas-docs/stable/', None),
     'mpl': ('http://matplotlib.org/', None),

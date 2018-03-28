@@ -11,15 +11,12 @@ WRFOUT concatenation
 
         python -m WRF
 
-    * For now, import troubles (can't import from higher level than package) are circumvented with sys.path.append().
-
 .. TODO::
 
     * interpolation by precomputed spatial matrix
 
 """
-import re, sys, unittest
-sys.path.append('..')
+import re, unittest
 from glob import glob
 import os.path as pa
 import xarray as xr
@@ -31,9 +28,6 @@ from timeit import default_timer as timer
 from datetime import datetime, timedelta
 from configparser import ConfigParser
 from pyproj import Proj
-from scipy import interpolate as ip
-from geo import proj_params, affine
-import helpers as hh
 
 
 class OUT(object):
@@ -41,22 +35,53 @@ class OUT(object):
     Class variable *max_workers* controls how many threads are used.
 
     :param paths: list of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs
+    :param domain: Domain specifier for which to search among WRFOUT-files.
     :param hour: hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
+    :param from_date: From what date onwards to search (only simulation start dates), if a start date is desired.
+    :type from_date: %Y%m%d :obj:`str`
+    :param stations: DataFrame with station locations (as returned by a call to :meth:`.CEAZA.Downloader.get_stations`) to which the variable(s) is (are) to be interpolated, or expression which evaluates to ``True`` if the default station data is to be used (as saved in **WRF.cfg**).
+    :param interpolator: Which interpolator (if any) to use: ``scipy`` - use :class:`python.intp.GridInterpolator`; ``intp`` - use :class:`python.intp.BilinearInterpolator`.
 
     """
     max_workers = 16
     config_file = './WRF.cfg'
 
-    def __init__(self, paths=None, hour=None):
+    def __init__(self, paths=None, domain=None, hour=None, from_date=None, stations=None, interpolator=None, prefix='wrfout'):
         dirs = []
+        self._glob_pattern = '{}_{}_*'.format(prefix, domain)
         if paths is None:
             self.config = ConfigParser()
             self.config.read(self.config_file)
             paths = [p for p in self.config['wrfout'].values() if pa.isdir(p)]
         for p in paths:
             dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
-        self.dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
+        dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
+        self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+
+        if stations is not None:
+            self._stations = stations
+
+        if interpolator is not None:
+            f = glob(pa.join(self.dirs[0], self._glob_pattern))
+            if interpolator == 'scipy':
+                from interpolate import GridInterpolator
+                with xr.open_dataset(f[0]) as ds:
+                    self.intp = GridInterpolator(ds, self.stations)
+            elif interpolator == 'intp':
+                from interpolate import BilinearInterpolator
+                with xr.open_dataset(f[0]) as ds:
+                    self.intp = BilinearInterpolator(ds, self.stations)
+
         print('WRF.OUT initialized with {} directories'.format(len(self.dirs)))
+
+    @property
+    def stations(self):
+        try:
+            return self._stations
+        except:
+            with pd.HDFStore(self.config['stations']['sta']) as sta:
+                self._stations = sta['stations']
+            return self._stations
 
     def run(self, outfile, **kwargs):
         i = 0
@@ -71,28 +96,23 @@ class OUT(object):
                 del self.data
                 i += 1
 
-    def concat(self, var, domain, stations=None, lead_day=None, hour=None, from_date=None, dt=-4, prefix='wrfout'):
-        """Concatenate the found WRFOUT files. If ``stations`` is given as a DataFrame as returned by :meth:`.CEAZA.Downloader.get_stations`, the variables are spatially interpolated to the lat/lon values in that DataFrame. If ``stations`` is set to any expression that evaluates to ``True``, the default stations data is loaded as given in a config file (class variable :attr:`.config_file`). If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
+    def concat(self, var, interpolate=None, lead_day=None, dt=-4):
+        """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.OUT` or read in from the :class:`~pandas.HDFStore` specified in the :attr:`.config_file`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
         :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
-        :param domain: Domain specifier for which to search among WRFOUT-files.
+        :param interpolate: Whether or not to interpolate to station locations (see :class:`.OUT`).
+        :type interpolated: :obj:`bool`
         :param lead_day: Lead day of the forecast for which to search, if only one particular lead day is desired.
-        :param stations: 'stations' DataFrame with locations (as returned by a call to :meth:`.CEAZA.Downloader.get_stations`) to which the variable(s) is (are) to be interpolated, or expression which evaluates to ``True`` if the default station data is to be used (as saved in **WRF.cfg**).
-        :param from_date: From what date onwards to search, if a start date is desired.
-        :param dt: Time difference to UTC in hours by which to shift the time index
-        :param prefix: Prefix of the WRFOUT files (default **wrfout**).
+        :param dt: Time difference to UTC *in hours* by which to shift the time index.
+        :type dt: :obj:`int`
         :returns: concatenated data object
         :rtype: :class:`~xarray.Dataset`
 
         """
         start = timer()
-        glob_pattern = '{}_{}_*'.format(prefix, domain)
 
-        if stations is True:
-            with pd.HDFStore(self.config['stations']['sta']) as sta:
-                stations = sta['stations']
-
-        func = partial(self._extract, var, glob_pattern, lead_day, stations, dt)
+        func = partial(self._extract, var, self._glob_pattern, lead_day, dt,
+                       self.intp if interpolate else None)
 
         self.data = func(self.dirs[0])
         if len(self.dirs) > 1:
@@ -103,7 +123,7 @@ class OUT(object):
         print('Time taken: {:.2f}'.format(timer() - start))
 
     @staticmethod
-    def _extract(var, glob_pattern, lead_day, stations, dt, d):
+    def _extract(var, glob_pattern, lead_day, dt, interp, d):
         with xr.open_mfdataset(pa.join(d, glob_pattern)) as ds:
             print('using: {}'.format(ds.START_DATE))
             x = ds[np.array([var]).flatten()].to_array().sortby('XTIME') # this seems to be at the root of Dask warnings
@@ -111,58 +131,40 @@ class OUT(object):
             if lead_day is not None:
                 t = x.XTIME.to_index()
                 x = x.isel(Time = (t - t.min()).days == lead_day)
-            if stations is not None:
-                x = xr_interp(x, proj_params(ds), stations)
+            if interp is not None:
+                x = interp(x)
             x.load()
             x.expand_dims('start')
             x['start'] = x.XTIME.min()
             return x.load().to_dataset('variable')
 
-def grid_interp(xy, data, ij, method='linear'):
-    "Interpolation for data on a sufficiently regular mesh."
-    m, n = data.shape[:2]
-    tg = affine(*xy)
-    coords = np.roll(tg(np.r_['0,2', ij]).T, 1, 1)
-    return [ip.interpn((range(m), range(n)), data[:, :, k], coords, method, bounds_error=False)
-         for k in range(data.shape[2])]
-
-def xr_interp(v, proj_params, stations, method='linear'):
-    p = Proj(**proj_params)
-    ij = p(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
-    xy = p(hh.g2d(v['XLONG']), hh.g2d(v['XLAT']))
-    x = v.stack(n = v.dims[:-2]).transpose(*v.dims[-2:], 'n')
-    y = grid_interp(xy, x.values, ij, method=method)
-    ds = xr.DataArray(y, coords=[('n', x.indexes['n']), ('station', stations.index)]).unstack('n')
-    ds.coords['XTIME'] = ('Time', v.XTIME)
-    return ds
-
 
 class ConcatTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.wrf = OUT(hour=0)
+        cls.wrf = OUT(domain='d03', hour=0, interpolator='intp')
         cls.wrf.dirs = cls.wrf.dirs[:3]
 
     def test_lead_day_interpolated(self):
         with xr.open_dataset(self.wrf.config['tests']['lead_intp']) as data:
-            self.wrf.concat('T2', 'd03', True, 1, 0)
-            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
+            self.wrf.concat('T2', True, 1)
+            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'], rtol=1e-4)
 
     def test_lead_day_whole_domain(self):
         with xr.open_dataset(self.wrf.config['tests']['lead_whole']) as data:
-            self.wrf.concat('T2', 'd03', lead_day=1, hour=0)
+            self.wrf.concat('T2', lead_day=1)
             # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
             np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
 
     def test_all_whole_domain(self):
         with xr.open_dataset(self.wrf.config['tests']['all_whole']) as data:
-            self.wrf.concat('T2', 'd03')
+            self.wrf.concat('T2')
             np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
 
     def test_all_interpolated(self):
         with xr.open_dataset(self.wrf.config['tests']['all_intp']) as data:
-            self.wrf.concat('T2', 'd03', True)
-            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'])
+            self.wrf.concat('T2', True)
+            np.testing.assert_allclose(self.wrf.data['T2'], data['T2'], rtol=1e-4)
 
 
 class lead(object):

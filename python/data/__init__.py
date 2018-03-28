@@ -5,6 +5,9 @@
 .. automodule:: python.data.compare
     :members:
 
+.. automodule:: python.data.interpolate
+    :members:
+
 .. automodule:: python.data.WRF
     :members:
 
