@@ -63,4 +63,8 @@ Plotting
 .. automodule:: python.plots
    :members:
 
+Filtering
+=========
 
+.. automodule:: python.filter
+   :members:

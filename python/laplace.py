@@ -33,14 +33,9 @@ class LRLR(object):
     """
     def __init__(self, stations, weights=None, laplacian=None):
         d = self.distance_matrix(stations)
-        if weights is None:
-            self.D = 1 - d / d.max()
-        else:
-            self.D = weights(d)
-        if laplacian is None:
-            self.L = self.D
-        else:
-            self.L = laplacian(d)
+        D = 1 - d / d.max()
+        self.D = D if weights is None else weights(d)
+        self.L = D if laplacian is None else laplacian(d)
 
     @staticmethod
     def distance_matrix(stations):

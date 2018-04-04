@@ -105,3 +105,19 @@ def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
     if center is not False:
         lim = np.abs(plot.get_clim()).max() if isinstance(center, bool) else center
         plot.set_clim(-lim, lim)
+
+
+class Coquimbo(object):
+    def __init__(self, path='/home/arno/Documents/data/geo/GSHHG'):
+        from cartopy.io import shapereader
+        from os.path import join
+        self.coast = shapereader.Reader(join(path, 'coast.shp'))
+        self.border = shapereader.Reader(join(path, 'border.shp'))
+        self.rivers = shapereader.Reader(join(path, 'river.shp'))
+
+    def __call__(self, ax, proj=crs.PlateCarree()):
+        ax.background_patch.set_color('lightblue')
+        ax.add_geometries(self.coast.geometries(), crs=proj, facecolor='lightgray', edgecolor='k', zorder=0)
+        ax.add_geometries(self.rivers.geometries(), crs=proj, facecolor='none', edgecolor='b', zorder=0)
+        ax.add_geometries(self.border.geometries(), crs=proj, facecolor='none', edgecolor='g', linewidth=.5, zorder=0)
+        ax.set_extent((-72.2, -69.8, -32.5, -28.2), crs=proj)

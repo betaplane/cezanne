@@ -135,8 +135,8 @@ The *x* and *y* components of each of these ``var`` dimensions are accessed via 
 
         """
         from pandas import Index
-        dx = k.reshape((1, 1, -1)) - np.expand_dims(lon, 2)
-        dy = l.reshape((1, 1, -1)) - np.expand_dims(lat, 2)
+        dx = k.reshape((1, 1, -1)) - np.expand_dims(x, 2)
+        dy = l.reshape((1, 1, -1)) - np.expand_dims(y, 2)
 
         d = (dx**2 + dy**2) ** .5
         # this is the sum over all distances of four points arranged in a square
