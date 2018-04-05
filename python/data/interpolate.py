@@ -28,16 +28,18 @@ In the x-direction, two interpolations are performed on the lines denoted *x0* a
 
 """
 
-import sys
-sys.path.append('..')
 import xarray as xr
 import numpy as np
 import pandas as pd
 import scipy.interpolate as ip
 from pyproj import Proj
-from geo import proj_params
-import helpers as hh
 import unittest
+from geo import proj_params
+
+
+def g2d(v):
+    m, n = v.shape[-2:]
+    return np.array(v[:]).flatten()[-m * n:].reshape((m, n))
 
 class InterpolatorBase(object):
     spatial_dims = ['south_north', 'west_east']
@@ -64,7 +66,7 @@ class GridInterpolator(InterpolatorBase):
         from geo import affine
         self.method = method
         proj = Proj(**proj_params(ds))
-        xy = proj(hh.g2d(ds['XLONG']), hh.g2d(ds['XLAT']))
+        xy = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
         tg = affine(*xy)
         ij = proj(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
         self.coords = np.roll(tg(np.r_['0,2', ij]).T, 1, 1)
@@ -102,16 +104,20 @@ class BilinearInterpolator(InterpolatorBase):
             BLI = BilinearInterpolator(ds, stations)
             result = BLI(ds['T2'])
 
-    If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array`::
+    If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array` - also, **this only works as expected if all the variables share the same dimensions**::
 
         result = BLI(ds[['T2', 'Q2']].to_array())
+
+    On the other hand, it shouldn't be too much of a penaltiy efficiency-wise to apply the interpolation by variable::
+
+        result = ds[['T', 'PH']].apply(BLI)
 
     """
 
     def __init__(self, ds, stations):
         from geo import Squares
         pr = Proj(**proj_params(ds))
-        self.x, self.y = pr(hh.g2d(ds.XLONG), hh.g2d(ds.XLAT))
+        self.x, self.y = pr(g2d(ds.XLONG), g2d(ds.XLAT))
         self.index = stations.index
         self.i, self.j = pr(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
         self.points = Squares.compute(self.x, self.y, self.i, self.j)

@@ -1,8 +1,6 @@
 """
-Note
-----
-
-The 'file' field in the bibtex file caused problems for sphinxcontrib.bibtex.
+.. NOTE::
+    The 'file' field in the bibtex file caused problems for sphinxcontrib.bibtex.
 
 """
 #!/usr/bin/env python
@@ -22,8 +20,13 @@ class LRLR(object):
         stations = DL.get_stations(fields=False)
         LR = LRLR(stations)
 
+    .. NOTE::
+        One of either **stations** or **distances** has to be given.
+
     :param stations: 'stations' DataFrame as returned from :meth:`.data.CEAZA.Downloader.get_stations`
     :type stations: :class:`~pandas.DataFrame`
+    :param distances: distance matrix
+    :type distances: :class:`~numpy.ndarray`
     :param weights: function to apply to distances for spatial weighting of regression
     :type weights: callable or None
     :param laplacian: function to apply to distances for weighting of the spatial Laplacian
@@ -31,8 +34,11 @@ class LRLR(object):
     .. bibliography:: refs.bib
 
     """
-    def __init__(self, stations, weights=None, laplacian=None):
-        d = self.distance_matrix(stations)
+    def __init__(self, stations=None, distances=None, weights=None, laplacian=None):
+        if stations is not None:
+            d = self.distance_matrix(stations)
+        if distances is not None:
+            d = xr.DataArray(distances, dims=('space', 'i'))
         D = 1 - d / d.max()
         self.D = D if weights is None else weights(d)
         self.L = D if laplacian is None else laplacian(d)

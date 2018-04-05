@@ -167,13 +167,15 @@ class Concatenator(object):
                 write('{}{}.nc'.format(outfile, i), start)
 
 
-    def concat(self, var, interpolate=None, lead_day=None, dt=-4):
+    def concat(self, var, interpolate=None, lead_day=None, func=None, dt=-4):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config_file`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
         :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
         :param interpolate: Whether or not to interpolate to station locations (see :class:`.Concatenator`).
         :type interpolated: :obj:`bool`
         :param lead_day: Lead day of the forecast for which to search, if only one particular lead day is desired.
+        :param func: callable to be applied to the data before concatenation (after interpolation)
+        :type func: :obj:`callable`
         :param dt: Time difference to UTC *in hours* by which to shift the time index.
         :type dt: :obj:`int`
         :returns: concatenated data object
@@ -184,7 +186,7 @@ class Concatenator(object):
         self.dt = dt
 
         func = partial(self._extract, var, self._glob_pattern, lead_day, dt,
-                       self.intp if interpolate else None)
+                       self.intp if interpolate else None, func)
 
         self.data = func(self.dirs[0])
         if len(self.dirs) > 1:
@@ -195,20 +197,23 @@ class Concatenator(object):
         print('Time taken: {:.2f}'.format(timer() - start))
 
     @staticmethod
-    def _extract(var, glob_pattern, lead_day, dt, interp, d):
+    def _extract(var, glob_pattern, lead_day, dt, interp, func, d):
         with xr.open_mfdataset(pa.join(d, glob_pattern)) as ds:
             print('using: {}'.format(ds.START_DATE))
-            x = ds[np.array([var]).flatten()].to_array().sortby('XTIME') # this seems to be at the root of Dask warnings
+            x = ds[np.array([var]).flatten()].sortby('XTIME') # this seems to be at the root of Dask warnings
             x['XTIME'] = x.XTIME + np.timedelta64(dt, 'h')
             if lead_day is not None:
                 t = x.XTIME.to_index()
                 x = x.isel(Time = (t - t.min()).days == lead_day)
             if interp is not None:
-                x = interp(x)
+                x = x.apply(interp)
+            if func is not None:
+                x = func(x)
             x.load()
-            x.expand_dims('start')
-            x['start'] = x.XTIME.min()
-            return x.load().to_dataset('variable')
+            for v in x.data_vars:
+                x[v] = x[v].expand_dims('start')
+            x['start'] = ('start', pd.DatetimeIndex([x.XTIME.min().item()]))
+            return x
 
 
 class ConcatTest(unittest.TestCase):
