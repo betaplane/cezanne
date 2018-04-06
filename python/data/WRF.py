@@ -3,19 +3,27 @@
 WRFOUT concatenation
 --------------------
 
+Example Usage::
+
+    import WRF
+    w = WRF.Concatenator(domain='d03', interpolator='bilinear')
+    w.run('T2-PSFC', var=['T2', 'PSFC'], interpolate=True)
+
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
     * Data for the tests is in the same directory as this file, as is the config file (*WRF.cfg*)
     * Test are run e.g. by::
 
-        python -m WRF
+        python -m unittest WRF.Tests
 
-Example Usage::
+.. warning::
 
-    import WRF
-    w = WRF.Concatenator(domain='d03', interpolator='bilinear')
-    w.run('T2-PSFC', var=['T2', 'PSFC'], interpolate=True)
+    The current layout with ThreadPoolExecutor seems to work on the UV only if one sets::
+
+        export OMP_NUM_THREADS=1
+
+    (a conflict between OpenMP and dask?)
 
 """
 import re, unittest
@@ -50,32 +58,33 @@ def align_stations(wrf, df):
     return xr.DataArray(np.stack([df[c].values[idx].squeeze() for c in cols], 2),
                      coords = [wrf.coords['start'], wrf.coords['Time'], ('station', cols)])
 
-def get_files(domain=None, lead_day=None, hour=None, from_date=None, prefix='wrfout'):
-    """Function which mimics the way :class:`.Concatenator` retrieves the files to concatenate from the :data:`.config_file`, with the same keywords.
-
-    :returns: Two arrays: one containing the list of files, one containing one tuple per directory scanned, of (directory, number of files in directory, simulation start hour)
+class Files(object):
+    """Class which mimics the way :class:`.Concatenator` retrieves the files to concatenate from the :data:`.config_file`, with the same keywords.
 
     """
-    config = ConfigParser()
-    config.read(pa.join(pa.dirname(__file__), config_file))
-    dirs = []
-    for p in config['wrfout'].values():
-        if pa.isdir(p):
-            dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
-    dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
-    dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+    def __init__(self, domain=None, lead_day=None, hour=None, from_date=None, prefix='wrfout'):
+        config = ConfigParser()
+        config.read(pa.join(pa.dirname(__file__), config_file))
+        dirs = []
+        for p in config['wrfout'].values():
+            if pa.isdir(p):
+                dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
+        dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
+        dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
 
-    def name(d):
-        ts = pd.Timestamp.strptime(pa.split(d)[1], 'c01_%Y%m%d%H')
-        if lead_day is None:
-            g = glob(pa.join(d, '{}_{}_*'.format(prefix, domain)))
-        else:
-            s = (ts + pd.Timedelta(lead_day, 'D')).strftime('%Y-%m-%d_%H:%M:%S')
-            g = [f for f in glob(pa.join(d, '{}_{}_{}'.format(prefix, domain, s))) if pa.isfile(f)]
-        return (g, len(g), ts.hour)
+        def name(d):
+            ts = pd.Timestamp.strptime(pa.split(d)[1], 'c01_%Y%m%d%H')
+            if lead_day is None:
+                g = glob(pa.join(d, '{}_{}_*'.format(prefix, domain)))
+            else:
+                s = (ts + pd.Timedelta(lead_day, 'D')).strftime('%Y-%m-%d_%H:%M:%S')
+                g = [f for f in glob(pa.join(d, '{}_{}_{}'.format(prefix, domain, s))) if pa.isfile(f)]
+            return (g, len(g), ts.hour)
 
-    files, length, hour = zip(*[name(d) for d in dirs])
-    return [f for d in files for f in d], list(zip(dirs, length, hour))
+        self.files, self.length, self.hour = zip(*[name(d) for d in dirs])
+
+    def by_sim_length(self, n):
+        return [f for d in np.array(self.files)[np.array(self.length) == n] for f in d]
 
 
 class Concatenator(object):
@@ -192,8 +201,11 @@ class Concatenator(object):
         if len(self.dirs) > 1:
             with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self.dirs)-1)) as exe:
                 for i, f in enumerate(exe.map(func, self.dirs[1:])):
-                    self.data = xr.concat((self.data, f), 'start' if lead_day is None else 'Time')
-            self.data = self.data.sortby('start' if lead_day is None else 'XTIME')
+                    self.data = xr.concat((self.data, f), 'start')
+            if lead_day is None:
+                self.data = self.data.sortby('start')
+            else:
+                self.data = self.data.stack(time=('start', 'Time')).sortby('XTIME')
         print('Time taken: {:.2f}'.format(timer() - start))
 
     @staticmethod

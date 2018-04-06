@@ -28,6 +28,8 @@ In the x-direction, two interpolations are performed on the lines denoted *x0* a
 
 """
 
+import sys
+sys.path.append('..')
 import xarray as xr
 import numpy as np
 import pandas as pd
