@@ -188,12 +188,12 @@ class LRLR(object):
         if vars:
             return X, Y
         I = np.identity(2)
-        r = cls(1-I, lambda d:d*dist+I, lambda d:d*lapl+I)
+        r = cls(None, 1-I, lambda d:d*dist+I, lambda d:d*lapl+I)
         if init:
             return X, Y, r
         r.regress(X, Y, lda, window=100, step=100, laplacian=lambda d:I+(1-I)*time)
         fig, axs = plt.subplots(r.p['time'].size, r.p['space'].size)
-        for i,ay in enumerate(axs):
+        for i, ay in enumerate(axs):
             for j, ax in enumerate(ay):
                 # r.plot(X, Y, loc=(i,j), ax=ax, var=0, icpt=1)
                 r.plot(X, Y, loc=(i,j), ax=ax)

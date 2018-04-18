@@ -127,16 +127,20 @@ class GHCND2(object):
         l = []
         index = []
         for f in self.tf:
-            not_found = True
+            found = None
             for s in stations:
                 if re.search(str(s), f.name):
-                    not_found = False
+                    found = s
                     break
-            if not_found:
+            if found is None:
                 continue
+            else:
+                stations.remove(found)
             bio = BytesIO(self.tf.extractfile(f).read())
             l.append(self.convert(bio))
             index.append(s)
+            if len(stations) == 0:
+                break
         return xr.concat(l, pd.Index(index, name='station'))
 
     def convert(self, bytesIO):
@@ -146,9 +150,9 @@ class GHCND2(object):
         data = xr.concat([xr.DataArray(df.iloc[:, i::4], coords=[('rows', rows), ('days', range(1, 32))]) 
                           for i in range(4, 8)], pd.Index(['value', 'mflag', 'qflag', 'sflag'], name='flag'))
         data = data.unstack('rows').stack(time=('months', 'days'))
-        data = data.sel(time=data.sel(flag='value').notnull().any('field'))
+        data = data.sel(time=data.sel(flag='value').notnull().any('field').values)
         data['time'] = ('time', pd.DatetimeIndex(['{}-{}'.format(*d) for d in data.time.values]))
-        return data.isel(time = data.time.argsort())
+        return data.sortby('time')
 
     def __del__(self):
         self.tf.close()

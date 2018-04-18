@@ -52,7 +52,9 @@ def align_stations(wrf, df):
     :rtype: :class:`~xarray.DataArray`
 
     """
-    xt = wrf.XTIME.astype('datetime64[h]') # necessary because some timestamps seem to be slightly off-round hours
+    # necessary because some timestamps seem to be slightly off-round hours
+    xt = wrf.XTIME.stack(t=('start', 'Time'))
+    xt = xr.DataArray(pd.Series(xt.values).dt.round('h'), coords=xt.coords).unstack('t')
     idx = np.vstack(df.index.get_indexer(xt.sel(start=s)) for s in wrf.start)
     cols = df.columns.get_level_values('station').intersection(wrf.station)
     return xr.DataArray(np.stack([df[c].values[idx].squeeze() for c in cols], 2),
@@ -104,7 +106,8 @@ class Concatenator(object):
     "number of threads to be used"
 
 
-    def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout'):
+    def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):
+        self.dt = dt
         dirs = []
         self._glob_pattern = '{}_{}_*'.format(prefix, domain)
         if paths is None:
@@ -144,7 +147,12 @@ class Concatenator(object):
                 self._stations = sta['stations']
             return self._stations
 
-    def run(self, outfile, **kwargs):
+    def remove_dirs(self, ds):
+        t = ds.indexes['start'] - pd.Timedelta(self.dt, 'h')
+        s = [d.strftime('%Y%m%d%H') for d in t]
+        return [d for d in self.dirs if d[-10:] not in s]
+
+    def run(self, outfile, previous_file=None, **kwargs):
         """Wrapper around the :meth:`.concat` call which writes out a netCDF file whenever an error occurs and restarts with all already processed directories removed from :attr:`.dirs`
 
         :param outfile: base name of the output netCDF file (no extension, numberings are added in case of restarts)
@@ -153,13 +161,15 @@ class Concatenator(object):
             Are all passed to :meth:`.concat`
 
         """
+        if previous_file is not None:
+            with xr.open_dataset(previous_file) as ds:
+                self.dirs = self.remove_dirs(ds)
+
         i = 0
         def write(filename, start):
             global i
             self.data.to_netcdf(filename)
-            t = self.data.indexes['start'] - pd.Timedelta(self.dt, 'h')
-            s = [d.strftime('%Y%m%d%H') for d in t]
-            self.dirs = [d for d in self.dirs if d[-10:] not in s]
+            self.dirs = self.remove_dirs(self.data)
             with open('timing.txt') as f:
                 f.write('{} dirs in {} seconds, file {}'.format(
                     len_dirs - len(self.dirs), timer() - start), filename)
@@ -176,7 +186,7 @@ class Concatenator(object):
                 write('{}{}.nc'.format(outfile, i), start)
 
 
-    def concat(self, var, interpolate=None, lead_day=None, func=None, dt=-4):
+    def concat(self, var, interpolate=None, lead_day=None, func=None):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config_file`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
         :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
@@ -192,9 +202,8 @@ class Concatenator(object):
 
         """
         start = timer()
-        self.dt = dt
 
-        func = partial(self._extract, var, self._glob_pattern, lead_day, dt,
+        func = partial(self._extract, var, self._glob_pattern, lead_day, self.dt,
                        self.intp if interpolate else None, func)
 
         self.data = func(self.dirs[0])

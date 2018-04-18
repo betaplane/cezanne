@@ -35,8 +35,8 @@ class detect(object):
         fig.show()
 
     def slp_plot(self, t):
-        plt.set_cmap('PiYG_r')
         fig, axs = plt.subplots(2, 4, subplot_kw={'projection': crs.PlateCarree()}, figsize=(14, 6))
+        plt.set_cmap('PiYG_r')
         for i in range(4):
             x = self.slp.sel(time = t + pd.Timedelta(i - 2, 'D'))
             pl = axs[0, i].contourf(x.lon, x.lat, x)
@@ -46,6 +46,10 @@ class detect(object):
             pl = axs[1, i].contourf(y.lon, y.lat, y)
             axs[1, i].coastlines()
             plt.colorbar(pl, ax=axs[1, i])
+
+        ax = fig.add_axes([0, 0, 1, .9])
+        ax.axis('off')
+        ax.set_title(t)
         plt.pause(.1)
 
 
