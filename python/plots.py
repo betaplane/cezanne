@@ -99,9 +99,9 @@ def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
     cax = ax.figure.add_axes([x, bb.y0, width, bb.y1-bb.y0])
     plt.colorbar(plot, cax=cax)
     cax.yaxis.set_ticks_position(loc)
-    ax.coastlines()
-    ax.gridlines()
-    ax.set_extent((-180, 180, -90, lat), crs.PlateCarree())
+    # ax.coastlines()
+    # ax.gridlines()
+    # ax.set_extent((-180, 180, -90, lat), crs.PlateCarree())
     if center is not False:
         lim = np.abs(plot.get_clim()).max() if isinstance(center, bool) else center
         plot.set_clim(-lim, lim)
