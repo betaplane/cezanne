@@ -57,7 +57,7 @@ def align_stations(wrf, df):
     xt = xr.DataArray(pd.Series(xt.values).dt.round('h'), coords=xt.coords).unstack('t')
     idx = np.vstack(df.index.get_indexer(xt.sel(start=s)) for s in wrf.start)
     cols = df.columns.get_level_values('station').intersection(wrf.station)
-    return xr.DataArray(np.stack([df[c].values[idx].squeeze() for c in cols], 2),
+    return xr.DataArray(np.stack([np.where(idx>=0, df[c].values[idx].squeeze(), np.nan) for c in cols], 2),
                      coords = [wrf.coords['start'], wrf.coords['Time'], ('station', cols)])
 
 class Files(object):

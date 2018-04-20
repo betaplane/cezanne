@@ -115,9 +115,13 @@ class Coquimbo(object):
         self.border = shapereader.Reader(join(path, 'border.shp'))
         self.rivers = shapereader.Reader(join(path, 'river.shp'))
 
-    def __call__(self, ax, proj=crs.PlateCarree()):
-        ax.background_patch.set_color('lightblue')
-        ax.add_geometries(self.coast.geometries(), crs=proj, facecolor='lightgray', edgecolor='k', zorder=0)
-        ax.add_geometries(self.rivers.geometries(), crs=proj, facecolor='none', edgecolor='b', zorder=0)
-        ax.add_geometries(self.border.geometries(), crs=proj, facecolor='none', edgecolor='g', linewidth=.5, zorder=0)
-        ax.set_extent((-72.2, -69.8, -32.5, -28.2), crs=proj)
+    def __call__(self, ax, proj=crs.PlateCarree(), lines_only=False, colors=['k']):
+        if lines_only:
+            ax.add_geometries(self.coast.geometries(), crs=proj, facecolor='none', edgecolor=colors[0], zorder=10)
+            ax.add_geometries(self.border.geometries(), crs=proj, facecolor='none', edgecolor=colors[-1], linewidth=.5, zorder=10)
+        else:
+            ax.background_patch.set_color('lightblue')
+            ax.add_geometries(self.coast.geometries(), crs=proj, facecolor='lightgray', edgecolor='k', zorder=0)
+            ax.add_geometries(self.rivers.geometries(), crs=proj, facecolor='none', edgecolor='b', zorder=0)
+            ax.add_geometries(self.border.geometries(), crs=proj, facecolor='none', edgecolor='g', linewidth=.5, zorder=0)
+            ax.set_extent((-72.2, -69.8, -32.5, -28.2), crs=proj)
