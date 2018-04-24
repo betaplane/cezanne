@@ -25,6 +25,10 @@ Example Usage::
 
     (a conflict between OpenMP and dask?)
 
+.. TODO::
+
+    The directory structure has changed. Need to update and filter out symbolic links etc.
+
 """
 import re, unittest
 from glob import glob
@@ -116,7 +120,7 @@ class Concatenator(object):
                 "config file not readable"
             paths = [p for p in self.config['wrfout'].values() if pa.isdir(p)]
         for p in paths:
-            dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
+            dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if (pa.isdir(d) and not pa.islink(d))])
         dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
         self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
 
@@ -170,9 +174,9 @@ class Concatenator(object):
             global i
             self.data.to_netcdf(filename)
             self.dirs = self.remove_dirs(self.data)
-            with open('timing.txt') as f:
+            with open('timing.txt', 'a') as f:
                 f.write('{} dirs in {} seconds, file {}'.format(
-                    len_dirs - len(self.dirs), timer() - start), filename)
+                    len_dirs - len(self.dirs), timer() - start, filename))
             i += 1
 
         while len(self.dirs) > 0:
@@ -237,32 +241,40 @@ class Concatenator(object):
             return x
 
 
-class ConcatTest(unittest.TestCase):
+class Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.wrf = Concatenator(domain='d03', hour=0, interpolator='bilinear')
-        cls.wrf.dirs = cls.wrf.dirs[:3]
+        cls.wrf = Concatenator(domain='d03', interpolator='bilinear')
+        cls.wrf.dirs = [d for d in cls.wrf.dirs if re.search('c01_2016120[1-3]', d)]
 
     def test_lead_day_interpolated(self):
         with xr.open_dataset(self.wrf.config['tests']['lead_day1']) as data:
             self.wrf.concat('T2', True, 1)
-            np.testing.assert_allclose(self.wrf.data['T2'], data['interp'], rtol=1e-4)
+            np.testing.assert_allclose(
+                self.wrf.data['T2'].transpose('station', 'time'),
+                data['interp'].transpose('station', 'time'), rtol=1e-4)
 
     def test_lead_day_whole_domain(self):
         with xr.open_dataset(self.wrf.config['tests']['lead_day1']) as data:
             self.wrf.concat('T2', lead_day=1)
             # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
-            np.testing.assert_allclose(self.wrf.data['T2'], data['field'])
+            np.testing.assert_allclose(
+                self.wrf.data['T2'].transpose('south_north', 'west_east', 'time'),
+                data['field'].transpose('south_north', 'west_east', 'time'))
 
     def test_all_whole_domain(self):
         with xr.open_dataset(self.wrf.config['tests']['all_days']) as data:
             self.wrf.concat('T2')
-            np.testing.assert_allclose(self.wrf.data['T2'], data['field'])
+            np.testing.assert_allclose(
+                self.wrf.data['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
+                data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
 
     def test_all_interpolated(self):
         with xr.open_dataset(self.wrf.config['tests']['all_days']) as data:
             self.wrf.concat('T2', True)
-            np.testing.assert_allclose(self.wrf.data['T2'], data['interp'], rtol=1e-4)
+            np.testing.assert_allclose(
+                self.wrf.data['T2'].transpose('start', 'station', 'Time'),
+                data['interp'].transpose('start', 'station', 'Time'), rtol=1e-3)
 
 
 

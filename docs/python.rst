@@ -66,5 +66,5 @@ Plotting
 Filtering
 =========
 
-.. automodule:: python.filter
+.. automodule:: python.filters
    :members:

@@ -81,10 +81,14 @@ class GridInterpolator(InterpolatorBase):
 
     def __call__(self, x):
         dims = set(x.dims).symmetric_difference(self.spatial_dims)
-        X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
-        y = self._grid_interp(X.values)
-        ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
-        ds.coords['XTIME'] = ('Time', x.XTIME)
+        if len(dims) > 0:
+            X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
+            y = self._grid_interp(X.values)
+            ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
+            ds.coords['XTIME'] = ('Time', x.XTIME)
+        else:
+            y = ip.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
+            ds = xr.DataArray(y, coords=[('station', self.index)])
         return ds
 
 class BilinearInterpolator(InterpolatorBase):
@@ -131,9 +135,14 @@ class BilinearInterpolator(InterpolatorBase):
         self.W[range(n), K] = self.points.groupby('station').apply(self._weights).transpose('square', 'station')
 
     def __call__(self, x):
-        X = x.stack(s=self.spatial_dims, t=set(x.dims).symmetric_difference(self.spatial_dims))
-        y =  xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
-        y.coords['XTIME'] = x.coords['XTIME']
+        dims = set(x.dims).symmetric_difference(self.spatial_dims)
+        if len(dims) > 0:
+            X = x.stack(s=self.spatial_dims, t=dims)
+            y = xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
+            y.coords['XTIME'] = x.coords['XTIME']
+        else:
+            X = x.stack(s=self.spatial_dims)
+            y = xr.DataArray(self.W.dot(X), coords=[self.index])
         return y
 
     def plot(self, k):
