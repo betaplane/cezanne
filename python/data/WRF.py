@@ -45,6 +45,7 @@ from configparser import ConfigParser
 config_file = 'WRF.cfg'
 "name of the config file (in the same directory as this module)"
 
+
 def align_stations(wrf, df):
     """Align :class:`~pandas.DataFrame` with station data (as produced by :class:`.CEAZA.Downloader`) with a concatenated (and interpolated to station locations) netCDF file as produced by :class:`.Concatenator`. For now, works with a single field.
 
@@ -68,29 +69,44 @@ class Files(object):
     """Class which mimics the way :class:`.Concatenator` retrieves the files to concatenate from the :data:`.config_file`, with the same keywords.
 
     """
-    def __init__(self, domain=None, lead_day=None, hour=None, from_date=None, prefix='wrfout'):
-        config = ConfigParser()
-        config.read(pa.join(pa.dirname(__file__), config_file))
+    def __init__(self, paths=None, hour=None, from_date=None, pattern='c01_*', limit=None):
         dirs = []
-        for p in config['wrfout'].values():
-            if pa.isdir(p):
-                dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if pa.isdir(d)])
+        if paths is None:
+            self.config = ConfigParser()
+            assert len(self.config.read(pa.join(pa.dirname(__file__), config_file))) > 0, "config file not read"
+            self.paths = [p for p in self.config['wrfout'].values() if pa.isdir(p)]
+        for p in self.paths:
+            for d in sorted(glob(pa.join(p, pattern))):
+                if (pa.isdir(d) and not pa.islink(d)):
+                    dirs.append(d)
+                    if limit is not None and len(dirs) == limit:
+                        break
         dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
-        dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+        self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
 
-        def name(d):
-            ts = pd.Timestamp.strptime(pa.split(d)[1], 'c01_%Y%m%d%H')
-            if lead_day is None:
-                g = glob(pa.join(d, '{}_{}_*'.format(prefix, domain)))
-            else:
-                s = (ts + pd.Timedelta(lead_day, 'D')).strftime('%Y-%m-%d_%H:%M:%S')
-                g = [f for f in glob(pa.join(d, '{}_{}_{}'.format(prefix, domain, s))) if pa.isfile(f)]
-            return (g, len(g), ts.hour)
+    @staticmethod
+    def _name(domain, lead_day, prefix, d):
+        ts = pd.Timestamp.strptime(pa.split(d)[1][-10:], '%Y%m%d%H')
+        if lead_day is None:
+            g = glob(pa.join(d, '{}_{}_*'.format(prefix, domain)))
+        else:
+            s = (ts + pd.Timedelta(lead_day, 'D')).strftime('%Y-%m-%d_%H:%M:%S')
+            g = [f for f in glob(pa.join(d, '{}_{}_{}'.format(prefix, domain, s))) if pa.isfile(f)]
+        return (g, len(g), ts.hour)
 
-        self.files, self.length, self.hour = zip(*[name(d) for d in dirs])
+    def files(self, domain=None, lead_day=None, prefix='wrfout'):
+        name = partial(self._name, domain, lead_day, prefix)
+        self.files, self.length, self.hour = zip(*[name(d) for d in self.dirs])
 
     def by_sim_length(self, n):
         return [f for d in np.array(self.files)[np.array(self.length) == n] for f in d]
+
+    @classmethod
+    def first(cls, domain=None, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout'):
+        f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
+        name = partial(cls._name, domain, lead_day, prefix)
+        files, _, _ = name(f.dirs[0])
+        return xr.open_dataset(files[0])
 
 
 class Concatenator(object):
@@ -112,17 +128,9 @@ class Concatenator(object):
 
     def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):
         self.dt = dt
-        dirs = []
         self._glob_pattern = '{}_{}_*'.format(prefix, domain)
-        if paths is None:
-            self.config = ConfigParser()
-            assert len(self.config.read(pa.join(pa.dirname(__file__), config_file))) > 0, \
-                "config file not readable"
-            paths = [p for p in self.config['wrfout'].values() if pa.isdir(p)]
-        for p in paths:
-            dirs.extend([d for d in sorted(glob(pa.join(p, 'c01_*'))) if (pa.isdir(d) and not pa.islink(d))])
-        dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
-        self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+        files = Files(paths, hour, from_date)
+        self.dirs, self.config = files.dirs, files.config
 
         assert len(self.dirs) > 0, "no directories added"
 
