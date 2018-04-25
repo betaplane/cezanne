@@ -2,7 +2,6 @@
 import numpy as np
 from xarray import DataArray, open_dataset, concat
 from functools import singledispatch, partial
-from cartopy.io import shapereader
 
 def kml(name, lon, lat, code=None, nc=None):
     from simplekml import Kml, Style
@@ -267,32 +266,3 @@ class box(object):
     def stations(self, stations, lon, lat):
         sta = stations[[lon, lat]]
         return sta.loc[[self.inside(*st) for st in sta.as_matrix()]]
-
-
-class GeoBase(object):
-    """
-A class to hold transformations from two Latitude/Longitue dimensions on a :class:`xarray.DataArray` to a single dimension (e.g. for regression purposes).
-    """
-    def __init__(self, Y, mask=None, mean=False, std=False):
-        s = lambda x: x.stack(space = ('lat', 'lon'))
-        if mean:
-            Y = Y - Y.mean('time')
-        if std:
-            Y = Y / Y.std('time')
-        self.Y = Y.stack(space = ('lat', 'lon')).transpose('time', 'space')
-        if mask is not None: # check if this is even necessary if masked values are nan and stack() is used
-            self.Y = self.Y.sel(space = s(mask).values.astype(bool).flatten())
-        self.N, self.D = self.Y.shape
-
-
-class sshfs_shapereader(shapereader.Reader):
-    def __init__(self, path, sshfs):
-        from shapefile import Reader
-        self._sshfs = {k: sshfs.openbin('.'.join((path, k))) for k in ['shp', 'shx', 'dbf']}
-        self._reader = Reader(**self._sshfs)
-        self._geometry_factory = shapereader.GEOMETRY_FACTORIES.get(self._reader.shapeType)
-        self._fields = self._reader.fields
-
-    def __del__(self):
-        for f in self._sshfs.values():
-            f.close()

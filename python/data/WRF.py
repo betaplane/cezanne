@@ -30,6 +30,9 @@ Example Usage::
     The directory structure has changed. Need to update and filter out symbolic links etc.
 
 """
+
+__path__ = ['.', '..']
+
 import re, unittest
 from glob import glob
 import os.path as pa
@@ -40,7 +43,6 @@ from functools import partial
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
 from configparser import ConfigParser
-
 
 config_file = 'WRF.cfg'
 "name of the config file (in the same directory as this module)"
