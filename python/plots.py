@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from cartopy import crs
 from helpers import stationize
 
+config_file = '/HPC/arno/general.cfg'
+"name of the config file"
 
 def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, **kwargs):
     """Plot a matrix of the times when a given :class:`~pandas.DataFrame` has valid observations. Not sure with what data types it'll still work, but in general 0/False(/nan?) should work for nonexistent times, and 1/count for exisitng ones. Figure size is automatically computed, but can be overridden with the **figsize** or **fig_width** arguments.
@@ -108,9 +110,14 @@ def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
 
 
 class Coquimbo(object):
-    def __init__(self, path='/home/arno/Documents/data/geo/GSHHG'):
+    def __init__(self, path=None):
         from cartopy.io import shapereader
         from os.path import join
+        if path is None:
+            from configparser import ConfigParser
+            c = ConfigParser()
+            c.read(config_file)
+            path = c['GSHHG']['path']
         self.coast = shapereader.Reader(join(path, 'coast.shp'))
         self.border = shapereader.Reader(join(path, 'border.shp'))
         self.rivers = shapereader.Reader(join(path, 'river.shp'))

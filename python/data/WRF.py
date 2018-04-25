@@ -23,7 +23,7 @@ Example Usage::
 
         export OMP_NUM_THREADS=1
 
-    (a conflict between OpenMP and dask?)
+    (`a conflict between OpenMP and dask? <https://stackoverflow.com/questions/39422092/error-with-omp-num-threads-when-using-dask-distributed>`_)
 
 .. TODO::
 
@@ -44,8 +44,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
 from configparser import ConfigParser
 
-config_file = 'WRF.cfg'
-"name of the config file (in the same directory as this module)"
+config_file = '/HPC/arno/general.cfg'
+"name of the config file"
 
 
 def align_stations(wrf, df):
@@ -75,7 +75,7 @@ class Files(object):
         dirs = []
         if paths is None:
             self.config = ConfigParser()
-            assert len(self.config.read(pa.join(pa.dirname(__file__), config_file))) > 0, "config file not read"
+            assert len(self.config.read(config_file)) > 0, "config file not read"
             self.paths = [p for p in self.config['wrfout'].values() if pa.isdir(p)]
         for p in self.paths:
             for d in sorted(glob(pa.join(p, pattern))):
