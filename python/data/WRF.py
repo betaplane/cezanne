@@ -43,6 +43,9 @@ from functools import partial
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
 from configparser import ConfigParser
+# from importlib.util import spec_from_file_location, module_from_spec
+from importlib import import_module
+from os.path import join, dirname
 
 config_file = '/HPC/arno/general.cfg'
 "name of the config file"
@@ -141,14 +144,14 @@ class Concatenator(object):
 
         if interpolator is not None:
             f = glob(pa.join(self.dirs[0], self._glob_pattern))
-            if interpolator == 'scipy':
-                from .interpolate import GridInterpolator
-                with xr.open_dataset(f[0]) as ds:
-                    self.intp = GridInterpolator(ds, self.stations)
-            elif interpolator == 'bilinear':
-                from .interpolate import BilinearInterpolator
-                with xr.open_dataset(f[0]) as ds:
-                    self.intp = BilinearInterpolator(ds, self.stations)
+            # spec = spec_from_file_location('interpolate', join(dirname(__file__), 'interpolate.py'))
+            with xr.open_dataset(f[0]) as ds:
+                if interpolator == 'scipy':
+                    # self.intp = getattr(module_from_spec(spec), 'GridInterpolator')(ds, self.stations)
+                    self.intp = getattr(import_module('data.interpolate'), 'GridInterpolator')(ds, self.stations)
+                elif interpolator == 'bilinear':
+                    # self.intp = getattr(module_from_spec(spec), 'BilinearInterpolator')(ds, self.stations)
+                    self.intp = getattr(import_module('data.interpolate'), 'BilinearInterpolator')(ds, self.stations)
 
         print('WRF.Concatenator initialized with {} directories'.format(len(self.dirs)))
 
@@ -286,6 +289,11 @@ class Tests(unittest.TestCase):
                 self.wrf.data['T2'].transpose('start', 'station', 'Time'),
                 data['interp'].transpose('start', 'station', 'Time'), rtol=1e-3)
 
+def run_tests():
+    suite = unittest.TestSuite()
+    suite.addTests([Tests(t) for t in Tests.__dict__.keys() if t[:4]=='test'])
+    runner = unittest.TextTestRunner()
+    runner.run(suite)
 
 
 if __name__ == '__main__':

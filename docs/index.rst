@@ -11,6 +11,7 @@ Welcome to cezanne's documentation!
    :caption: Contents:
 
    python
+   condor
 
 Indices and tables
 ==================
