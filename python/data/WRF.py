@@ -25,13 +25,8 @@ Example Usage::
 
     (`a conflict between OpenMP and dask? <https://stackoverflow.com/questions/39422092/error-with-omp-num-threads-when-using-dask-distributed>`_)
 
-.. TODO::
-
-    The directory structure has changed. Need to update and filter out symbolic links etc.
 
 """
-
-__path__ = ['.', '..']
 
 import re, unittest
 from glob import glob
