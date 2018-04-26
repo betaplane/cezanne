@@ -11,9 +11,9 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 
-# url = 'http://192.168.5.2/ws/pop_ws.php'		# from inside
-
-
+from configparser import ConfigParser
+config = ConfigParser()
+config.read('/HPC/arno/general.cfg')
 
 class FetchError(Exception):
     pass
@@ -41,11 +41,12 @@ class Downloader(object):
     """Class to download data from CEAZAMet webservice. Main reason for having a class is
     to be able to reference the data (Downloader.data) in case something goes wrong at some point.
     """
-    trials = range(10)
-    url = 'http://www.ceazamet.cl/ws/pop_ws.php'
-    raw_url = 'http://www.ceazamet.cl/ws/sensor_raw_csv.php'
-    max_workers = 16
     from_date = datetime(2003, 1, 1)
+
+    def __init__(self, trials=10, max_workers=16):
+        self.trials = range(trials)
+        self.config = config['CEAZAMet']
+        self.max_workers = max_workers
 
     field = {
         'fn': 'GetListaSensores',
@@ -132,10 +133,10 @@ class Downloader(object):
             's_cod': code,
             'fecha_inicio': from_date.strftime('%Y-%m-%d'),
             'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
-            'user': 'arno.hammann@ceaza.cl'
+            'user': self.config['user']
             }
         for trial in self.trials:
-            r = requests.get(self.url, params=params)
+            r = requests.get(self.config['url'], params=params)
             if not r.ok:
                 continue
             reader = _Reader(r.text)
@@ -154,7 +155,7 @@ class Downloader(object):
                   'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
                   's_cod': code}
         for trial in self.trials:
-            r = requests.get(self.raw_url, params=params)
+            r = requests.get(self.config['raw_url'], params=params)
             if not r.ok:
                 continue
             reader = _Reader(r.text)
@@ -187,7 +188,7 @@ class Downloader(object):
 
         """
         for trial in self.trials:
-            req = requests.get(self.url, params=self.station)
+            req = requests.get(self.config['url'], params=self.station)
             if not req.ok:
                 continue
             with StringIO(req.text) as sio:
@@ -219,7 +220,7 @@ class Downloader(object):
             params['e_cod'] = st[0]
             for trial in self.trials:
                 print(st[1].full)
-                req = requests.get(self.url, params=params)
+                req = requests.get(self.config['url'], params=params)
                 if not req.ok:
                     continue
                 with StringIO(req.text) as sio:
