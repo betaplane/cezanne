@@ -71,6 +71,7 @@ class GridInterpolator(InterpolatorBase):
     """
     def __init__(self, ds, stations=None, method='linear'):
         from geo import affine
+        import scipy.interpolate as ip
         super().__init__(stations)
         self.method = method
         proj = Proj(**proj_params(ds))
@@ -81,11 +82,10 @@ class GridInterpolator(InterpolatorBase):
         self.mn = (range(xy[0].shape[0]), range(xy[0].shape[1]))
 
     def _grid_interp(self, data):
-        return [interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
+        return [ip.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
              for k in range(data.shape[2])]
 
     def __call__(self, x):
-        from scipy.interpolate import interpn
         dims = set(x.dims).symmetric_difference(self.spatial_dims)
         if len(dims) > 0:
             X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
@@ -93,7 +93,7 @@ class GridInterpolator(InterpolatorBase):
             ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
             ds.coords['XTIME'] = ('Time', x.XTIME)
         else:
-            y = interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
+            y = ip.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
             ds = xr.DataArray(y, coords=[('station', self.index)])
         return ds
 
