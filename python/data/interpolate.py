@@ -34,6 +34,7 @@ import pandas as pd
 from pyproj import Proj
 import unittest
 from geo import proj_params
+from importlib imort import_module
 from . import config
 
 def g2d(v):
@@ -70,9 +71,9 @@ class GridInterpolator(InterpolatorBase):
     Interpolation is carried out by calling the instantiated class as described for :class:`.BilinearInterpolator`.
     """
     def __init__(self, ds, stations=None, method='linear'):
-        from geo import affine
-        import scipy.interpolate as ip
         super().__init__(stations)
+        from geo import affine
+        self.intp = import_module('scipy.interpolate')
         self.method = method
         proj = Proj(**proj_params(ds))
         xy = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
@@ -82,7 +83,7 @@ class GridInterpolator(InterpolatorBase):
         self.mn = (range(xy[0].shape[0]), range(xy[0].shape[1]))
 
     def _grid_interp(self, data):
-        return [ip.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
+        return [self.intp.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
              for k in range(data.shape[2])]
 
     def __call__(self, x):
@@ -93,7 +94,7 @@ class GridInterpolator(InterpolatorBase):
             ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
             ds.coords['XTIME'] = ('Time', x.XTIME)
         else:
-            y = ip.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
+            y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
             ds = xr.DataArray(y, coords=[('station', self.index)])
         return ds
 
