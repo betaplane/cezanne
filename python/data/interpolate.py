@@ -48,6 +48,8 @@ class InterpolatorBase(object):
         if stations is None:
             with pd.HDFStore(config['stations']['sta']) as S:
                 self.stations = S['stations']
+        else:
+            self.stations = stations
         self.index = self.stations.index
 
 
@@ -91,7 +93,7 @@ class GridInterpolator(InterpolatorBase):
             ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
             ds.coords['XTIME'] = ('Time', x.XTIME)
         else:
-            y = ip.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
+            y = interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
             ds = xr.DataArray(y, coords=[('station', self.index)])
         return ds
 
