@@ -107,6 +107,11 @@ class Files(object):
         files, _, _ = name(f.dirs[0])
         return xr.open_dataset(files[0])
 
+    @staticmethod
+    def stations():
+        with pd.HDFStore(config['stations']['sta']) as S:
+            return S['stations']
+
 
 class Concatenator(object):
     """WRFOUT file concatenator, for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
