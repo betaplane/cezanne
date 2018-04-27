@@ -32,7 +32,6 @@ __path__ = ['.', '..']
 import xarray as xr
 import numpy as np
 import pandas as pd
-import scipy.interpolate as ip
 from pyproj import Proj
 import unittest
 from geo import proj_params
@@ -65,6 +64,7 @@ class GridInterpolator(InterpolatorBase):
     """
     def __init__(self, ds, stations, method='linear'):
         from geo import affine
+        from scipy.interpolate import interpn
         self.method = method
         proj = Proj(**proj_params(ds))
         xy = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
@@ -75,7 +75,7 @@ class GridInterpolator(InterpolatorBase):
         self.index = stations.index
 
     def _grid_interp(self, data):
-        return [ip.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
+        return [interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
              for k in range(data.shape[2])]
 
     def __call__(self, x):

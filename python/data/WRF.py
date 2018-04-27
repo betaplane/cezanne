@@ -102,7 +102,7 @@ class Files(object):
         return [f for d in np.array(self.files)[np.array(self.length) == n] for f in d]
 
     @classmethod
-    def first(cls, domain=None, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout'):
+    def first(cls, domain, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout'):
         f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
         name = partial(cls._name, domain, lead_day, prefix)
         files, _, _ = name(f.dirs[0])
