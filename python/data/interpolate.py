@@ -45,6 +45,12 @@ class InterpolatorBase(object):
     spatial_dims = ['south_north', 'west_east']
     """The names of the latitude / longitude dimensions"""
 
+    def __init__(self, stations=None):
+        if stations is None:
+            with pd.HDFStore(config['stations']['sta']) as S:
+                self.stations = S['stations']
+        self.index = self.stations.index
+
 
 class GridInterpolator(InterpolatorBase):
     """Uses :mod:`scipy.interpolate` to interpolate a model field horizontally to station locations. Loops over the non-lon/lat dimensions. Once per instantiation, the following steps are performed:
@@ -62,17 +68,17 @@ class GridInterpolator(InterpolatorBase):
 
     Interpolation is carried out by calling the instantiated class as described for :class:`.BilinearInterpolator`.
     """
-    def __init__(self, ds, stations, method='linear'):
+    def __init__(self, ds, stations=None, method='linear'):
         from geo import affine
         from scipy.interpolate import interpn
+        super().__init__(stations)
         self.method = method
         proj = Proj(**proj_params(ds))
         xy = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
         tg = affine(*xy)
-        ij = proj(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
+        ij = proj(*self.stations.loc[:, ('lon', 'lat')].as_matrix().T)
         self.coords = np.roll(tg(np.r_['0,2', ij]).T, 1, 1)
         self.mn = (range(xy[0].shape[0]), range(xy[0].shape[1]))
-        self.index = stations.index
 
     def _grid_interp(self, data):
         return [interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
@@ -119,17 +125,17 @@ class BilinearInterpolator(InterpolatorBase):
 
     """
 
-    def __init__(self, ds, stations):
+    def __init__(self, ds, stations=None):
         from geo import Squares
+        super().__init__(stations)
         pr = Proj(**proj_params(ds))
         self.x, self.y = pr(g2d(ds.XLONG), g2d(ds.XLAT))
-        self.index = stations.index
-        self.i, self.j = pr(*stations.loc[:, ('lon', 'lat')].as_matrix().T)
+        self.i, self.j = pr(*self.stations.loc[:, ('lon', 'lat')].as_matrix().T)
         self.points = Squares.compute(self.x, self.y, self.i, self.j)
         K = np.ravel_multi_index(self.points.sel(var='indexes').astype(int).values,
                                  self.x.shape[:2]).reshape((4, -1))
 
-        n = stations.shape[0]
+        n = self.stations.shape[0]
         self.W = np.zeros((n, np.prod(self.x.shape)))
         self.W[range(n), K] = self.points.groupby('station').apply(self._weights).transpose('square', 'station')
 
@@ -199,12 +205,12 @@ class BilinearInterpolator(InterpolatorBase):
         wy = np.vstack(([-c, a] / y0, [-d, b] / y1)).mean(0)
         return xr.DataArray(np.r_[wy[0] * w1, wy[1] * w2], dims=['square'])
 
-
+# NOTE: I don't think this data is still around, use the tests in WRF.py
 class Test(unittest.TestCase):
     def setUp(self):
         d = '/nfs/temp/sata1_ceazalabs/carlo/WRFOUT_OPERACIONAL/c01_2015051900/wrfout_d03*'
         self.ds = xr.open_mfdataset(d)
-        with pd.HDFStore('/home/arno/Documents/data/CEAZAMet/stations.h5') as S:
+        with pd.HDFStore(config['stations']['sta']) as S:
             self.intp = BilinearInterpolator(self.ds, S['stations'])
 
     def tearDown(self):

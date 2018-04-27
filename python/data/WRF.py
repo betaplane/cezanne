@@ -12,7 +12,7 @@ Example Usage::
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * Data for the tests is in the same directory as this file, as is the config file (*WRF.cfg*)
+    * Data for the tests is in the same directory as this file
     * Test are run e.g. by::
 
         python -m unittest WRF.Tests
@@ -37,13 +37,14 @@ import numpy as np
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
-from configparser import ConfigParser
 # from importlib.util import spec_from_file_location, module_from_spec
 from importlib import import_module
 from os.path import join, dirname
 
-config_file = '/HPC/arno/general.cfg'
-"name of the config file"
+from configparser import ConfigParser
+config = ConfigParser()
+"""global configuration values"""
+config.read('/HPC/arno/general.cfg')
 
 
 def align_stations(wrf, df):
@@ -72,9 +73,8 @@ class Files(object):
     def __init__(self, paths=None, hour=None, from_date=None, pattern='c01_*', limit=None):
         dirs = []
         if paths is None:
-            self.config = ConfigParser()
-            assert len(self.config.read(config_file)) > 0, "config file not read"
-            self.paths = [p for p in self.config['wrfout'].values() if pa.isdir(p)]
+            assert len(config) > 0, "config file not read"
+            self.paths = [p for p in config['wrfout'].values() if pa.isdir(p)]
         for p in self.paths:
             for d in sorted(glob(pa.join(p, pattern))):
                 if (pa.isdir(d) and not pa.islink(d)):
@@ -103,6 +103,9 @@ class Files(object):
 
     @classmethod
     def first(cls, domain, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout'):
+        """Get the first netCDF file matching the given arguments (see :class:`Concatenator` for a description), based on the configuration values (section *wrfout*) in the global config file.
+
+        """
         f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
         name = partial(cls._name, domain, lead_day, prefix)
         files, _, _ = name(f.dirs[0])
@@ -130,7 +133,7 @@ class Concatenator(object):
         self.dt = dt
         self._glob_pattern = '{}_{}_*'.format(prefix, domain)
         files = Files(paths, hour, from_date)
-        self.dirs, self.config = files.dirs, files.config
+        self.dirs = files.dirs
 
         assert len(self.dirs) > 0, "no directories added"
 
@@ -155,7 +158,7 @@ class Concatenator(object):
         try:
             return self._stations
         except:
-            with pd.HDFStore(self.config['stations']['sta']) as sta:
+            with pd.HDFStore(config['stations']['sta']) as sta:
                 self._stations = sta['stations']
             return self._stations
 
@@ -199,7 +202,7 @@ class Concatenator(object):
 
 
     def concat(self, var, interpolate=None, lead_day=None, func=None):
-        """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config_file`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
+        """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
         :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
         :param interpolate: Whether or not to interpolate to station locations (see :class:`.Concatenator`).
@@ -256,14 +259,14 @@ class Tests(unittest.TestCase):
         cls.wrf.dirs = [d for d in cls.wrf.dirs if re.search('c01_2016120[1-3]', d)]
 
     def test_lead_day_interpolated(self):
-        with xr.open_dataset(self.wrf.config['tests']['lead_day1']) as data:
+        with xr.open_dataset(config['tests']['lead_day1']) as data:
             self.wrf.concat('T2', True, 1)
             np.testing.assert_allclose(
                 self.wrf.data['T2'].transpose('station', 'time'),
                 data['interp'].transpose('station', 'time'), rtol=1e-4)
 
     def test_lead_day_whole_domain(self):
-        with xr.open_dataset(self.wrf.config['tests']['lead_day1']) as data:
+        with xr.open_dataset(config['tests']['lead_day1']) as data:
             self.wrf.concat('T2', lead_day=1)
             # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
             np.testing.assert_allclose(
@@ -271,14 +274,14 @@ class Tests(unittest.TestCase):
                 data['field'].transpose('south_north', 'west_east', 'time'))
 
     def test_all_whole_domain(self):
-        with xr.open_dataset(self.wrf.config['tests']['all_days']) as data:
+        with xr.open_dataset(config['tests']['all_days']) as data:
             self.wrf.concat('T2')
             np.testing.assert_allclose(
                 self.wrf.data['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
                 data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
 
     def test_all_interpolated(self):
-        with xr.open_dataset(self.wrf.config['tests']['all_days']) as data:
+        with xr.open_dataset(config['tests']['all_days']) as data:
             self.wrf.concat('T2', True)
             np.testing.assert_allclose(
                 self.wrf.data['T2'].transpose('start', 'station', 'Time'),
