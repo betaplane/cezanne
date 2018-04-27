@@ -70,7 +70,7 @@ class GridInterpolator(InterpolatorBase):
     """
     def __init__(self, ds, stations=None, method='linear'):
         from geo import affine
-        from scipy.interpolate import interpn
+        import scipy.interpolate
         super().__init__(stations)
         self.method = method
         proj = Proj(**proj_params(ds))
@@ -81,7 +81,7 @@ class GridInterpolator(InterpolatorBase):
         self.mn = (range(xy[0].shape[0]), range(xy[0].shape[1]))
 
     def _grid_interp(self, data):
-        return [interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
+        return [scipy.interpolate.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
              for k in range(data.shape[2])]
 
     def __call__(self, x):
