@@ -71,7 +71,6 @@ class GridInterpolator(InterpolatorBase):
     """
     def __init__(self, ds, stations=None, method='linear'):
         from geo import affine
-        from scipy.interpolate import interpn
         super().__init__(stations)
         self.method = method
         proj = Proj(**proj_params(ds))
@@ -86,6 +85,7 @@ class GridInterpolator(InterpolatorBase):
              for k in range(data.shape[2])]
 
     def __call__(self, x):
+        from scipy.interpolate import interpn
         dims = set(x.dims).symmetric_difference(self.spatial_dims)
         if len(dims) > 0:
             X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
