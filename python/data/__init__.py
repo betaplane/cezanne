@@ -18,3 +18,7 @@
     :members:
 
 """
+from configparser import ConfigParser
+config = ConfigParser()
+"""global configuration values"""
+config.read('/HPC/arno/general.cfg')

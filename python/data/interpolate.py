@@ -28,14 +28,13 @@ In the x-direction, two interpolations are performed on the lines denoted *x0* a
 
 """
 
-__path__ = ['.', '..']
 import xarray as xr
 import numpy as np
 import pandas as pd
 from pyproj import Proj
 import unittest
 from geo import proj_params
-
+from . import config
 
 def g2d(v):
     m, n = v.shape[-2:]
@@ -70,7 +69,7 @@ class GridInterpolator(InterpolatorBase):
     """
     def __init__(self, ds, stations=None, method='linear'):
         from geo import affine
-        import scipy.interpolate
+        from scipy.interpolate import interpn
         super().__init__(stations)
         self.method = method
         proj = Proj(**proj_params(ds))
@@ -81,7 +80,7 @@ class GridInterpolator(InterpolatorBase):
         self.mn = (range(xy[0].shape[0]), range(xy[0].shape[1]))
 
     def _grid_interp(self, data):
-        return [scipy.interpolate.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
+        return [interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
              for k in range(data.shape[2])]
 
     def __call__(self, x):

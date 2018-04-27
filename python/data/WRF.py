@@ -40,11 +40,7 @@ from timeit import default_timer as timer
 # from importlib.util import spec_from_file_location, module_from_spec
 from importlib import import_module
 from os.path import join, dirname
-
-from configparser import ConfigParser
-config = ConfigParser()
-"""global configuration values"""
-config.read('/HPC/arno/general.cfg')
+from . import config
 
 
 def align_stations(wrf, df):
