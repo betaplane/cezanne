@@ -34,7 +34,7 @@ import pandas as pd
 from pyproj import Proj
 import unittest
 from geo import proj_params
-from importlib imort import_module
+from importlib import import_module
 from . import config
 
 def g2d(v):
