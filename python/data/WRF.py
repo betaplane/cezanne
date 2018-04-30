@@ -5,7 +5,7 @@ WRFOUT concatenation
 
 Example Usage::
 
-    import WRF
+    from data import WRF
     w = WRF.Concatenator(domain='d03', interpolator='bilinear')
     w.run('T2-PSFC', var=['T2', 'PSFC'], interpolate=True)
 
@@ -15,7 +15,7 @@ Example Usage::
     * Data for the tests is in the same directory as this file
     * Test are run e.g. by::
 
-        python -m unittest WRF.Tests
+        python -m unittest data.WRF.Tests
 
 .. warning::
 

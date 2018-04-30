@@ -1,6 +1,5 @@
 from xarray import Dataset
 from numpy import arange
-from wrf import tk
 
 def sel_rename(x, *args):
     x = x.sel(bottom_top_stag=slice(*args)).rename({'bottom_top_stag': 'bottom_top'})
@@ -8,9 +7,7 @@ def sel_rename(x, *args):
     return x
 
 def temp_geopotential(ds):
-    T = tk(ds['P'] + ds['PB'], ds['T'] + 300.)
-    for c in ds['T'].coords: # wrf module doesn't copy over the coords
-        T.coords[c] = ds['T'].coords[c]
+    T = (ds['T'] + 300.) * ((ds['P'] + ds['PB']) / 1e5) ** 0.286
     gp = (ds['PH'] + ds['PHB']) / 9.81
     gpi = (sel_rename(gp, None, gp.bottom_top_stag.size-1) + sel_rename(gp, 1, None)) / 2
     return Dataset({'T': T, 'GP': gpi})
