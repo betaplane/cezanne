@@ -11,6 +11,7 @@ Example Usage::
 
 .. NOTE::
 
+    * ProcessPoolExecutor can't be used if unpicklable objects need to be exchanged.
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
     * Data for the tests is in the same directory as this file
     * Test are run e.g. by::
@@ -34,10 +35,10 @@ import os.path as pa
 import xarray as xr
 import pandas as pd
 import numpy as np
+from mpi4py import MPI
+from netCDF4 import Dataset, num2date
 from functools import partial
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
-# from importlib.util import spec_from_file_location, module_from_spec
 from importlib import import_module
 from os.path import join, dirname
 from . import config
@@ -72,13 +73,14 @@ class Files(object):
             assert len(config) > 0, "config file not read"
             self.paths = [p for p in config['wrfout'].values() if pa.isdir(p)]
         for p in self.paths:
-            for d in sorted(glob(pa.join(p, pattern))):
+            for d in glob(pa.join(p, pattern)):
                 if (pa.isdir(d) and not pa.islink(d)):
                     dirs.append(d)
                     if limit is not None and len(dirs) == limit:
                         break
         dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
-        self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+        dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+        self.dirs = sorted(dirs)
 
     @staticmethod
     def _name(domain, lead_day, prefix, d):
@@ -98,14 +100,14 @@ class Files(object):
         return [f for d in np.array(self.files)[np.array(self.length) == n] for f in d]
 
     @classmethod
-    def first(cls, domain, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout'):
+    def first(cls, domain, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout', opened=True):
         """Get the first netCDF file matching the given arguments (see :class:`Concatenator` for a description), based on the configuration values (section *wrfout*) in the global config file.
 
         """
         f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
         name = partial(cls._name, domain, lead_day, prefix)
         files, _, _ = name(f.dirs[0])
-        return xr.open_dataset(files[0])
+        return xr.open_dataset(files[0]) if opened else files[0]
 
     @staticmethod
     def stations():
@@ -131,26 +133,27 @@ class Concatenator(object):
 
 
     def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):
-        self.dt = dt
-        self._glob_pattern = '{}_{}_*'.format(prefix, domain)
-        files = Files(paths, hour, from_date)
-        self.dirs = files.dirs
+        self.dt = np.timedelta64(dt, 'h')
+        glob_pattern = '{}_{}_*'.format(prefix, domain)
 
-        assert len(self.dirs) > 0, "no directories added"
+        self.comm = MPI.COMM_WORLD
+        self.rank = self.comm.Get_rank()
+        self.n_proc = self.comm.Get_size()
+        if self.rank == 0:
+            F = Files(paths, hour, from_date)
+            self.files = [f for d in F.dirs for f in glob(join(d, glob_pattern))]
+            assert len(self.files) > 0, "no directories added"
 
         if stations is not None:
             self._stations = stations
 
         if interpolator is not None:
             f = glob(pa.join(self.dirs[0], self._glob_pattern))
-            # spec = spec_from_file_location('interpolate', join(dirname(__file__), 'interpolate.py'))
             with xr.open_dataset(f[0]) as ds:
-                if interpolator == 'scipy':
-                    # self.intp = getattr(module_from_spec(spec), 'GridInterpolator')(ds, self.stations)
-                    self.intp = getattr(import_module('data.interpolate'), 'GridInterpolator')(ds, self.stations)
-                elif interpolator == 'bilinear':
-                    # self.intp = getattr(module_from_spec(spec), 'BilinearInterpolator')(ds, self.stations)
-                    self.intp = getattr(import_module('data.interpolate'), 'BilinearInterpolator')(ds, self.stations)
+                self.intp = getattr(import_module('data.interpolate'),
+                                    {'bilinear': 'BilinearInterpolator',
+                                     'scipy': 'GridInterpolator'}[interpolator]
+                                    )(ds, self.stations)
 
         print('WRF.Concatenator initialized with {} directories'.format(len(self.dirs)))
 
@@ -217,24 +220,78 @@ class Concatenator(object):
         :rtype: :class:`~xarray.Dataset`
 
         """
-        start = timer()
+        start = MPI.Wtime()
 
-        func = partial(self._extract, var, self._glob_pattern, lead_day, self.dt,
+        self.out = Dataset('test.nc', 'w', parallel=True, comm=self.comm)
+
+        variables = np.array([var]).flatten()
+        extr = partial(self._extract, variables, self._glob_pattern, lead_day, self.dt,
                        self.intp if interpolate else None, func)
 
-        self.data = func(self.dirs[0])
-        if len(self.dirs) > 1:
-            with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self.dirs)-1)) as exe:
-                for i, f in enumerate(exe.map(func, self.dirs[1:])):
-                    self.data = xr.concat((self.data, f), 'start')
+        if self.rank > 0:
+            while True:
+                f = self.comm.recv(source=0, tag=1)
+                if f is None:
+                    break
+                self._extract(variables, lead_day, interpolate, func, f)
+        else:
+            ds = Dataset(self.files[0])
+            coords = set()
             if lead_day is None:
-                self.data = self.data.sortby('start')
-            else:
-                self.data = self.data.stack(time=('start', 'Time')).sortby('XTIME')
-        print('Time taken: {:.2f}'.format(timer() - start))
+                self.out.createDimension('start', None)
+            for v in variables:
+                var = ds[v]
+                for i, d in enumerate(var.dimensions):
+                    dim = ds.dimensions[d]
+                    if dim.isunlimited():
+                        size = None
+                        self.time_dim = i
+                    else:
+                        size = dim.size
+                    self.out.createDimension(d, size)
+                vcoord = var.coordinates.split()
+                coords = coords.intersection(vcoord)
+                if lead_day is None:
+                    vcoord.insert(0, 'start')
+                self.out.createVariable(var.name, var.dtype, vcoord)
+                self.comm.send(np.zeros_like(var.shape), dest=0, tag=100+1)
+            for s in coords - {'XTIME'}:
+                x = ds[s][1, :, :]
+                self.out.createVariable(x.name, x.dtype, {'Time'}.symmetric_difference(x.coordinates))
+            ds.close()
 
-    @staticmethod
-    def _extract(var, glob_pattern, lead_day, dt, interp, func, d):
+            while len(self.files) > 0:
+                f = self.files.pop(0)
+                for i in range(1, self.n_proc):
+                    if len(self.files) == 0:
+                        self.comm.send(None, dest=i, tag=1)
+                        break
+                    self.comm.send(self.files.pop(0), dest=i, tag=1)
+                self._extract(variables, lead_day, interpolate, func, f)
+
+        print('Time taken: {} (proc {})'.format(MPI.Wtime() - start), self.rank)
+
+    def _extract(self, variables, lead_day, interp, func, f):
+        ds = Dataset(f)
+        xt = np.array((lambda t: num2date(t[:], t.units))(ds['XTIME']), dtype='datetime64') + self.dt
+        for i, v in enumerate(variables):
+            var = ds[v]
+            if lead_day is None:
+                x = np.expand_dims(var[:], 0)
+            else:
+                t = pd.DatetimeIndex(xt)
+                idx = (t - t.min()).days == lead_day
+                x = var[[idx if d=='Time' else slice(None) for d in var.dimensions]]
+            shape = self.comm.recv((self.rank-1) % self.n_proc, tag=100+i)
+            xshape = x.shape
+            time_s = shape[self.time_dim]
+            self.out[v][[{
+                'Time': slice(time_s: time_s + xshape[time_s]),
+                'start': slice(shape[0]: shape[0] + xshape[0])
+            }.get(d, slice(None)) for d in var.dimensions]] = x
+            self.comm.send(self.out[v].shape, dest=(self.rank+1) % self.n_proc, tag=100+i)
+
+
         with xr.open_mfdataset(pa.join(d, glob_pattern)) as ds:
             print('using: {}'.format(ds.START_DATE))
             x = ds[np.array([var]).flatten()].sortby('XTIME') # this seems to be at the root of Dask warnings
