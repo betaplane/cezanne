@@ -148,14 +148,13 @@ class Concatenator(object):
             self._stations = stations
 
         if interpolator is not None:
-            f = glob(pa.join(self.dirs[0], self._glob_pattern))
-            with xr.open_dataset(f[0]) as ds:
+            with xr.open_dataset(self.files[0]) as ds:
                 self.intp = getattr(import_module('data.interpolate'),
                                     {'bilinear': 'BilinearInterpolator',
                                      'scipy': 'GridInterpolator'}[interpolator]
                                     )(ds, self.stations)
 
-        print('WRF.Concatenator initialized with {} directories'.format(len(self.dirs)))
+        print('WRF.Concatenator initialized with {} files'.format(len(self.files)))
 
     @property
     def stations(self):
@@ -222,43 +221,40 @@ class Concatenator(object):
         """
         start = MPI.Wtime()
 
-        self.out = Dataset('test.nc', 'w', parallel=True, comm=self.comm)
-
+        self.out = Dataset('test.nc', 'w', parallel=True, comm=self.comm, format="NETCDF4")
         variables = np.array([var]).flatten()
-        extr = partial(self._extract, variables, self._glob_pattern, lead_day, self.dt,
-                       self.intp if interpolate else None, func)
 
         if self.rank > 0:
             while True:
                 f = self.comm.recv(source=0, tag=1)
+                print(f, self.rank)
                 if f is None:
                     break
                 self._extract(variables, lead_day, interpolate, func, f)
         else:
-            ds = Dataset(self.files[0])
-            coords = set()
-            if lead_day is None:
-                self.out.createDimension('start', None)
-            for v in variables:
-                var = ds[v]
-                for i, d in enumerate(var.dimensions):
-                    dim = ds.dimensions[d]
-                    if dim.isunlimited():
-                        size = None
-                        self.time_dim = i
-                    else:
-                        size = dim.size
-                    self.out.createDimension(d, size)
-                vcoord = var.coordinates.split()
-                coords = coords.intersection(vcoord)
+            with Dataset(self.files[0]) as ds:
+                coords = set()
                 if lead_day is None:
-                    vcoord.insert(0, 'start')
-                self.out.createVariable(var.name, var.dtype, vcoord)
-                self.comm.send(np.zeros_like(var.shape), dest=0, tag=100+1)
-            for s in coords - {'XTIME'}:
-                x = ds[s][1, :, :]
-                self.out.createVariable(x.name, x.dtype, {'Time'}.symmetric_difference(x.coordinates))
-            ds.close()
+                    self.out.createDimension('start', None)
+                for v in variables:
+                    var = ds[v]
+                    for i, d in enumerate(var.dimensions):
+                        dim = ds.dimensions[d]
+                        if dim.isunlimited():
+                            size = None
+                            self.time_dim = i
+                        else:
+                            size = dim.size
+                        self.out.createDimension(d, size)
+                    vcoord = var.coordinates.split()
+                    coords = coords.intersection(vcoord)
+                    if lead_day is None:
+                        vcoord.insert(0, 'start')
+                    self.out.createVariable(var.name, var.dtype, vcoord)
+                    self.comm.send(np.zeros_like(var.shape), dest=0, tag=100+1)
+                for s in coords - {'XTIME'}:
+                    x = ds[s][1, :, :]
+                    self.out.createVariable(x.name, x.dtype, {'Time'}.symmetric_difference(x.coordinates))
 
             while len(self.files) > 0:
                 f = self.files.pop(0)
@@ -269,9 +265,11 @@ class Concatenator(object):
                     self.comm.send(self.files.pop(0), dest=i, tag=1)
                 self._extract(variables, lead_day, interpolate, func, f)
 
+        self.out.close()
         print('Time taken: {} (proc {})'.format(MPI.Wtime() - start), self.rank)
 
     def _extract(self, variables, lead_day, interp, func, f):
+        print('file: {} (proc {})'.format(f, self.rank))
         ds = Dataset(f)
         xt = np.array((lambda t: num2date(t[:], t.units))(ds['XTIME']), dtype='datetime64') + self.dt
         for i, v in enumerate(variables):
@@ -285,29 +283,14 @@ class Concatenator(object):
             shape = self.comm.recv((self.rank-1) % self.n_proc, tag=100+i)
             xshape = x.shape
             time_s = shape[self.time_dim]
+            start_slice = slice(shape[0], shape[0] + xshape[0])
             self.out[v][[{
-                'Time': slice(time_s: time_s + xshape[time_s]),
-                'start': slice(shape[0]: shape[0] + xshape[0])
+                'Time': slice(time_s, time_s + xshape[time_s]),
+                'start': start_slice
             }.get(d, slice(None)) for d in var.dimensions]] = x
+
+            self.out['start'][start_slice] = xt
             self.comm.send(self.out[v].shape, dest=(self.rank+1) % self.n_proc, tag=100+i)
-
-
-        with xr.open_mfdataset(pa.join(d, glob_pattern)) as ds:
-            print('using: {}'.format(ds.START_DATE))
-            x = ds[np.array([var]).flatten()].sortby('XTIME') # this seems to be at the root of Dask warnings
-            x['XTIME'] = x.XTIME + np.timedelta64(dt, 'h')
-            if lead_day is not None:
-                t = x.XTIME.to_index()
-                x = x.isel(Time = (t - t.min()).days == lead_day)
-            if interp is not None:
-                x = x.apply(interp)
-            if func is not None:
-                x = func(x)
-            x.load()
-            for v in x.data_vars:
-                x[v] = x[v].expand_dims('start')
-            x['start'] = ('start', pd.DatetimeIndex([x.XTIME.min().item()]))
-            return x
 
 
 class Tests(unittest.TestCase):
