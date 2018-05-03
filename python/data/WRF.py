@@ -143,7 +143,7 @@ class Concatenator(object):
         if self.rank == 0:
             F = Files(paths, hour, from_date)
             self.files = [f for d in F.dirs for f in glob(join(d, glob_pattern))]
-            assert len(self.files) > 0, "no directories added"
+            assert len(self.files) > 0, "no files added"
 
         if stations is not None:
             self._stations = stations
