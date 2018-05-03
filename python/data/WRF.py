@@ -18,14 +18,11 @@ Example Usage::
 
         python -m unittest data.WRF.Tests
 
-.. warning::
+.. TODO::
 
-    The current layout with ThreadPoolExecutor seems to work on the UV only if one sets::
-
-        export OMP_NUM_THREADS=1
-
-    (`a conflict between OpenMP and dask? <https://stackoverflow.com/questions/39422092/error-with-omp-num-threads-when-using-dask-distributed>`_)
-
+    * XTIME
+    * sorting by time in Files class
+    * or set time units manually
 
 """
 
@@ -37,11 +34,9 @@ import pandas as pd
 import numpy as np
 from mpi4py import MPI
 from mpi4py.futures import MPIPoolExecutor
-from netCDF4 import Dataset, num2date
-from functools import partial
-from timeit import default_timer as timer
+from netCDF4 import Dataset, MFDataset, num2date, date2num
+from datetime import datetime
 from importlib import import_module
-from os.path import join, dirname
 from . import config
 
 
@@ -129,34 +124,36 @@ class Concatenator(object):
     :param interpolator: Which interpolator (if any) to use: ``scipy`` - use :class:`~.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~.interpolate.BilinearInterpolator`.
 
     """
-    max_workers = 16
-    "number of threads to be used"
-
 
     def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):
         self.dt = np.timedelta64(dt, 'h')
-        glob_pattern = '{}_{}_*'.format(prefix, domain)
+        self._glob_pattern = '{}_{}_*'.format(prefix, domain)
 
         self.comm = MPI.COMM_WORLD
         self.rank = self.comm.Get_rank()
         self.n_proc = self.comm.Get_size()
         if self.rank == 0:
             F = Files(paths, hour, from_date)
-            self.files = [f for d in F.dirs for f in glob(join(d, glob_pattern))]
-            assert len(self.files) > 0, "no files added"
+            self.files = F
+            assert len(F.dirs) > 0, "no files added"
+            # so that the first file is indeed the first, for consistency with the date2num units
+            self._first = min(glob(pa.join(self.files.dirs[0], self._glob_pattern)))
+        else:
+            self._first = None
+        self._first = self.comm.bcast(self._first, root=0)
 
         if stations is not None:
             self._stations = stations
 
         if interpolator is not None:
-            with Dataset(self.files[0]) as ds:
+            with Dataset(self._first) as ds:
                 self.intp = getattr(import_module('data.interpolate'),
                                     {'bilinear': 'BilinearInterpolator',
                                      'scipy': 'GridInterpolator'}[interpolator]
                                     )(ds, self.stations)
 
-        print('WRF.Concatenator initialized with {} files'.format(len(self.files)))
-
+        if self.rank == 0:
+            print('WRF.Concatenator initialized with {} dirs'.format(len(F.dirs)))
 
     @property
     def stations(self):
@@ -206,7 +203,7 @@ class Concatenator(object):
                 write('{}{}.nc'.format(outfile, i), start)
 
 
-    def concat(self, var, interpolate=None, lead_day=None, func=None):
+    def concat(self, variables, out_name='out.nc', interpolate=None, lead_day=None, func=None):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
         :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
@@ -222,89 +219,126 @@ class Concatenator(object):
 
         """
         start = MPI.Wtime()
-        variables = np.array([var]).flatten()
+        var = np.array([variables]).flatten()
 
-        with Dataset(self.files[0]) as ds:
-            self.create_outfile(ds, variables, lead_day, name='out.nc')
+        self._create_outfile(out_name, var, lead_day)
 
-        if self.rank > 0:
-            while True:
-                f = self.comm.recv(source=0, tag=1)
-                print(f, self.rank)
-                if f is None:
-                    break
-                self._extract(variables, lead_day, interpolate, func, f)
+        # self.out['start'].set_collective(True)
+        # for v in var:
+        #     self.out[v].set_collective(True)
+
+        if self.rank == 0:
+            dirs = self.files.dirs[:self.n_proc]
         else:
-            while len(self.files) > 0:
-                f = self.files.pop(0)
-                for i in range(1, self.n_proc):
-                    if len(self.files) == 0:
-                        self.comm.send(None, dest=i, tag=1)
-                        break
-                    self.comm.send(self.files.pop(0), dest=i, tag=1)
-                self._extract(variables, lead_day, interpolate, func, f)
+            dirs = None
+        dirs = self.comm.scatter(dirs, root=0)
 
-        self.out.close()
-        print('Time taken: {} (proc {})'.format(MPI.Wtime() - start), self.rank)
+        self._extract(out_name, dirs, var, lead_day, interpolate, func, start=0)
+        # self.out.close()
 
-    def _extract(self, variables, lead_day, interp, func, f):
-        print('file: {} (proc {})'.format(f, self.rank))
-        ds = Dataset(f)
+        # print('Time taken: {} (proc {})'.format(MPI.Wtime() - start, self.rank))
 
-        xt = np.array((lambda t: num2date(t[:], t.units))(ds['XTIME']), dtype='datetime64') + self.dt
-        for i, v in enumerate(variables):
-            var = ds[v]
+    @staticmethod
+    def _dimsize(dim):
+        if hasattr(dim, 'size'):
+            return slice(None, dim.size)
+        elif hasattr(dim, 'dimlens'):
+            return slice(None, sum(dim.dimlens))
+
+    def _extract(self, out_name, d, variables, lead_day, interp, func, start):
+        print('dir: {} (proc {})'.format(d, self.rank))
+
+        # somehow, it didn't seem possible to have a file open in parallel mode and perform the
+        # scatter operation
+        out = Dataset(out_name, 'a', format='NETCDF4', parallel=True)
+
+        with MFDataset(pa.join(d, self._glob_pattern)) as ds:
+            xtime = ds['XTIME']
+            xt = np.array(num2date(xtime[:], xtime.units), dtype='datetime64') + self.dt
+            for i, v in enumerate(variables):
+                var = ds[v]
+                D = [self._dimsize(ds.dimensions[d]) for d in var.dimensions]
+                if lead_day is None:
+                    x = np.expand_dims(var[:], 0)
+                    dims = np.r_[['start'], var.dimensions]
+                    D.insert(0, start + self.rank)
+                else:
+                    t = pd.DatetimeIndex(xt)
+                    idx = (t - t.min()).days == lead_day
+                    x = var[[idx if d=='Time' else slice(None) for d in var.dimensions]]
+                    dims = var.dimensions
+
+                # v = self.comm.bcast(v, root=0) # synchronization again
+                out[v].set_collective(True)
+                out[v][D] = x
+
+            out['XTIME'].set_collective(True)
             if lead_day is None:
-                x = np.expand_dims(var[:], 0)
-                dims = np.r_[['start'], var.dimensions]
-            else:
-                t = pd.DatetimeIndex(xt)
-                idx = (t - t.min()).days == lead_day
-                x = var[[idx if d=='Time' else slice(None) for d in var.dimensions]]
-                dims = var.dimensions
-            print('recv', (self.rank-1)%self.n_proc, 100+i)
-            start = self.comm.recv(source=(self.rank-1) % self.n_proc, tag=100+i)
-            start_slice = slice(start, start+1)
-            self.out[v][[{
-                'start': start_slice,
-                'Time': slice(None, ds.dimensions['Time'].size)
-            }.get(d, slice(None)) for d in dims]] = x
+                out['start'].set_collective(True)
+                out['start'][start + self.rank] = date2num(xt.min().astype(datetime), units=self.time_units)
+        out.close()
 
-            self.comm.send(self.out[v].shape[0], dest=(self.rank+1) % self.n_proc, tag=100+i)
-        if lead_day is None:
-            self.out['start'][start_slice] = xt.min()
+    @staticmethod
+    def _dims_and_coords(ds, var):
+        coords = set.union(*[set(ds[v].coordinates.split()) for v in var]) - {'XTIME'}
+        dims = set.union(*[set(ds[v].dimensions) for v in var]) - {'Time'}
 
-    def create_outfile(self, ds, variables, lead_day, name='out.nc'):
-        self.out = Dataset(name, 'w', parallel=True, format="NETCDF4")
-        coords = {'XTIME'}
-        dims = {'Time'}
-        self.out.createDimension('Time', None)
-        if lead_day is None:
-            self.out.createDimension('start', None)
-            self.out.createVariable('start', ds['XTIME'].dtype, ('start'))
-            self.out['start'].set_collective(True)
-            self.out.createVariable('XTIME', ds['XTIME'].dtype, ('start', 'Time'))
+        dims = {d: ds.dimensions[d].size for d in dims}
+        coords = {c: (ds[c].dtype, ds[c].dimensions[1:]) for c in coords}
+        variables = {v: (ds[v].dtype, ds[v].dimensions) for v in var}
+        return dims, coords, variables
+
+    # file has to be created and opened BY ALL PROCESSES
+    def _create_outfile(self, name, var, lead_day):
+        # I think there's a file formate issue - I can open the WRF files only in single-proc mode
+        if self.rank == 0:
+            ds = Dataset(self._first)
+            dcv = self._dims_and_coords(ds, var)
+            xtype = ds['XTIME'].dtype
+            time_units = ds['XTIME'].units
         else:
-            self.out.createVariable('XTIME', ds['XTIME'].dtype, ('Time'))
-        self.out['XTME'].set_collective(True)
-        for j, v in enumerate(variables):
-            var = ds[v]
-            for i, d in enumerate(set(var.dimensions) - dims):
-                dim = ds.dimensions[d]
-                self.out.createDimension(d, dim.size)
-            # as is this works probably only for horizontal coordinates (XLONG, XLAT, staggered maybe)
-            for c in set(var.coordinates.split()) - coords:
-                x = ds[c]
-                self.out.createVariable(x.name, x.dtype, x.dimensions[1:])
-                self.out[x.name][:] = x[1, :, :]
-            if lead_day is None:
-                self.out.createVariable(v, var.dtype, np.r_[['start'], var.dimensions])
-            else:
-                self.out.createVariable(v, var.dtype, var.dimensions)
+            dcv = None
+            xtype = None
+            time_units = None
 
-            self.out[v].set_collective(True)
-            dims = dims.union(var.dimensions)
-            coords = coords.union(var.coordinates.split())
+        dcv = self.comm.bcast(dcv, root=0)
+        xtype = self.comm.bcast(xtype, root=0)
+        self.time_units = self.comm.bcast(time_units, root=0)
+        dims, coords, variables = dcv
+
+        out = Dataset(name, 'w', format='NETCDF4', parallel=True)
+
+        out.createDimension('Time', None)
+        if lead_day is None:
+            out.createDimension('start', None)
+            s = out.createVariable('start', xtype, ('start'))
+            s.units = self.time_units
+            x = out.createVariable('XTIME', xtype, ('start', 'Time'))
+        else:
+            x = out.createVariable('XTIME', xtype, ('Time'))
+        x.units = self.time_units
+
+        for i in dims.items():             # these loops need to be synchronized for parallel access!!!
+            i = self.comm.bcast(i, root=0) # synchronization device - barrier() doesn't seem to work here
+            out.createDimension(*i)
+
+        for i in coords.items():
+            i = self.comm.bcast(i, root=0)
+            k, v = i
+            c = out.createVariable(k, v[0], v[1])
+
+        for i in variables.items():
+            i = self.comm.bcast(i, root=0)
+            k, v = i
+            out.createVariable(k, v[0], np.r_[['start'], v[1]] if lead_day is None else v[1])
+
+        # apparently, writing in non-parallel mode is fine
+        # but I think it needs to be done after defining, as in F90/C
+        if self.rank == 0:
+            for k in coords.keys():
+                out[k][:] = ds[k][1, :, :]
+            ds.close()
+        out.close()
 
 
 class Tests(unittest.TestCase):
