@@ -36,6 +36,7 @@ import xarray as xr
 import pandas as pd
 import numpy as np
 from mpi4py import MPI
+from mpi4py.futures import MPIPoolExecutor
 from netCDF4 import Dataset, num2date
 from functools import partial
 from timeit import default_timer as timer
@@ -148,13 +149,14 @@ class Concatenator(object):
             self._stations = stations
 
         if interpolator is not None:
-            with xr.open_dataset(self.files[0]) as ds:
+            with Dataset(self.files[0]) as ds:
                 self.intp = getattr(import_module('data.interpolate'),
                                     {'bilinear': 'BilinearInterpolator',
                                      'scipy': 'GridInterpolator'}[interpolator]
                                     )(ds, self.stations)
 
         print('WRF.Concatenator initialized with {} files'.format(len(self.files)))
+
 
     @property
     def stations(self):
@@ -220,9 +222,10 @@ class Concatenator(object):
 
         """
         start = MPI.Wtime()
-
-        self.out = Dataset('test.nc', 'w', parallel=True, comm=self.comm, format="NETCDF4")
         variables = np.array([var]).flatten()
+
+        with Dataset(self.files[0]) as ds:
+            self.create_outfile(ds, variables, lead_day, name='out.nc')
 
         if self.rank > 0:
             while True:
@@ -232,30 +235,6 @@ class Concatenator(object):
                     break
                 self._extract(variables, lead_day, interpolate, func, f)
         else:
-            with Dataset(self.files[0]) as ds:
-                coords = set()
-                if lead_day is None:
-                    self.out.createDimension('start', None)
-                for v in variables:
-                    var = ds[v]
-                    for i, d in enumerate(var.dimensions):
-                        dim = ds.dimensions[d]
-                        if dim.isunlimited():
-                            size = None
-                            self.time_dim = i
-                        else:
-                            size = dim.size
-                        self.out.createDimension(d, size)
-                    vcoord = var.coordinates.split()
-                    coords = coords.intersection(vcoord)
-                    if lead_day is None:
-                        vcoord.insert(0, 'start')
-                    self.out.createVariable(var.name, var.dtype, vcoord)
-                    self.comm.send(np.zeros_like(var.shape), dest=0, tag=100+1)
-                for s in coords - {'XTIME'}:
-                    x = ds[s][1, :, :]
-                    self.out.createVariable(x.name, x.dtype, {'Time'}.symmetric_difference(x.coordinates))
-
             while len(self.files) > 0:
                 f = self.files.pop(0)
                 for i in range(1, self.n_proc):
@@ -271,26 +250,61 @@ class Concatenator(object):
     def _extract(self, variables, lead_day, interp, func, f):
         print('file: {} (proc {})'.format(f, self.rank))
         ds = Dataset(f)
+
         xt = np.array((lambda t: num2date(t[:], t.units))(ds['XTIME']), dtype='datetime64') + self.dt
         for i, v in enumerate(variables):
             var = ds[v]
             if lead_day is None:
                 x = np.expand_dims(var[:], 0)
+                dims = np.r_[['start'], var.dimensions]
             else:
                 t = pd.DatetimeIndex(xt)
                 idx = (t - t.min()).days == lead_day
                 x = var[[idx if d=='Time' else slice(None) for d in var.dimensions]]
-            shape = self.comm.recv((self.rank-1) % self.n_proc, tag=100+i)
-            xshape = x.shape
-            time_s = shape[self.time_dim]
-            start_slice = slice(shape[0], shape[0] + xshape[0])
+                dims = var.dimensions
+            print('recv', (self.rank-1)%self.n_proc, 100+i)
+            start = self.comm.recv(source=(self.rank-1) % self.n_proc, tag=100+i)
+            start_slice = slice(start, start+1)
             self.out[v][[{
-                'Time': slice(time_s, time_s + xshape[time_s]),
-                'start': start_slice
-            }.get(d, slice(None)) for d in var.dimensions]] = x
+                'start': start_slice,
+                'Time': slice(None, ds.dimensions['Time'].size)
+            }.get(d, slice(None)) for d in dims]] = x
 
-            self.out['start'][start_slice] = xt
-            self.comm.send(self.out[v].shape, dest=(self.rank+1) % self.n_proc, tag=100+i)
+            self.comm.send(self.out[v].shape[0], dest=(self.rank+1) % self.n_proc, tag=100+i)
+        if lead_day is None:
+            self.out['start'][start_slice] = xt.min()
+
+    def create_outfile(self, ds, variables, lead_day, name='out.nc'):
+        self.out = Dataset(name, 'w', parallel=True, format="NETCDF4")
+        coords = {'XTIME'}
+        dims = {'Time'}
+        self.out.createDimension('Time', None)
+        if lead_day is None:
+            self.out.createDimension('start', None)
+            self.out.createVariable('start', ds['XTIME'].dtype, ('start'))
+            self.out['start'].set_collective(True)
+            self.out.createVariable('XTIME', ds['XTIME'].dtype, ('start', 'Time'))
+        else:
+            self.out.createVariable('XTIME', ds['XTIME'].dtype, ('Time'))
+        self.out['XTME'].set_collective(True)
+        for j, v in enumerate(variables):
+            var = ds[v]
+            for i, d in enumerate(set(var.dimensions) - dims):
+                dim = ds.dimensions[d]
+                self.out.createDimension(d, dim.size)
+            # as is this works probably only for horizontal coordinates (XLONG, XLAT, staggered maybe)
+            for c in set(var.coordinates.split()) - coords:
+                x = ds[c]
+                self.out.createVariable(x.name, x.dtype, x.dimensions[1:])
+                self.out[x.name][:] = x[1, :, :]
+            if lead_day is None:
+                self.out.createVariable(v, var.dtype, np.r_[['start'], var.dimensions])
+            else:
+                self.out.createVariable(v, var.dtype, var.dimensions)
+
+            self.out[v].set_collective(True)
+            dims = dims.union(var.dimensions)
+            coords = coords.union(var.coordinates.split())
 
 
 class Tests(unittest.TestCase):
