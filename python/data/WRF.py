@@ -35,7 +35,8 @@ import numpy as np
 from mpi4py import MPI
 from mpi4py.futures import MPIPoolExecutor
 from netCDF4 import Dataset, MFDataset, num2date, date2num
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import partial
 from importlib import import_module
 from . import config
 
@@ -76,7 +77,7 @@ class Files(object):
                         break
         dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
         dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
-        self.dirs = sorted(dirs)
+        self.dirs = sorted(dirs, key=lambda d: d[-10:]) # <- sort by date
 
     @staticmethod
     def _name(domain, lead_day, prefix, d):
@@ -97,7 +98,7 @@ class Files(object):
 
     @classmethod
     def first(cls, domain, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout', opened=True):
-        """Get the first netCDF file matching the given arguments (see :class:`Concatenator` for a description), based on the configuration values (section *wrfout*) in the global config file.
+        """Get the first netCDF file matching the given arguments (see :class:`Concatenator` for a description), based on the configuration values (section *wrfout*) in the global config file. NOTE: the first matching file is taken before all the directories are sorted by date!
 
         """
         f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
@@ -126,6 +127,7 @@ class Concatenator(object):
     """
 
     def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):
+        self.time_units = 'minutes since 2015-01-01 00:00:00'
         self.dt = np.timedelta64(dt, 'h')
         self._glob_pattern = '{}_{}_*'.format(prefix, domain)
 
@@ -234,9 +236,8 @@ class Concatenator(object):
         dirs = self.comm.scatter(dirs, root=0)
 
         self._extract(out_name, dirs, var, lead_day, interpolate, func, start=0)
-        # self.out.close()
 
-        # print('Time taken: {} (proc {})'.format(MPI.Wtime() - start, self.rank))
+        print('Time taken: {} (proc {})'.format(MPI.Wtime() - start, self.rank))
 
     @staticmethod
     def _dimsize(dim):
@@ -253,8 +254,15 @@ class Concatenator(object):
         out = Dataset(out_name, 'a', format='NETCDF4', parallel=True)
 
         with MFDataset(pa.join(d, self._glob_pattern)) as ds:
+            # NOTE: time shift is handled via the time_units attribute
             xtime = ds['XTIME']
-            xt = np.array(num2date(xtime[:], xtime.units), dtype='datetime64') + self.dt
+            xt = np.array(num2date(xtime[:], xtime.units), dtype='datetime64[m]') + self.dt
+            if lead_day is None:
+                i = self.comm.bcast(1, root=0)
+                out['start'].set_collective(True)
+                out['start'][start + self.rank] = date2num(xt.min().astype(datetime), units=self.time_units)
+            out['XTIME'].set_collective(True)
+
             for i, v in enumerate(variables):
                 var = ds[v]
                 D = [self._dimsize(ds.dimensions[d]) for d in var.dimensions]
@@ -268,14 +276,10 @@ class Concatenator(object):
                     x = var[[idx if d=='Time' else slice(None) for d in var.dimensions]]
                     dims = var.dimensions
 
-                # v = self.comm.bcast(v, root=0) # synchronization again
+                v = self.comm.bcast(v, root=0) # synchronization again
                 out[v].set_collective(True)
-                out[v][D] = x
+                # out[v][D] = x
 
-            out['XTIME'].set_collective(True)
-            if lead_day is None:
-                out['start'].set_collective(True)
-                out['start'][start + self.rank] = date2num(xt.min().astype(datetime), units=self.time_units)
         out.close()
 
     @staticmethod
@@ -294,16 +298,11 @@ class Concatenator(object):
         if self.rank == 0:
             ds = Dataset(self._first)
             dcv = self._dims_and_coords(ds, var)
-            xtype = ds['XTIME'].dtype
-            time_units = ds['XTIME'].units
         else:
             dcv = None
-            xtype = None
-            time_units = None
 
         dcv = self.comm.bcast(dcv, root=0)
-        xtype = self.comm.bcast(xtype, root=0)
-        self.time_units = self.comm.bcast(time_units, root=0)
+        xtype = np.float64
         dims, coords, variables = dcv
 
         out = Dataset(name, 'w', format='NETCDF4', parallel=True)
