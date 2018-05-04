@@ -125,9 +125,10 @@ class Concatenator(object):
     :param interpolator: Which interpolator (if any) to use: ``scipy`` - use :class:`~.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~.interpolate.BilinearInterpolator`.
 
     """
+    time_units = 'minutes since 2015-01-01 00:00:00'
+    time_type = np.float64
 
     def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):
-        self.time_units = 'minutes since 2015-01-01 00:00:00'
         self.dt = np.timedelta64(dt, 'h')
         self._glob_pattern = '{}_{}_*'.format(prefix, domain)
 
@@ -225,17 +226,23 @@ class Concatenator(object):
 
         self._create_outfile(out_name, var, lead_day)
 
-        # self.out['start'].set_collective(True)
-        # for v in var:
-        #     self.out[v].set_collective(True)
+        self.start = 0
+        n_dirs = len(self.files.dirs) if self.rank == 0 else None
+        n_dirs = self.comm.bcast(n_dirs, root=0)
+        while n_dirs >= self.n_proc:
+            if self.rank == 0:
+                dirs = self.files.dirs[:self.n_proc]
+                self.files.dirs = self.files.dirs[self.n_proc:]
+            else:
+                dirs = None
+            dirs = self.comm.scatter(dirs, root=0)
+            n_dirs = n_dirs - self.n_proc
 
-        if self.rank == 0:
-            dirs = self.files.dirs[:self.n_proc]
-        else:
-            dirs = None
-        dirs = self.comm.scatter(dirs, root=0)
+            self._extract(out_name, dirs, var, lead_day, interpolate, func)
 
-        self._extract(out_name, dirs, var, lead_day, interpolate, func, start=0)
+        while n_dirs > 0:
+            if self.rank == 0:
+                self._extract(out_name, dirs, var, lead_day, interpolate, func)
 
         print('Time taken: {} (proc {})'.format(MPI.Wtime() - start, self.rank))
 
@@ -246,7 +253,7 @@ class Concatenator(object):
         elif hasattr(dim, 'dimlens'):
             return slice(None, sum(dim.dimlens))
 
-    def _extract(self, out_name, d, variables, lead_day, interp, func, start):
+    def _extract(self, out_name, d, variables, lead_day, interp, func):
         print('dir: {} (proc {})'.format(d, self.rank))
 
         # somehow, it didn't seem possible to have a file open in parallel mode and perform the
@@ -254,14 +261,17 @@ class Concatenator(object):
         out = Dataset(out_name, 'a', format='NETCDF4', parallel=True)
 
         with MFDataset(pa.join(d, self._glob_pattern)) as ds:
-            # NOTE: time shift is handled via the time_units attribute
             xtime = ds['XTIME']
             xt = np.array(num2date(xtime[:], xtime.units), dtype='datetime64[m]') + self.dt
-            if lead_day is None:
-                i = self.comm.bcast(1, root=0)
-                out['start'].set_collective(True)
-                out['start'][start + self.rank] = date2num(xt.min().astype(datetime), units=self.time_units)
+            t = date2num(xt.astype(datetime), units=self.time_units)
             out['XTIME'].set_collective(True)
+            if lead_day is None:
+                out['start'].set_collective(True)
+                out['start'][self.start + self.rank] = t.min()
+                out['XTIME'][self.start + self.rank, :xt.size] = t
+            else:
+                xout = out['XTIME']
+                xout[out.size: out.size + xt.size] = t
 
             for i, v in enumerate(variables):
                 var = ds[v]
@@ -269,18 +279,18 @@ class Concatenator(object):
                 if lead_day is None:
                     x = np.expand_dims(var[:], 0)
                     dims = np.r_[['start'], var.dimensions]
-                    D.insert(0, start + self.rank)
+                    D.insert(0, self.start + self.rank)
                 else:
                     t = pd.DatetimeIndex(xt)
                     idx = (t - t.min()).days == lead_day
                     x = var[[idx if d=='Time' else slice(None) for d in var.dimensions]]
                     dims = var.dimensions
 
-                v = self.comm.bcast(v, root=0) # synchronization again
                 out[v].set_collective(True)
-                # out[v][D] = x
+                out[v][D] = x
 
         out.close()
+        self.start = self.start + self.n_proc
 
     @staticmethod
     def _dims_and_coords(ds, var):
@@ -302,7 +312,6 @@ class Concatenator(object):
             dcv = None
 
         dcv = self.comm.bcast(dcv, root=0)
-        xtype = np.float64
         dims, coords, variables = dcv
 
         out = Dataset(name, 'w', format='NETCDF4', parallel=True)
@@ -310,11 +319,11 @@ class Concatenator(object):
         out.createDimension('Time', None)
         if lead_day is None:
             out.createDimension('start', None)
-            s = out.createVariable('start', xtype, ('start'))
+            s = out.createVariable('start', self.time_type, ('start'))
             s.units = self.time_units
-            x = out.createVariable('XTIME', xtype, ('start', 'Time'))
+            x = out.createVariable('XTIME', self.time_type, ('start', 'Time'))
         else:
-            x = out.createVariable('XTIME', xtype, ('Time'))
+            x = out.createVariable('XTIME', self.time_type, ('Time'))
         x.units = self.time_units
 
         for i in dims.items():             # these loops need to be synchronized for parallel access!!!
@@ -343,8 +352,10 @@ class Concatenator(object):
 class Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.wrf = Concatenator(domain='d03', interpolator='bilinear')
-        cls.wrf.dirs = [d for d in cls.wrf.dirs if re.search('c01_2016120[1-3]', d)]
+        import xarray as xr, os
+        cls.wrf = Concatenator(domain='d03', interpolator=None)
+        if cls.wrf.rank == 0:
+            cls.wrf.files.dirs = [d for d in cls.wrf.files.dirs if re.search('c01_2016120[1-3]', d)]
 
     def test_lead_day_interpolated(self):
         with xr.open_dataset(config['tests']['lead_day1']) as data:
@@ -362,11 +373,13 @@ class Tests(unittest.TestCase):
                 data['field'].transpose('south_north', 'west_east', 'time'))
 
     def test_all_whole_domain(self):
+        self.wrf.concat('T2')
         with xr.open_dataset(config['tests']['all_days']) as data:
-            self.wrf.concat('T2')
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
-                data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
+            with xr.open_dataset('out.nc') as out:
+                np.testing.assert_allclose(
+                    out['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
+                    data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
+        os.remove('out.nc')
 
     def test_all_interpolated(self):
         with xr.open_dataset(config['tests']['all_days']) as data:
@@ -378,6 +391,7 @@ class Tests(unittest.TestCase):
 def run_tests():
     suite = unittest.TestSuite()
     suite.addTests([Tests(t) for t in Tests.__dict__.keys() if t[:4]=='test'])
+    suite.addTests([Tests('test_all_whole_domain')])
     runner = unittest.TextTestRunner()
     runner.run(suite)
 
