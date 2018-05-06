@@ -11,33 +11,26 @@ Example Usage::
 
 .. NOTE::
 
-    * ProcessPoolExecutor can't be used if unpicklable objects need to be exchanged.
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * Data for the tests is in the same directory as this file
-    * Test are run e.g. by::
+    * To run tests with mpi4py and using :mod:`condor`::
 
-        python -m unittest data.WRF.Tests
+        mpiexec -n 3 python -c "import condor; condor.enable_sshfs_import(...); from data import WRF; WRF.run_tests()"
 
 .. TODO::
 
-    * XTIME
-    * sorting by time in Files class
-    * or set time units manually
 
 """
 
-import re, unittest
 from glob import glob
 import os.path as pa
-import xarray as xr
 import pandas as pd
 import numpy as np
 from mpi4py import MPI
-from mpi4py.futures import MPIPoolExecutor
 from netCDF4 import Dataset, MFDataset, num2date, date2num
 from datetime import datetime, timedelta
 from functools import partial
 from importlib import import_module
+import unittest
 from . import config
 
 
@@ -46,14 +39,15 @@ def align_stations(wrf, df):
 
     :param wrf: The DataArray or Dataset containing the concatenated and interpolated (to station locations) WRF simulations (only dimensions ``start`` and ``Time`` and coordinate ``XTIME`` are used).
     :type wrf: :class:`~xarray.DataArray` or :class:`~xarray.Dataset`
-    :param df: The DataFrame containing the station data (of the shape returned by :meth:`.CEAZA.Downloader.get_field`).
+    :param df: The DataFrame containing3 the station data (of the shape returned by :meth:`.CEAZA.Downloader.get_field`).
     :type df: :class:`~pandas.DataFrame`
     :returns: DataArray with ``start`` and ``Time`` dimensions aligned with **wrf**.
     :rtype: :class:`~xarray.DataArray`
 
     """
-    # necessary because some timestamps seem to be slightly off-round hours
+    import xarray as xr
     xt = wrf.XTIME.stack(t=('start', 'Time'))
+    # necessary because some timestamps seem to be slightly off-round hours
     xt = xr.DataArray(pd.Series(xt.values).dt.round('h'), coords=xt.coords).unstack('t')
     idx = np.vstack(df.index.get_indexer(xt.sel(start=s)) for s in wrf.start)
     cols = df.columns.get_level_values('station').intersection(wrf.station)
@@ -104,7 +98,7 @@ class Files(object):
         f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
         name = partial(cls._name, domain, lead_day, prefix)
         files, _, _ = name(f.dirs[0])
-        return xr.open_dataset(files[0]) if opened else files[0]
+        return files[0]
 
     @staticmethod
     def stations():
@@ -270,21 +264,22 @@ class Concatenator(object):
                 out['start'][self.start + self.rank] = t.min()
                 out['XTIME'][self.start + self.rank, :xt.size] = t
             else:
+                idx = (xt - xt.min()).astype('timedelta64[D]').astype(int) == lead_day
+                n = idx.astype(int).sum()
                 xout = out['XTIME']
-                xout[out.size: out.size + xt.size] = t
+                t_slice = slice(xout.size + self.rank * n, xout.size + (self.rank + 1) * n)
+                xout[t_slice] = t[idx]
 
             for i, v in enumerate(variables):
                 var = ds[v]
-                D = [self._dimsize(ds.dimensions[d]) for d in var.dimensions]
                 if lead_day is None:
                     x = np.expand_dims(var[:], 0)
                     dims = np.r_[['start'], var.dimensions]
-                    D.insert(0, self.start + self.rank)
+                    D = list(np.r_[[self.start + self.rank], [self._dimsize(ds.dimensions[d]) for d in var.dimensions]])
                 else:
-                    t = pd.DatetimeIndex(xt)
-                    idx = (t - t.min()).days == lead_day
                     x = var[[idx if d=='Time' else slice(None) for d in var.dimensions]]
                     dims = var.dimensions
+                    D = [t_slice if d=='Time' else slice(None) for d in var.dimensions]
 
                 out[v].set_collective(True)
                 out[v][D] = x
@@ -349,51 +344,6 @@ class Concatenator(object):
         out.close()
 
 
-class Tests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        import xarray as xr, os
-        cls.wrf = Concatenator(domain='d03', interpolator=None)
-        if cls.wrf.rank == 0:
-            cls.wrf.files.dirs = [d for d in cls.wrf.files.dirs if re.search('c01_2016120[1-3]', d)]
-
-    def test_lead_day_interpolated(self):
-        with xr.open_dataset(config['tests']['lead_day1']) as data:
-            self.wrf.concat('T2', True, 1)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('station', 'time'),
-                data['interp'].transpose('station', 'time'), rtol=1e-4)
-
-    def test_lead_day_whole_domain(self):
-        with xr.open_dataset(config['tests']['lead_day1']) as data:
-            self.wrf.concat('T2', lead_day=1)
-            # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('south_north', 'west_east', 'time'),
-                data['field'].transpose('south_north', 'west_east', 'time'))
-
-    def test_all_whole_domain(self):
-        self.wrf.concat('T2')
-        with xr.open_dataset(config['tests']['all_days']) as data:
-            with xr.open_dataset('out.nc') as out:
-                np.testing.assert_allclose(
-                    out['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
-                    data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
-        os.remove('out.nc')
-
-    def test_all_interpolated(self):
-        with xr.open_dataset(config['tests']['all_days']) as data:
-            self.wrf.concat('T2', True)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('start', 'station', 'Time'),
-                data['interp'].transpose('start', 'station', 'Time'), rtol=1e-3)
-
-def run_tests():
-    suite = unittest.TestSuite()
-    suite.addTests([Tests(t) for t in Tests.__dict__.keys() if t[:4]=='test'])
-    suite.addTests([Tests('test_all_whole_domain')])
-    runner = unittest.TextTestRunner()
-    runner.run(suite)
 
 
 if __name__ == '__main__':

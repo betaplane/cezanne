@@ -1,0 +1,65 @@
+import unittest, re
+import xarray as xr
+import numpy as np
+from . import config
+
+
+# I can't get the xarray.testing method of the same name to work (fails due to timestamps)
+class WRFTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from .WRF import Concatenator
+        cls.wrf = Concatenator('d03', interpolator=None)
+        if cls.wrf.rank == 0:
+            cls.wrf.files.dirs = [d for d in cls.wrf.files.dirs if re.search('c01_2016120[1-3]', d)]
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.wrf.rank == 0:
+            import os
+            os.remove('out.nc')
+
+
+class TestField(WRFTests):
+    def test_all_whole_domain(self):
+        wrf.concat('T2')
+        if self.wrf.rank == 0:
+            with xr.open_dataset(config['tests']['all_days']) as data:
+                with xr.open_dataset('out.nc') as out:
+                    np.testing.assert_allclose(
+                        out['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
+                        data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
+
+    def test_lead_day_whole_domain(self):
+        self.wrf.concat('T2', lead_day=1)
+        if self.wrf.rank == 0:
+            with xr.open_dataset(config['tests']['lead_day1']) as data:
+                with xr.open_dataset('out.nc') as out:
+                    np.testing.assert_allclose(
+                        out['T2'].transpose('Time', 'south_north', 'west_east'),
+                        data['field'].transpose('time', 'south_north', 'west_east'))
+
+class TestIntp(WRFTests):
+    def test_all_interpolated(self):
+        with xr.open_dataset(config['tests']['all_days']) as data:
+            self.wrf.concat('T2', True)
+            np.testing.assert_allclose(
+                self.wrf.data['T2'].transpose('start', 'station', 'Time'),
+                data['interp'].transpose('start', 'station', 'Time'), rtol=1e-3)
+
+
+    def test_lead_day_interpolated(self):
+        with xr.open_dataset(config['tests']['lead_day1']) as data:
+            self.wrf.concat('T2', True, 1)
+            np.testing.assert_allclose(
+                self.wrf.data['T2'].transpose('station', 'time'),
+                data['interp'].transpose('station', 'time'), rtol=1e-4)
+
+def run_tests():
+    suite = unittest.TestSuite()
+    # suite.addTests([Tests(t) for t in Tests.__dict__.keys() if t[:4]=='test'])
+    suite.addTest(TestField('test_all_whole_domain'))
+    # suite.addTest(TestField('test_lead_day_whole_domain'))
+    # suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestField))
+    runner = unittest.TextTestRunner()
+    runner.run(suite)
