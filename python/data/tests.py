@@ -15,7 +15,7 @@ class WRFTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        # os.remove('out.nc')
+        os.remove('out.nc')
         if hasattr(cls, 'data'):
             cls.data.close()
 
@@ -24,7 +24,7 @@ class WRFTests(unittest.TestCase):
         comm = MPI.Comm.Get_parent()
         kwargs = None
         kwargs = comm.bcast(kwargs, root=0)
-        cc = WRF.Concatenator('d03', interpolator='scipy')
+        cc = WRF.Concatenator('d03', interpolator='bilinear')
         if cc.rank == 0:
             cc.files.dirs = [d for d in cc.files.dirs if re.search('c01_2016120[1-3]', d)]
         cc.concat(**kwargs)
@@ -54,8 +54,8 @@ class TestAllDays(WRFTests):
         comm.Disconnect()
         with xr.open_dataset('out.nc') as out:
             np.testing.assert_allclose(
-                out['T2'].transpose('start', 'station', 'Time'),
-                self.data['interp'].transpose('start', 'station', 'Time'), rtol=1e-3)
+                out['T2'].transpose('start', 'Time', 'station'),
+                self.data['interp'].transpose('start', 'Time', 'station'), rtol=1e-3)
 
 class TestLeadDay(WRFTests):
     @classmethod
@@ -80,8 +80,8 @@ class TestLeadDay(WRFTests):
         comm.Disconnect()
         with xr.open_dataset('out.nc') as out:
             np.testing.assert_allclose(
-                out['T2'].transpose('station', 'Time'),
-                self.data['interp'].transpose('station', 'time'), rtol=1e-4)
+                out['T2'].transpose('Time', 'station'),
+                self.data['interp'].transpose('time', 'station'), rtol=1e-4)
 
 def run_tests():
     suite = unittest.TestSuite()

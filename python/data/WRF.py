@@ -35,7 +35,6 @@ from netCDF4 import Dataset, MFDataset, num2date, date2num
 from datetime import datetime, timedelta
 from functools import partial
 from importlib import import_module
-import unittest
 from . import config
 
 
@@ -253,14 +252,9 @@ class Concatenator(object):
             for i, v in enumerate(variables):
                 var = ds[v]
                 x = var[:]
-                dims = list(var.dimensions)
+                dims = var.dimensions
                 if interp:
-                    other_dims = set(dims) - set(self.intp.spatial_dims)
-                    j = [dims.index(d) for d in self.intp.spatial_dims]
-                    k = [dims.index(d) for d in other_dims]
-                    x = x.transpose(*np.r_[j, k])
-                    x = x.reshape(np.r_[x.shape[:len(j)], -1])
-                    x = self.intp(x)
+                    x = self.intp(var)
                     dims = ['Time', 'station']
                 if lead_day is None:
                     x = np.expand_dims(x, 0)
@@ -354,7 +348,3 @@ class Concatenator(object):
         if interp and self.rank == 0:
             with Dataset(name, 'a') as out:
                 out['station'][:] = self._names
-
-
-if __name__ == '__main__':
-    unittest.main()

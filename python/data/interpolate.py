@@ -22,9 +22,6 @@ The points in ij, k in :meth:`.weights` are ordered::
 
 In the x-direction, two interpolations are performed on the lines denoted *x0* and *x1* (to the points *X0* and *X1*), whereas in the y-directions, the interpolation weights are also computed for the lines *y0* and *y0*, and the final interpolation between *X0* and *X1* is performed with the mean of these two sets of points.
 
-.. NOTE::
-
-    * For now, import troubles (can't import from higher level than package) are circumvented with sys.path.append().
 
 """
 
@@ -45,14 +42,29 @@ class InterpolatorBase(object):
     spatial_dims = ['south_north', 'west_east']
     """The names of the latitude / longitude dimensions"""
 
-    def __init__(self, stations=None, lon=None, lat=None, names=None):
+    def __init__(self, ds, stations=None, lon=None, lat=None, names=None):
+        self.xarray = isinstance(ds, xr.Dataset)
+        proj = Proj(**proj_params(ds))
+        self.x, self.y = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
         if (stations is None) and (lon is None):
             with pd.HDFStore(config['stations']['sta']) as S:
                 stations = S['stations']
             self.index = stations.index
-            self.lon, self.lat = stations[['lon', 'lat']].as_matrix().T
+            self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
         elif lon is not None:
-            self.lon, self.lat, self.index = lon, lat, names
+            self.index = names
+            self.ij = proj(lon, lat)
+
+    def netcdf(self, var):
+        dims = var.dimensions
+        other_dims = set(dims) - set(self.spatial_dims)
+        j = [dims.index(d) for d in self.spatial_dims]
+        k = [dims.index(d) for d in other_dims]
+        x = var[:].transpose(np.r_[j, k])
+        if isinstance(self, GridInterpolator):
+            return x.reshape(np.r_[x.shape[:len(j)], -1])
+        elif isinstance(self, BilinearInterpolator):
+            return x.reshape((np.prod(x.shape[:len(j)]), -1))
 
 
 class GridInterpolator(InterpolatorBase):
@@ -72,23 +84,20 @@ class GridInterpolator(InterpolatorBase):
     Interpolation is carried out by calling the instantiated class as described for :class:`.BilinearInterpolator`.
     """
     def __init__(self, ds, method='linear', **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(ds, **kwargs)
         from geo import affine
         self.intp = import_module('scipy.interpolate')
         self.method = method
-        proj = Proj(**proj_params(ds))
-        xy = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
-        tg = affine(*xy)
-        ij = proj(self.lon, self.lat)
-        self.coords = np.roll(tg(np.r_['0,2', ij]).T, 1, 1)
-        self.mn = (range(xy[0].shape[0]), range(xy[0].shape[1]))
+        tg = affine(self.x, self.y)
+        self.coords = np.roll(tg(np.r_['0,2', self.ij]).T, 1, 1)
+        self.mn = [range(s) for s in self.x.shape]
 
     def _grid_interp(self, data):
         return [self.intp.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
              for k in range(data.shape[2])]
 
     def __call__(self, x):
-        try: # case of xarray dataset
+        if self.xarray:
             dims = set(x.dims).symmetric_difference(self.spatial_dims)
             if len(dims) > 0:
                 X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
@@ -99,7 +108,8 @@ class GridInterpolator(InterpolatorBase):
             else:
                 y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
                 return xr.DataArray(y, coords=[('station', self.index)])
-        except AttributeError: # case of netCDF dataset
+        else:
+            x = self.netcdf(x)
             if len(x.shape) > 2:
                 return np.array(self._grid_interp(x))
             else:
@@ -136,11 +146,9 @@ class BilinearInterpolator(InterpolatorBase):
 
     def __init__(self, ds, **kwargs):
         from geo import Squares
-        super().__init__(**kwargs)
+        super().__init__(ds, **kwargs)
         pr = Proj(**proj_params(ds))
-        self.x, self.y = pr(g2d(ds['XLONG']), g2d(ds['XLAT']))
-        self.i, self.j = pr(self.lon, self.lat)
-        self.points = Squares.compute(self.x, self.y, self.i, self.j)
+        self.points = Squares.compute(self.x, self.y, *self.ij)
         K = np.ravel_multi_index(self.points.sel(var='indexes').astype(int).values,
                                  self.x.shape[:2]).reshape((4, -1))
 
@@ -149,15 +157,18 @@ class BilinearInterpolator(InterpolatorBase):
         self.W[range(n), K] = self.points.groupby('station').apply(self._weights).transpose('square', 'station')
 
     def __call__(self, x):
-        dims = set(x.dims).symmetric_difference(self.spatial_dims)
-        if len(dims) > 0:
-            X = x.stack(s=self.spatial_dims, t=dims)
-            y = xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
-            y.coords['XTIME'] = x.coords['XTIME']
+        if self.xarray:
+            dims = set(x.dims).symmetric_difference(self.spatial_dims)
+            if len(dims) > 0:
+                X = x.stack(s=self.spatial_dims, t=dims)
+                y = xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
+                y.coords['XTIME'] = x.coords['XTIME']
+            else:
+                X = x.stack(s=self.spatial_dims)
+                y = xr.DataArray(self.W.dot(X), coords=[self.index])
+            return y
         else:
-            X = x.stack(s=self.spatial_dims)
-            y = xr.DataArray(self.W.dot(X), coords=[self.index])
-        return y
+            return self.W.dot(self.netcdf(x)).T # <- Time, station
 
     def plot(self, k):
         import matplotlib.pyplot as plt
