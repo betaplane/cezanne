@@ -12,10 +12,13 @@ Example Usage::
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * To run tests with mpi4py and using :mod:`condor`::
+    * To run tests with mpi4py (the import form is necessary because of the config values only accessibly via the parent package :mod:`data`)::
 
-        mpiexec -n 3 python -c "import condor; condor.enable_sshfs_import(...); from data import WRF; WRF.run_tests()"
+        mpiexec -n 1 python -c "from data import tests; tests.run_tests()"
 
+    * If using :mod:`condor`, the code files need to be downloaded for the tests to work correctly (because of relative imports in the :mod:`data` package)::
+
+        mpiexec -n 1 python -c "import condor; condor.enable_sshfs_import(..., download=True); from data import tests; tests.run_tests()"
 .. TODO::
 
 
@@ -202,7 +205,8 @@ class Concatenator(object):
     def concat(self, variables, out_name='out.nc', interpolate=None, lead_day=None, func=None):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
-        :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
+        :param variables: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
+        :param out_name: Name of the output file to which to write the concatenated data.
         :param interpolate: Whether or not to interpolate to station locations (see :class:`.Concatenator`).
         :type interpolated: :obj:`bool`
         :param lead_day: Lead day of the forecast for which to search, if only one particular lead day is desired.
