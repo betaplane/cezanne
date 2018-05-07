@@ -144,66 +144,36 @@ class Concatenator(object):
             self._first = None
         self._first = self.comm.bcast(self._first, root=0)
 
-        if stations is not None:
-            self._stations = stations
-
         if interpolator is not None:
+            lonlatnames = self.stations(stations)
+            self.n_stations = len(lonlatnames['lon'])
             with Dataset(self._first) as ds:
                 self.intp = getattr(import_module('data.interpolate'),
                                     {'bilinear': 'BilinearInterpolator',
                                      'scipy': 'GridInterpolator'}[interpolator]
-                                    )(ds, self.stations)
+                                    )(ds, **lonlatnames)
 
         if self.rank == 0:
             print('WRF.Concatenator initialized with {} dirs'.format(len(F.dirs)))
 
-    @property
-    def stations(self):
-        try:
-            return self._stations
-        except:
-            with pd.HDFStore(config['stations']['sta']) as sta:
-                self._stations = sta['stations']
-            return self._stations
+    def stations(self, sta):
+        # HDFStore can only be opened by one process
+        if self.rank == 0:
+            if sta is None:
+                with pd.HDFStore(config['stations']['sta']) as sta:
+                    sta = sta['stations']
+            lon, lat = sta[['lon', 'lat']].as_matrix().T
+            self._names = sta.index.values
+            lln = {'lon': lon, 'lat': lat, 'names': self._names}
+        else:
+            lln = None
+        lln = self.comm.bcast(lln, root=0)
+        return lln
 
     def remove_dirs(self, ds):
         t = ds.indexes['start'] - pd.Timedelta(self.dt, 'h')
         s = [d.strftime('%Y%m%d%H') for d in t]
         return [d for d in self.dirs if d[-10:] not in s]
-
-    def run(self, outfile, previous_file=None, **kwargs):
-        """Wrapper around the :meth:`.concat` call which writes out a netCDF file whenever an error occurs and restarts with all already processed directories removed from :attr:`.dirs`
-
-        :param outfile: base name of the output netCDF file (no extension, numberings are added in case of restarts)
-        :Keyword arguments:
-
-            Are all passed to :meth:`.concat`
-
-        """
-        if previous_file is not None:
-            with xr.open_dataset(previous_file) as ds:
-                self.dirs = self.remove_dirs(ds)
-
-        i = 0
-        def write(filename, start):
-            global i
-            self.data.to_netcdf(filename)
-            self.dirs = self.remove_dirs(self.data)
-            with open('timing.txt', 'a') as f:
-                f.write('{} dirs in {} seconds, file {}'.format(
-                    len_dirs - len(self.dirs), timer() - start, filename))
-            i += 1
-
-        while len(self.dirs) > 0:
-            try:
-                start = timer()
-                len_dirs = len(self.dirs)
-                self.concat(**kwargs)
-            except:
-                write('{}{}.nc'.format(outfile, i), start)
-            finally:
-                write('{}{}.nc'.format(outfile, i), start)
-
 
     def concat(self, variables, out_name='out.nc', interpolate=None, lead_day=None, func=None):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
@@ -224,7 +194,7 @@ class Concatenator(object):
         start = MPI.Wtime()
         var = np.array([variables]).flatten()
 
-        self._create_outfile(out_name, var, lead_day)
+        self._create_outfile(out_name, var, lead_day, interpolate)
 
         self.start = 0
         n_dirs = len(self.files.dirs) if self.rank == 0 else None
@@ -246,8 +216,12 @@ class Concatenator(object):
 
         print('Time taken: {} (proc {})'.format(MPI.Wtime() - start, self.rank))
 
-    @staticmethod
-    def _dimsize(dim):
+    def _dimsize(self, ds, d):
+        if d=='start':
+            return self.start + self.rank
+        if d=='station':
+            return slice(None)
+        dim = ds.dimensions[d]
         if hasattr(dim, 'size'):
             return slice(None, dim.size)
         elif hasattr(dim, 'dimlens'):
@@ -278,14 +252,22 @@ class Concatenator(object):
 
             for i, v in enumerate(variables):
                 var = ds[v]
+                x = var[:]
+                dims = list(var.dimensions)
+                if interp:
+                    other_dims = set(dims) - set(self.intp.spatial_dims)
+                    j = [dims.index(d) for d in self.intp.spatial_dims]
+                    k = [dims.index(d) for d in other_dims]
+                    x = x.transpose(*np.r_[j, k])
+                    x = x.reshape(np.r_[x.shape[:len(j)], -1])
+                    x = self.intp(x)
+                    dims = ['Time', 'station']
                 if lead_day is None:
-                    x = np.expand_dims(var[:], 0)
-                    dims = np.r_[['start'], var.dimensions]
-                    D = list(np.r_[[self.start + self.rank], [self._dimsize(ds.dimensions[d]) for d in var.dimensions]])
+                    x = np.expand_dims(x, 0)
+                    D = [self._dimsize(ds, d) for d in np.r_[['start'], dims]]
                 else:
-                    x = var[[idx if d=='Time' else slice(None) for d in var.dimensions]]
-                    dims = var.dimensions
-                    D = [t_slice if d=='Time' else slice(None) for d in var.dimensions]
+                    x = x[[idx if d=='Time' else slice(None) for d in dims]]
+                    D = [t_slice if d=='Time' else slice(None) for d in dims]
 
                 out[v].set_collective(True)
                 out[v][D] = x
@@ -293,22 +275,39 @@ class Concatenator(object):
         out.close()
         self.start = self.start + self.n_proc
 
-    @staticmethod
-    def _dims_and_coords(ds, var):
+    # all very WRF-specific
+    def _dims_and_coords(self, ds, var, interp):
         coords = set.union(*[set(ds[v].coordinates.split()) for v in var]) - {'XTIME'}
         dims = set.union(*[set(ds[v].dimensions) for v in var]) - {'Time'}
 
-        dims = {d: ds.dimensions[d].size for d in dims}
-        coords = {c: (ds[c].dtype, ds[c].dimensions[1:]) for c in coords}
-        variables = {v: (ds[v].dtype, ds[v].dimensions) for v in var}
-        return dims, coords, variables
+        D, C, V = {}, {}, {}
+        for d in dims:
+            if (not interp) or (d not in self.intp.spatial_dims):
+                D[d] = ds.dimensions[d].size
+
+        for c in coords:
+            d = ds[c].dimensions[1:]
+            if (not interp) or (len(set(d).intersection(self.intp.spatial_dims)) == 0):
+                C[c] = (ds[c].dtype, d)
+
+        for v in var:
+            dims = [d for d in ds[v].dimensions if ((not interp) or (d not in self.intp.spatial_dims))]
+            if interp:
+                dims.append('station')
+            V[v] = (ds[v].dtype, dims)
+
+        if interp:
+            D['station'] = self.n_stations
+            C['station'] = (str, 'station')
+
+        return D, C, V
 
     # file has to be created and opened BY ALL PROCESSES
-    def _create_outfile(self, name, var, lead_day):
+    def _create_outfile(self, name, var, lead_day, interp):
         # I think there's a file formate issue - I can open the WRF files only in single-proc mode
         if self.rank == 0:
             ds = Dataset(self._first)
-            dcv = self._dims_and_coords(ds, var)
+            dcv = self._dims_and_coords(ds, var, self.intp if interp else None)
         else:
             dcv = None
 
@@ -345,11 +344,16 @@ class Concatenator(object):
         # but I think it needs to be done after defining, as in F90/C
         if self.rank == 0:
             for k in coords.keys():
-                out[k][:] = ds[k][1, :, :]
+                if k != 'station':
+                    out[k][:] = ds[k][1, :, :]
             ds.close()
         out.close()
 
-
+        # however, string variables are treated as 'vlen' and having an unlimited dimension, which
+        # would require communal parallel writing
+        if interp and self.rank == 0:
+            with Dataset(name, 'a') as out:
+                out['station'][:] = self._names
 
 
 if __name__ == '__main__':

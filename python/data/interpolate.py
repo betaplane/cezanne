@@ -45,13 +45,14 @@ class InterpolatorBase(object):
     spatial_dims = ['south_north', 'west_east']
     """The names of the latitude / longitude dimensions"""
 
-    def __init__(self, stations=None):
-        if stations is None:
+    def __init__(self, stations=None, lon=None, lat=None, names=None):
+        if (stations is None) and (lon is None):
             with pd.HDFStore(config['stations']['sta']) as S:
-                self.stations = S['stations']
-        else:
-            self.stations = stations
-        self.index = self.stations.index
+                stations = S['stations']
+            self.index = stations.index
+            self.lon, self.lat = stations[['lon', 'lat']].as_matrix().T
+        elif lon is not None:
+            self.lon, self.lat, self.index = lon, lat, names
 
 
 class GridInterpolator(InterpolatorBase):
@@ -70,15 +71,15 @@ class GridInterpolator(InterpolatorBase):
 
     Interpolation is carried out by calling the instantiated class as described for :class:`.BilinearInterpolator`.
     """
-    def __init__(self, ds, stations=None, method='linear'):
-        super().__init__(stations)
+    def __init__(self, ds, method='linear', **kwargs):
+        super().__init__(**kwargs)
         from geo import affine
         self.intp = import_module('scipy.interpolate')
         self.method = method
         proj = Proj(**proj_params(ds))
         xy = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
         tg = affine(*xy)
-        ij = proj(*self.stations.loc[:, ('lon', 'lat')].as_matrix().T)
+        ij = proj(self.lon, self.lat)
         self.coords = np.roll(tg(np.r_['0,2', ij]).T, 1, 1)
         self.mn = (range(xy[0].shape[0]), range(xy[0].shape[1]))
 
@@ -87,16 +88,22 @@ class GridInterpolator(InterpolatorBase):
              for k in range(data.shape[2])]
 
     def __call__(self, x):
-        dims = set(x.dims).symmetric_difference(self.spatial_dims)
-        if len(dims) > 0:
-            X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
-            y = self._grid_interp(X.values)
-            ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
-            ds.coords['XTIME'] = ('Time', x.XTIME)
-        else:
-            y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
-            ds = xr.DataArray(y, coords=[('station', self.index)])
-        return ds
+        try: # case of xarray dataset
+            dims = set(x.dims).symmetric_difference(self.spatial_dims)
+            if len(dims) > 0:
+                X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
+                y = self._grid_interp(X.values)
+                ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
+                ds.coords['XTIME'] = ('Time', x.XTIME)
+                return ds
+            else:
+                y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
+                return xr.DataArray(y, coords=[('station', self.index)])
+        except AttributeError: # case of netCDF dataset
+            if len(x.shape) > 2:
+                return np.array(self._grid_interp(x))
+            else:
+                return self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
 
 class BilinearInterpolator(InterpolatorBase):
     """Implements bilinear interpolation in two spatial dimensions by precomputing a weight matrix which can be used repeatedly to interpolate to the same spatial locations. The input :class:`xarray.Dataset` is reshaped into a two-dimensional matrix, with one dimension consisting of the stacked two spatial dimensions (longitude / latitude), and the other dimension consisting of all other dimensions stacked. Hence, interpolation to fixed locations in the horizontal (longitude / latitude) plane can be carried out by a simple matrix multiplication with the precomputed weights matrix. Different model levels, variables and other potential dimensions can be stacked without the need to write loops in python. The interpolation weights are computed in **projected** coordinates.
@@ -127,17 +134,17 @@ class BilinearInterpolator(InterpolatorBase):
 
     """
 
-    def __init__(self, ds, stations=None):
+    def __init__(self, ds, **kwargs):
         from geo import Squares
-        super().__init__(stations)
+        super().__init__(**kwargs)
         pr = Proj(**proj_params(ds))
-        self.x, self.y = pr(g2d(ds.XLONG), g2d(ds.XLAT))
-        self.i, self.j = pr(*self.stations.loc[:, ('lon', 'lat')].as_matrix().T)
+        self.x, self.y = pr(g2d(ds['XLONG']), g2d(ds['XLAT']))
+        self.i, self.j = pr(self.lon, self.lat)
         self.points = Squares.compute(self.x, self.y, self.i, self.j)
         K = np.ravel_multi_index(self.points.sel(var='indexes').astype(int).values,
                                  self.x.shape[:2]).reshape((4, -1))
 
-        n = self.stations.shape[0]
+        n = self.index.size
         self.W = np.zeros((n, np.prod(self.x.shape)))
         self.W[range(n), K] = self.points.groupby('station').apply(self._weights).transpose('square', 'station')
 
