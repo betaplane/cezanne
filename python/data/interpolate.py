@@ -22,6 +22,7 @@ The points in ij, k in :meth:`.weights` are ordered::
 
 In the x-direction, two interpolations are performed on the lines denoted *x0* and *x1* (to the points *X0* and *X1*), whereas in the y-directions, the interpolation weights are also computed for the lines *y0* and *y0*, and the final interpolation between *X0* and *X1* is performed with the mean of these two sets of points.
 
+.. _netCDF4: http://unidata.github.io/netcdf4-python/
 
 """
 
@@ -39,6 +40,21 @@ def g2d(v):
     return np.array(v[:]).flatten()[-m * n:].reshape((m, n))
 
 class InterpolatorBase(object):
+    """Base class for the interpolators in this module. The parameters common to all routines are described here.
+
+    :param ds: netCDF Dataset from which to interpolate (and which contains projection parameters as attributes).
+    :type ds: :class:`xarray.Dataset` or `netCDF4`_ Dataset.
+
+    :Keyword arguments:
+        * **stations** - DataFrame with station locations as returned by a call to :meth:`.CEAZA.Downloader.get_stations`.
+        * **lon** - :obj:`iterable` of longitudes
+        * **lat** - :obj:`iterable` of latitudes
+        * **names** - :obj:`iterable` of station names
+
+    .. NOTE::
+        None of the keyword arguments are necessary; if none are given, the default list of stations is loaded according to the values specified in the config file (see :mod:`data`). Alternatively, ``lon``, ``lat`` and ``names`` can be specified directly (but ``names``) is currently not used if ``ds`` is a `netCDF4`_ Dataset.
+
+    """
     spatial_dims = ['south_north', 'west_east']
     """The names of the latitude / longitude dimensions"""
 
@@ -75,11 +91,10 @@ class GridInterpolator(InterpolatorBase):
 
     A call to the returned class instance uses :meth:`scipy.interpolate.interpn` to interpolate from this regular grid to station locations.
 
-    :param ds: netCDF Dataset from which to interpolate (and which contains projection parameters as attributes).
-    :type ds: :class:`~xarray.Dataset`
-    :param stations: DataFrame with station locations as returned by a call to :meth:`.CEAZA.Downloader.get_stations`.
-    :type stations: :class:`~pandas.DataFrame`
-    :param method: Maps directly to the param of the same name in :func:`~scipy.interpolate.interpn`.
+    See :class:`InterpolatorBase` for a description of the parameters common to all interpolators.
+
+    :Keyword arguments:
+        * **method** - Maps directly to the param of the same name in :func:`~scipy.interpolate.interpn`.
 
     Interpolation is carried out by calling the instantiated class as described for :class:`.BilinearInterpolator`.
     """
@@ -118,23 +133,18 @@ class GridInterpolator(InterpolatorBase):
 class BilinearInterpolator(InterpolatorBase):
     """Implements bilinear interpolation in two spatial dimensions by precomputing a weight matrix which can be used repeatedly to interpolate to the same spatial locations. The input :class:`xarray.Dataset` is reshaped into a two-dimensional matrix, with one dimension consisting of the stacked two spatial dimensions (longitude / latitude), and the other dimension consisting of all other dimensions stacked. Hence, interpolation to fixed locations in the horizontal (longitude / latitude) plane can be carried out by a simple matrix multiplication with the precomputed weights matrix. Different model levels, variables and other potential dimensions can be stacked without the need to write loops in python. The interpolation weights are computed in **projected** coordinates.
 
-    :param ds: dataset to be interpolated (with projection information as netCDF attributes)
-    :type ds: :class:`~xarray.Dataset`
-    :param stations: DataFrame containing the longitue / latitude locations to which the data should be interpolated (as returned from a call to :meth:`.CEAZA.Downloader.get_stations`)
-    :type station: :class:`~pandas.DataFrame`
+    See :class:`InterpolatorBase` for a description of the parameters common to all interpolators.
 
     Interpolation is carried out by calling the instantiated class with the :class:`~xarray.DataArray` containing the data::
 
         import pandas as pd
         import xarray as xr
 
-        with pd.HDFStore(...) as S:
-            stations = S['stations']
         with xr.open_dataset(...) as ds:
-            BLI = BilinearInterpolator(ds, stations)
+            BLI = BilinearInterpolator(ds, ...)
             result = BLI(ds['T2'])
 
-    If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array` - also, **this only works as expected if all the variables share the same dimensions**::
+    If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array` - also, **this only works as expected if all the variables share the same dimensions** and if ``ds`` is an :class:`xarray.Dataset` and not a `netCDF4`_ one::
 
         result = BLI(ds[['T2', 'Q2']].to_array())
 

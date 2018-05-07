@@ -22,9 +22,6 @@ Example Usage::
 
         mpiexec -n 1 python -c "import condor; condor.enable_sshfs_import(..., download=True); from data import tests; tests.run_tests()"
 
-.. TODO::
-
-
 """
 from glob import glob
 import os.path as pa
