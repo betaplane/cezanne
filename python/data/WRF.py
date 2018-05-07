@@ -7,7 +7,7 @@ Example Usage::
 
     from data import WRF
     w = WRF.Concatenator(domain='d03', interpolator='bilinear')
-    w.run('T2-PSFC', var=['T2', 'PSFC'], interpolate=True)
+    w.concat(variables=['T2', 'PSFC'], out_name='T2-PSFC' , interpolate=True)
 
 .. NOTE::
 
@@ -15,10 +15,13 @@ Example Usage::
     * To run tests with mpi4py (the import form is necessary because of the config values only accessibly via the parent package :mod:`data`)::
 
         mpiexec -n 1 python -c "from data import tests; tests.run_tests()"
+        # or
+        mpiexec -n python -m unittest data.tests.TestField
 
     * If using :mod:`condor`, the code files need to be downloaded for the tests to work correctly (because of relative imports in the :mod:`data` package)::
 
         mpiexec -n 1 python -c "import condor; condor.enable_sshfs_import(..., download=True); from data import tests; tests.run_tests()"
+
 .. TODO::
 
 

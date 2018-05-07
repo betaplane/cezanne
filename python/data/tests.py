@@ -10,8 +10,13 @@ from . import config, WRF
 # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
 class WRFTests(unittest.TestCase):
     @classmethod
+    def setUpClass(cls):
+        cls.comm = MPI.COMM_SELF.Spawn(sys.executable, ['-c', 'from data import tests;tests.WRFTests.run_concat()'], maxprocs=3)
+
+    @classmethod
     def tearDownClass(cls):
         os.remove('out.nc')
+        cls.comm.Disconnect()
 
     @staticmethod
     def run_concat():
@@ -27,10 +32,9 @@ class WRFTests(unittest.TestCase):
 
 class TestField(WRFTests):
     def test_all_whole_domain(self):
-        comm = MPI.COMM_SELF.Spawn(sys.executable, ['-c', 'from data import tests;tests.WRFTests.run_concat()'], maxprocs=3)
-        comm.bcast({'variables': 'T2'}, root=MPI.ROOT)
-        comm.barrier()
-        comm.Disconnect()
+        self.comm.bcast({'variables': 'T2'}, root=MPI.ROOT)
+        self.comm.barrier()
+        self.comm.Disconnect()
         with xr.open_dataset(config['tests']['all_days']) as data:
             with xr.open_dataset('out.nc') as out:
                 np.testing.assert_allclose(
@@ -39,9 +43,9 @@ class TestField(WRFTests):
 
     def test_lead_day_whole_domain(self):
         comm = MPI.COMM_SELF.Spawn(sys.executable, ['-c', 'from data import tests;tests.WRFTests.run_concat()'], maxprocs=3)
-        comm.bcast({'variables': 'T2', 'lead_day': 1}, root=MPI.ROOT)
-        comm.barrier()
-        comm.Disconnect()
+        self.comm.bcast({'variables': 'T2', 'lead_day': 1}, root=MPI.ROOT)
+        self.comm.barrier()
+        self.comm.Disconnect()
         with xr.open_dataset(config['tests']['lead_day1']) as data:
             with xr.open_dataset('out.nc') as out:
                 np.testing.assert_allclose(
