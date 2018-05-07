@@ -1,34 +1,30 @@
 import unittest, re
 import xarray as xr
 import numpy as np
-from . import config
+import sys, os
+from mpi4py import MPI
+from importlib import import_module
+from . import config, WRF
 
 
 # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
 class WRFTests(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
-        from .WRF import Concatenator
-        cls.wrf = Concatenator('d03', interpolator=None)
-        if cls.wrf.rank == 0:
-            cls.wrf.files.dirs = [d for d in cls.wrf.files.dirs if re.search('c01_2016120[1-3]', d)]
-
-    @classmethod
     def tearDownClass(cls):
-        if cls.wrf.rank == 0:
-            import os
-            os.remove('out.nc')
+        os.remove('out.nc')
 
 
 class TestField(WRFTests):
     def test_all_whole_domain(self):
-        wrf.concat('T2')
-        if self.wrf.rank == 0:
-            with xr.open_dataset(config['tests']['all_days']) as data:
-                with xr.open_dataset('out.nc') as out:
-                    np.testing.assert_allclose(
-                        out['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
-                        data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
+        comm = MPI.COMM_SELF.Spawn(sys.executable, ['-c', 'from data import tests;tests.run_concat()'], maxprocs=3)
+        comm.bcast(['T2'], root=MPI.ROOT)
+        comm.barrier()
+        comm.Disconnect()
+        with xr.open_dataset(config['tests']['all_days']) as data:
+            with xr.open_dataset('out.nc') as out:
+                np.testing.assert_allclose(
+                    out['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
+                    data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
 
     def test_lead_day_whole_domain(self):
         self.wrf.concat('T2', lead_day=1)
@@ -63,3 +59,14 @@ def run_tests():
     # suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestField))
     runner = unittest.TextTestRunner()
     runner.run(suite)
+
+def run_concat():
+    comm = MPI.Comm.Get_parent()
+    args = None
+    args = comm.bcast(args, root=0)
+    cc = WRF.Concatenator('d03', interpolator=None)
+    if cc.rank == 0:
+        cc.files.dirs = [d for d in cc.files.dirs if re.search('c01_2016120[1-3]', d)]
+    cc.concat(*args)
+    comm.barrier()
+    comm.Disconnect()

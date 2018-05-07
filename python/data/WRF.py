@@ -20,7 +20,6 @@ Example Usage::
 
 
 """
-
 from glob import glob
 import os.path as pa
 import pandas as pd
