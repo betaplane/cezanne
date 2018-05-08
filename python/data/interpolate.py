@@ -73,10 +73,12 @@ class InterpolatorBase(object):
 
     def netcdf(self, var):
         dims = var.dimensions
-        other_dims = set(dims) - set(self.spatial_dims)
+        other_dims = [d for d in dims if d not in self.spatial_dims]
         j = [dims.index(d) for d in self.spatial_dims]
         k = [dims.index(d) for d in other_dims]
         x = var[:].transpose(np.r_[j, k])
+        self.shape_back = x.shape[len(j):]
+        self.dims = np.r_[['station'], other_dims]
         if isinstance(self, GridInterpolator):
             return x.reshape(np.r_[x.shape[:len(j)], -1])
         elif isinstance(self, BilinearInterpolator):
@@ -176,7 +178,7 @@ class BilinearInterpolator(InterpolatorBase):
                 y = xr.DataArray(self.W.dot(X), coords=[self.index])
             return y
         else:
-            return self.W.dot(self.netcdf(x)).T # <- Time, station
+            return self.W.dot(self.netcdf(x)).reshape(np.r_[[-1], self.shape_back])
 
     def plot(self, k):
         import matplotlib.pyplot as plt

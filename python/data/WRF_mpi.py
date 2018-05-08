@@ -196,14 +196,16 @@ class Concatenator(object):
                 self.files.dirs = self.files.dirs[self.n_proc:]
             else:
                 dirs = None
+            # this only works of scatter maintains the order
+            # so far it has always done so...
             dirs = self.comm.scatter(dirs, root=0)
             n_dirs = n_dirs - self.n_proc
 
-            self._extract(out_name, dirs, var, lead_day, interpolate, func)
+            self._extract(out_name, dirs, var, lead_day, interpolate, parallel=True)
 
-        while n_dirs > 0:
-            if self.rank == 0:
-                self._extract(out_name, dirs, var, lead_day, interpolate, func)
+        if self.rank == 0:
+            for i in range(n_dirs):
+                self._extract(out_name, self.files.dirs[i], var, lead_day, interpolate, parallel=False)
 
         print('Time taken: {} (proc {})'.format(MPI.Wtime() - start, self.rank))
 
@@ -218,20 +220,24 @@ class Concatenator(object):
         elif hasattr(dim, 'dimlens'):
             return slice(None, sum(dim.dimlens))
 
-    def _extract(self, out_name, d, variables, lead_day, interp, func):
+    def _extract(self, out_name, d, variables, lead_day, interp, parallel=True):
         print('dir: {} (proc {})'.format(d, self.rank))
 
         # somehow, it didn't seem possible to have a file open in parallel mode and perform the
         # scatter operation
-        out = Dataset(out_name, 'a', format='NETCDF4', parallel=True)
+        out = Dataset(out_name, 'a', format='NETCDF4', parallel=parallel)
+        if parallel:
+            out['XTIME'].set_collective(True)
+            if lead_day is None:
+                out['start'].set_collective(True)
+            for v in variables:
+                out[v].set_collective(True)
 
         with MFDataset(pa.join(d, self._glob_pattern)) as ds:
             xtime = ds['XTIME']
             xt = np.array(num2date(xtime[:], xtime.units), dtype='datetime64[m]') + self.dt
             t = date2num(xt.astype(datetime), units=self.time_units)
-            out['XTIME'].set_collective(True)
             if lead_day is None:
-                out['start'].set_collective(True)
                 out['start'][self.start + self.rank] = t.min()
                 out['XTIME'][self.start + self.rank, :xt.size] = t
             else:
@@ -247,7 +253,7 @@ class Concatenator(object):
                 dims = var.dimensions
                 if interp:
                     x = self.intp(var)
-                    dims = ['Time', 'station']
+                    dims = self.intp.dims
                 if lead_day is None:
                     x = np.expand_dims(x, 0)
                     D = [self._dimsize(ds, d) for d in np.r_[['start'], dims]]
@@ -255,11 +261,10 @@ class Concatenator(object):
                     x = x[[idx if d=='Time' else slice(None) for d in dims]]
                     D = [t_slice if d=='Time' else slice(None) for d in dims]
 
-                out[v].set_collective(True)
                 out[v][D] = x
 
         out.close()
-        self.start = self.start + self.n_proc
+        self.start = self.start + self.n_proc if parallel else self.start + 1
 
     # all very WRF-specific
     # only called by rank 0
@@ -280,12 +285,12 @@ class Concatenator(object):
         for v in var:
             dims = [d for d in ds[v].dimensions if ((not interp) or (d not in self.intp.spatial_dims))]
             if interp:
-                dims.append('station')
+                dims.insert(0, 'station')
             V.append((v, ds[v].dtype, dims))
 
         if interp:
-            D.append(('station', self.n_stations))
-            C.append(('station', str, 'station'))
+            D.insert(0, ('station', self.n_stations))
+            C.insert(0, ('station', str, 'station'))
 
         return D, C, V
 
