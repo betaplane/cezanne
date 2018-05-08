@@ -22,9 +22,7 @@ The points in ij, k in :meth:`.weights` are ordered::
 
 In the x-direction, two interpolations are performed on the lines denoted *x0* and *x1* (to the points *X0* and *X1*), whereas in the y-directions, the interpolation weights are also computed for the lines *y0* and *y0*, and the final interpolation between *X0* and *X1* is performed with the mean of these two sets of points.
 
-.. NOTE::
-
-    * For now, import troubles (can't import from higher level than package) are circumvented with sys.path.append().
+.. _netCDF4: http://unidata.github.io/netcdf4-python/
 
 """
 
@@ -42,16 +40,47 @@ def g2d(v):
     return np.array(v[:]).flatten()[-m * n:].reshape((m, n))
 
 class InterpolatorBase(object):
+    """Base class for the interpolators in this module. The parameters common to all routines are described here.
+
+    :param ds: netCDF Dataset from which to interpolate (and which contains projection parameters as attributes).
+    :type ds: :class:`xarray.Dataset` or `netCDF4`_ Dataset.
+
+    :Keyword arguments:
+        * **stations** - DataFrame with station locations as returned by a call to :meth:`.CEAZA.Downloader.get_stations`.
+        * **lon** - :obj:`iterable` of longitudes
+        * **lat** - :obj:`iterable` of latitudes
+        * **names** - :obj:`iterable` of station names
+
+    .. NOTE::
+        None of the keyword arguments are necessary; if none are given, the default list of stations is loaded according to the values specified in the config file (see :mod:`data`). Alternatively, ``lon``, ``lat`` and ``names`` can be specified directly (but ``names``) is currently not used if ``ds`` is a `netCDF4`_ Dataset.
+
+    """
     spatial_dims = ['south_north', 'west_east']
     """The names of the latitude / longitude dimensions"""
 
-    def __init__(self, stations=None):
-        if stations is None:
+    def __init__(self, ds, stations=None, lon=None, lat=None, names=None):
+        self.xarray = isinstance(ds, xr.Dataset)
+        proj = Proj(**proj_params(ds))
+        self.x, self.y = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
+        if (stations is None) and (lon is None):
             with pd.HDFStore(config['stations']['sta']) as S:
-                self.stations = S['stations']
-        else:
-            self.stations = stations
-        self.index = self.stations.index
+                stations = S['stations']
+            self.index = stations.index
+            self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
+        elif lon is not None:
+            self.index = names
+            self.ij = proj(lon, lat)
+
+    def netcdf(self, var):
+        dims = var.dimensions
+        other_dims = set(dims) - set(self.spatial_dims)
+        j = [dims.index(d) for d in self.spatial_dims]
+        k = [dims.index(d) for d in other_dims]
+        x = var[:].transpose(np.r_[j, k])
+        if isinstance(self, GridInterpolator):
+            return x.reshape(np.r_[x.shape[:len(j)], -1])
+        elif isinstance(self, BilinearInterpolator):
+            return x.reshape((np.prod(x.shape[:len(j)]), -1))
 
 
 class GridInterpolator(InterpolatorBase):
@@ -62,62 +91,59 @@ class GridInterpolator(InterpolatorBase):
 
     A call to the returned class instance uses :meth:`scipy.interpolate.interpn` to interpolate from this regular grid to station locations.
 
-    :param ds: netCDF Dataset from which to interpolate (and which contains projection parameters as attributes).
-    :type ds: :class:`~xarray.Dataset`
-    :param stations: DataFrame with station locations as returned by a call to :meth:`.CEAZA.Downloader.get_stations`.
-    :type stations: :class:`~pandas.DataFrame`
-    :param method: Maps directly to the param of the same name in :func:`~scipy.interpolate.interpn`.
+    See :class:`InterpolatorBase` for a description of the parameters common to all interpolators.
+
+    :Keyword arguments:
+        * **method** - Maps directly to the param of the same name in :func:`~scipy.interpolate.interpn`.
 
     Interpolation is carried out by calling the instantiated class as described for :class:`.BilinearInterpolator`.
     """
-    def __init__(self, ds, stations=None, method='linear'):
-        super().__init__(stations)
+    def __init__(self, ds, method='linear', **kwargs):
+        super().__init__(ds, **kwargs)
         from geo import affine
         self.intp = import_module('scipy.interpolate')
         self.method = method
-        proj = Proj(**proj_params(ds))
-        xy = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
-        tg = affine(*xy)
-        ij = proj(*self.stations.loc[:, ('lon', 'lat')].as_matrix().T)
-        self.coords = np.roll(tg(np.r_['0,2', ij]).T, 1, 1)
-        self.mn = (range(xy[0].shape[0]), range(xy[0].shape[1]))
+        tg = affine(self.x, self.y)
+        self.coords = np.roll(tg(np.r_['0,2', self.ij]).T, 1, 1)
+        self.mn = [range(s) for s in self.x.shape]
 
     def _grid_interp(self, data):
         return [self.intp.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
              for k in range(data.shape[2])]
 
     def __call__(self, x):
-        dims = set(x.dims).symmetric_difference(self.spatial_dims)
-        if len(dims) > 0:
-            X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
-            y = self._grid_interp(X.values)
-            ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
-            ds.coords['XTIME'] = ('Time', x.XTIME)
+        if self.xarray:
+            dims = set(x.dims).symmetric_difference(self.spatial_dims)
+            if len(dims) > 0:
+                X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
+                y = self._grid_interp(X.values)
+                ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
+                ds.coords['XTIME'] = ('Time', x.XTIME)
+                return ds
+            else:
+                y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
+                return xr.DataArray(y, coords=[('station', self.index)])
         else:
-            y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
-            ds = xr.DataArray(y, coords=[('station', self.index)])
-        return ds
+            x = self.netcdf(x)
+            if len(x.shape) > 2:
+                return np.array(self._grid_interp(x))
+            else:
+                return self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
 
 class BilinearInterpolator(InterpolatorBase):
-    """Implements bilinear interpolation in two spatial dimensions by precomputing a weight matrix which can be used repeatedly to interpolate to the same spatial locations. The input :class:`xarray.Dataset` is reshaped into a two-dimensional matrix, with one dimension consisting of the stacked two spatial dimensions (longitude / latitude), and the other dimension consisting of all other dimensions stacked. Hence, interpolation to fixed locations in the horizontal (longitude / latitude) plane can be carried out by a simple matrix multiplication with the precomputed weights matrix. Different model levels, variables and other potential dimensions can be stacked without the need to write loops in python. The interpolation weights are computed in **projected** coordinates.
+    """Implements bilinear interpolation in two spatial dimensions by precomputing a weight matrix which can be used repeatedly to interpolate to the same spatial locations. The input :class:`xarray.Dataset` / `netCDF4`_ Dataset is reshaped into a two-dimensional matrix, with one dimension consisting of the stacked two spatial dimensions (longitude / latitude), and the other dimension consisting of all other dimensions stacked. Hence, interpolation to fixed locations in the horizontal (longitude / latitude) plane can be carried out by a simple matrix multiplication with the precomputed weights matrix. Different model levels, variables and other potential dimensions can be stacked without the need to write loops in python. The interpolation weights are computed in **projected** coordinates.
 
-    :param ds: dataset to be interpolated (with projection information as netCDF attributes)
-    :type ds: :class:`~xarray.Dataset`
-    :param stations: DataFrame containing the longitue / latitude locations to which the data should be interpolated (as returned from a call to :meth:`.CEAZA.Downloader.get_stations`)
-    :type station: :class:`~pandas.DataFrame`
+    See :class:`InterpolatorBase` for a description of the parameters common to all interpolators.
 
     Interpolation is carried out by calling the instantiated class with the :class:`~xarray.DataArray` containing the data::
 
-        import pandas as pd
         import xarray as xr
 
-        with pd.HDFStore(...) as S:
-            stations = S['stations']
         with xr.open_dataset(...) as ds:
-            BLI = BilinearInterpolator(ds, stations)
+            BLI = BilinearInterpolator(ds, ...)
             result = BLI(ds['T2'])
 
-    If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array` - also, **this only works as expected if all the variables share the same dimensions**::
+    If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array` - also, **this only works as expected if all the variables share the same dimensions** and if ``ds`` is an :class:`xarray.Dataset` and not a `netCDF4`_ one::
 
         result = BLI(ds[['T2', 'Q2']].to_array())
 
@@ -127,30 +153,30 @@ class BilinearInterpolator(InterpolatorBase):
 
     """
 
-    def __init__(self, ds, stations=None):
+    def __init__(self, ds, **kwargs):
         from geo import Squares
-        super().__init__(stations)
-        pr = Proj(**proj_params(ds))
-        self.x, self.y = pr(g2d(ds.XLONG), g2d(ds.XLAT))
-        self.i, self.j = pr(*self.stations.loc[:, ('lon', 'lat')].as_matrix().T)
-        self.points = Squares.compute(self.x, self.y, self.i, self.j)
+        super().__init__(ds, **kwargs)
+        self.points = Squares.compute(self.x, self.y, *self.ij)
         K = np.ravel_multi_index(self.points.sel(var='indexes').astype(int).values,
                                  self.x.shape[:2]).reshape((4, -1))
 
-        n = self.stations.shape[0]
+        n = self.ij[0].size
         self.W = np.zeros((n, np.prod(self.x.shape)))
         self.W[range(n), K] = self.points.groupby('station').apply(self._weights).transpose('square', 'station')
 
     def __call__(self, x):
-        dims = set(x.dims).symmetric_difference(self.spatial_dims)
-        if len(dims) > 0:
-            X = x.stack(s=self.spatial_dims, t=dims)
-            y = xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
-            y.coords['XTIME'] = x.coords['XTIME']
+        if self.xarray:
+            dims = set(x.dims).symmetric_difference(self.spatial_dims)
+            if len(dims) > 0:
+                X = x.stack(s=self.spatial_dims, t=dims)
+                y = xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
+                y.coords['XTIME'] = x.coords['XTIME']
+            else:
+                X = x.stack(s=self.spatial_dims)
+                y = xr.DataArray(self.W.dot(X), coords=[self.index])
+            return y
         else:
-            X = x.stack(s=self.spatial_dims)
-            y = xr.DataArray(self.W.dot(X), coords=[self.index])
-        return y
+            return self.W.dot(self.netcdf(x)).T # <- Time, station
 
     def plot(self, k):
         import matplotlib.pyplot as plt

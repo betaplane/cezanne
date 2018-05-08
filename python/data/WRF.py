@@ -7,39 +7,27 @@ Example Usage::
 
     from data import WRF
     w = WRF.Concatenator(domain='d03', interpolator='bilinear')
-    w.run('T2-PSFC', var=['T2', 'PSFC'], interpolate=True)
+    w.concat(variables=['T2', 'PSFC'], out_name='T2-PSFC' , interpolate=True)
 
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * Data for the tests is in the same directory as this file
-    * Test are run e.g. by::
 
-        python -m unittest data.WRF.Tests
-
-.. warning::
-
-    The current layout with ThreadPoolExecutor seems to work on the UV only if one sets::
-
-        export OMP_NUM_THREADS=1
-
-    (`a conflict between OpenMP and dask? <https://stackoverflow.com/questions/39422092/error-with-omp-num-threads-when-using-dask-distributed>`_)
-
+.. TODO::
+    * add doc to interpolate what the returned arrays look like if netCDF4 Datasets are used
+    * combine mpi4py and single ThreadPool implementations of WRFOUT
+    * test with 4D variable
 
 """
-
-import re, unittest
 from glob import glob
 import os.path as pa
-import xarray as xr
 import pandas as pd
 import numpy as np
+from mpi4py import MPI
+from netCDF4 import Dataset, MFDataset, num2date, date2num
+from datetime import datetime, timedelta
 from functools import partial
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from timeit import default_timer as timer
-# from importlib.util import spec_from_file_location, module_from_spec
 from importlib import import_module
-from os.path import join, dirname
 from . import config
 
 
@@ -48,14 +36,15 @@ def align_stations(wrf, df):
 
     :param wrf: The DataArray or Dataset containing the concatenated and interpolated (to station locations) WRF simulations (only dimensions ``start`` and ``Time`` and coordinate ``XTIME`` are used).
     :type wrf: :class:`~xarray.DataArray` or :class:`~xarray.Dataset`
-    :param df: The DataFrame containing the station data (of the shape returned by :meth:`.CEAZA.Downloader.get_field`).
+    :param df: The DataFrame containing3 the station data (of the shape returned by :meth:`.CEAZA.Downloader.get_field`).
     :type df: :class:`~pandas.DataFrame`
     :returns: DataArray with ``start`` and ``Time`` dimensions aligned with **wrf**.
     :rtype: :class:`~xarray.DataArray`
 
     """
-    # necessary because some timestamps seem to be slightly off-round hours
+    import xarray as xr
     xt = wrf.XTIME.stack(t=('start', 'Time'))
+    # necessary because some timestamps seem to be slightly off-round hours
     xt = xr.DataArray(pd.Series(xt.values).dt.round('h'), coords=xt.coords).unstack('t')
     idx = np.vstack(df.index.get_indexer(xt.sel(start=s)) for s in wrf.start)
     cols = df.columns.get_level_values('station').intersection(wrf.station)
@@ -72,13 +61,14 @@ class Files(object):
             assert len(config) > 0, "config file not read"
             self.paths = [p for p in config['wrfout'].values() if pa.isdir(p)]
         for p in self.paths:
-            for d in sorted(glob(pa.join(p, pattern))):
+            for d in glob(pa.join(p, pattern)):
                 if (pa.isdir(d) and not pa.islink(d)):
                     dirs.append(d)
                     if limit is not None and len(dirs) == limit:
                         break
         dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
-        self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+        dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+        self.dirs = sorted(dirs, key=lambda d: d[-10:]) # <- sort by date
 
     @staticmethod
     def _name(domain, lead_day, prefix, d):
@@ -99,13 +89,21 @@ class Files(object):
 
     @classmethod
     def first(cls, domain, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout', opened=True):
+<<<<<<< HEAD
         """Get the first netCDF file matching the given arguments (see :class:`Concatenator` for a description), based on the configuration values (section *wrfout*) in the global config file.
+=======
+        """Get the first netCDF file matching the given arguments (see :class:`Concatenator` for a description), based on the configuration values (section *wrfout*) in the global config file. NOTE: the first matching file is taken before all the directories are sorted by date!
+>>>>>>> WRF_multi_proc
 
         """
         f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
         name = partial(cls._name, domain, lead_day, prefix)
         files, _, _ = name(f.dirs[0])
+<<<<<<< HEAD
         return xr.open_dataset(files[0]) if opened else files[0]
+=======
+        return files[0]
+>>>>>>> WRF_multi_proc
 
     @staticmethod
     def stations():
@@ -126,86 +124,62 @@ class Concatenator(object):
     :param interpolator: Which interpolator (if any) to use: ``scipy`` - use :class:`~.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~.interpolate.BilinearInterpolator`.
 
     """
-    max_workers = 16
-    "number of threads to be used"
-
+    time_units = 'minutes since 2015-01-01 00:00:00'
+    time_type = np.float64
 
     def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):
-        self.dt = dt
+        self.dt = np.timedelta64(dt, 'h')
         self._glob_pattern = '{}_{}_*'.format(prefix, domain)
-        files = Files(paths, hour, from_date)
-        self.dirs = files.dirs
 
-        assert len(self.dirs) > 0, "no directories added"
-
-        if stations is not None:
-            self._stations = stations
+        self.comm = MPI.COMM_WORLD
+        self.rank = self.comm.Get_rank()
+        self.n_proc = self.comm.Get_size()
+        if self.rank == 0:
+            F = Files(paths, hour, from_date)
+            self.files = F
+            assert len(F.dirs) > 0, "no files added"
+            # so that the first file is indeed the first, for consistency with the date2num units
+            self._first = min(glob(pa.join(self.files.dirs[0], self._glob_pattern)))
+        else:
+            self._first = None
+        self._first = self.comm.bcast(self._first, root=0)
 
         if interpolator is not None:
-            f = glob(pa.join(self.dirs[0], self._glob_pattern))
-            # spec = spec_from_file_location('interpolate', join(dirname(__file__), 'interpolate.py'))
-            with xr.open_dataset(f[0]) as ds:
-                if interpolator == 'scipy':
-                    # self.intp = getattr(module_from_spec(spec), 'GridInterpolator')(ds, self.stations)
-                    self.intp = getattr(import_module('data.interpolate'), 'GridInterpolator')(ds, self.stations)
-                elif interpolator == 'bilinear':
-                    # self.intp = getattr(module_from_spec(spec), 'BilinearInterpolator')(ds, self.stations)
-                    self.intp = getattr(import_module('data.interpolate'), 'BilinearInterpolator')(ds, self.stations)
+            lonlat = self.stations(stations)
+            with Dataset(self._first) as ds:
+                self.intp = getattr(import_module('data.interpolate'),
+                                    {'bilinear': 'BilinearInterpolator',
+                                     'scipy': 'GridInterpolator'}[interpolator]
+                                    )(ds, **lonlat)
 
-        print('WRF.Concatenator initialized with {} directories'.format(len(self.dirs)))
+        if self.rank == 0:
+            print('WRF.Concatenator initialized with {} dirs'.format(len(F.dirs)))
 
-    @property
-    def stations(self):
-        try:
-            return self._stations
-        except:
-            with pd.HDFStore(config['stations']['sta']) as sta:
-                self._stations = sta['stations']
-            return self._stations
+    def stations(self, sta):
+        # HDFStore can only be opened by one process
+        if self.rank == 0:
+            if sta is None:
+                with pd.HDFStore(config['stations']['sta']) as sta:
+                    sta = sta['stations']
+            lon, lat = sta[['lon', 'lat']].as_matrix().T
+            self.n_stations = lon.size
+            self._names = sta.index.values
+            ll = {'lon': lon, 'lat': lat}
+        else:
+            ll = None
+        ll = self.comm.bcast(ll, root=0)
+        return ll
 
     def remove_dirs(self, ds):
         t = ds.indexes['start'] - pd.Timedelta(self.dt, 'h')
         s = [d.strftime('%Y%m%d%H') for d in t]
         return [d for d in self.dirs if d[-10:] not in s]
 
-    def run(self, outfile, previous_file=None, **kwargs):
-        """Wrapper around the :meth:`.concat` call which writes out a netCDF file whenever an error occurs and restarts with all already processed directories removed from :attr:`.dirs`
-
-        :param outfile: base name of the output netCDF file (no extension, numberings are added in case of restarts)
-        :Keyword arguments:
-
-            Are all passed to :meth:`.concat`
-
-        """
-        if previous_file is not None:
-            with xr.open_dataset(previous_file) as ds:
-                self.dirs = self.remove_dirs(ds)
-
-        i = 0
-        def write(filename, start):
-            global i
-            self.data.to_netcdf(filename)
-            self.dirs = self.remove_dirs(self.data)
-            with open('timing.txt', 'a') as f:
-                f.write('{} dirs in {} seconds, file {}'.format(
-                    len_dirs - len(self.dirs), timer() - start, filename))
-            i += 1
-
-        while len(self.dirs) > 0:
-            try:
-                start = timer()
-                len_dirs = len(self.dirs)
-                self.concat(**kwargs)
-            except:
-                write('{}{}.nc'.format(outfile, i), start)
-            finally:
-                write('{}{}.nc'.format(outfile, i), start)
-
-
-    def concat(self, var, interpolate=None, lead_day=None, func=None):
+    def concat(self, variables, out_name='out.nc', interpolate=None, lead_day=None, func=None):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
-        :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
+        :param variables: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
+        :param out_name: Name of the output file to which to write the concatenated data.
         :param interpolate: Whether or not to interpolate to station locations (see :class:`.Concatenator`).
         :type interpolated: :obj:`bool`
         :param lead_day: Lead day of the forecast for which to search, if only one particular lead day is desired.
@@ -217,83 +191,160 @@ class Concatenator(object):
         :rtype: :class:`~xarray.Dataset`
 
         """
-        start = timer()
+        start = MPI.Wtime()
+        var = np.array([variables]).flatten()
 
-        func = partial(self._extract, var, self._glob_pattern, lead_day, self.dt,
-                       self.intp if interpolate else None, func)
+        self._create_outfile(out_name, var, lead_day, interpolate)
 
-        self.data = func(self.dirs[0])
-        if len(self.dirs) > 1:
-            with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self.dirs)-1)) as exe:
-                for i, f in enumerate(exe.map(func, self.dirs[1:])):
-                    self.data = xr.concat((self.data, f), 'start')
-            if lead_day is None:
-                self.data = self.data.sortby('start')
+        self.start = 0
+        n_dirs = len(self.files.dirs) if self.rank == 0 else None
+        n_dirs = self.comm.bcast(n_dirs, root=0)
+        while n_dirs >= self.n_proc:
+            if self.rank == 0:
+                dirs = self.files.dirs[:self.n_proc]
+                self.files.dirs = self.files.dirs[self.n_proc:]
             else:
-                self.data = self.data.stack(time=('start', 'Time')).sortby('XTIME')
-        print('Time taken: {:.2f}'.format(timer() - start))
+                dirs = None
+            dirs = self.comm.scatter(dirs, root=0)
+            n_dirs = n_dirs - self.n_proc
 
-    @staticmethod
-    def _extract(var, glob_pattern, lead_day, dt, interp, func, d):
-        with xr.open_mfdataset(pa.join(d, glob_pattern)) as ds:
-            print('using: {}'.format(ds.START_DATE))
-            x = ds[np.array([var]).flatten()].sortby('XTIME') # this seems to be at the root of Dask warnings
-            x['XTIME'] = x.XTIME + np.timedelta64(dt, 'h')
-            if lead_day is not None:
-                t = x.XTIME.to_index()
-                x = x.isel(Time = (t - t.min()).days == lead_day)
-            if interp is not None:
-                x = x.apply(interp)
-            if func is not None:
-                x = func(x)
-            x.load()
-            for v in x.data_vars:
-                x[v] = x[v].expand_dims('start')
-            x['start'] = ('start', pd.DatetimeIndex([x.XTIME.min().item()]))
-            return x
+            self._extract(out_name, dirs, var, lead_day, interpolate, func)
 
+        while n_dirs > 0:
+            if self.rank == 0:
+                self._extract(out_name, dirs, var, lead_day, interpolate, func)
 
-class Tests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.wrf = Concatenator(domain='d03', interpolator='bilinear')
-        cls.wrf.dirs = [d for d in cls.wrf.dirs if re.search('c01_2016120[1-3]', d)]
+        print('Time taken: {} (proc {})'.format(MPI.Wtime() - start, self.rank))
 
-    def test_lead_day_interpolated(self):
-        with xr.open_dataset(config['tests']['lead_day1']) as data:
-            self.wrf.concat('T2', True, 1)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('station', 'time'),
-                data['interp'].transpose('station', 'time'), rtol=1e-4)
+    def _dimsize(self, ds, d):
+        if d=='start':
+            return self.start + self.rank
+        if d=='station':
+            return slice(None)
+        dim = ds.dimensions[d]
+        if hasattr(dim, 'size'):
+            return slice(None, dim.size)
+        elif hasattr(dim, 'dimlens'):
+            return slice(None, sum(dim.dimlens))
 
-    def test_lead_day_whole_domain(self):
-        with xr.open_dataset(config['tests']['lead_day1']) as data:
-            self.wrf.concat('T2', lead_day=1)
-            # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('south_north', 'west_east', 'time'),
-                data['field'].transpose('south_north', 'west_east', 'time'))
+    def _extract(self, out_name, d, variables, lead_day, interp, func):
+        print('dir: {} (proc {})'.format(d, self.rank))
 
-    def test_all_whole_domain(self):
-        with xr.open_dataset(config['tests']['all_days']) as data:
-            self.wrf.concat('T2')
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
-                data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
+        # somehow, it didn't seem possible to have a file open in parallel mode and perform the
+        # scatter operation
+        out = Dataset(out_name, 'a', format='NETCDF4', parallel=True)
 
-    def test_all_interpolated(self):
-        with xr.open_dataset(config['tests']['all_days']) as data:
-            self.wrf.concat('T2', True)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('start', 'station', 'Time'),
-                data['interp'].transpose('start', 'station', 'Time'), rtol=1e-3)
+        with MFDataset(pa.join(d, self._glob_pattern)) as ds:
+            xtime = ds['XTIME']
+            xt = np.array(num2date(xtime[:], xtime.units), dtype='datetime64[m]') + self.dt
+            t = date2num(xt.astype(datetime), units=self.time_units)
+            out['XTIME'].set_collective(True)
+            if lead_day is None:
+                out['start'].set_collective(True)
+                out['start'][self.start + self.rank] = t.min()
+                out['XTIME'][self.start + self.rank, :xt.size] = t
+            else:
+                idx = (xt - xt.min()).astype('timedelta64[D]').astype(int) == lead_day
+                n = idx.astype(int).sum()
+                xout = out['XTIME']
+                t_slice = slice(xout.size + self.rank * n, xout.size + (self.rank + 1) * n)
+                xout[t_slice] = t[idx]
 
-def run_tests():
-    suite = unittest.TestSuite()
-    suite.addTests([Tests(t) for t in Tests.__dict__.keys() if t[:4]=='test'])
-    runner = unittest.TextTestRunner()
-    runner.run(suite)
+            for i, v in enumerate(variables):
+                var = ds[v]
+                x = var[:]
+                dims = var.dimensions
+                if interp:
+                    x = self.intp(var)
+                    dims = ['Time', 'station']
+                if lead_day is None:
+                    x = np.expand_dims(x, 0)
+                    D = [self._dimsize(ds, d) for d in np.r_[['start'], dims]]
+                else:
+                    x = x[[idx if d=='Time' else slice(None) for d in dims]]
+                    D = [t_slice if d=='Time' else slice(None) for d in dims]
 
+                out[v].set_collective(True)
+                out[v][D] = x
 
-if __name__ == '__main__':
-    unittest.main()
+        out.close()
+        self.start = self.start + self.n_proc
+
+    # all very WRF-specific
+    # only called by rank 0
+    def _dims_and_coords(self, ds, var, interp):
+        coords = set.union(*[set(ds[v].coordinates.split()) for v in var]) - {'XTIME'}
+        dims = set.union(*[set(ds[v].dimensions) for v in var]) - {'Time'}
+
+        D, C, V = [], [], []
+        for d in dims:
+            if (not interp) or (d not in self.intp.spatial_dims):
+                D.append((d, ds.dimensions[d].size))
+
+        for c in coords:
+            d = ds[c].dimensions[1:]
+            if (not interp) or (len(set(d).intersection(self.intp.spatial_dims)) == 0):
+                C.append((c, ds[c].dtype, d))
+
+        for v in var:
+            dims = [d for d in ds[v].dimensions if ((not interp) or (d not in self.intp.spatial_dims))]
+            if interp:
+                dims.append('station')
+            V.append((v, ds[v].dtype, dims))
+
+        if interp:
+            D.append(('station', self.n_stations))
+            C.append(('station', str, 'station'))
+
+        return D, C, V
+
+    # file has to be created and opened BY ALL PROCESSES
+    def _create_outfile(self, name, var, lead_day, interp):
+        # I think there's a file formate issue - I can open the WRF files only in single-proc mode
+        if self.rank == 0:
+            ds = Dataset(self._first)
+            dcv = self._dims_and_coords(ds, var, interp)
+        else:
+            dcv = None
+
+        dcv = self.comm.bcast(dcv, root=0)
+        dims, coords, variables = dcv
+
+        out = Dataset(name, 'w', format='NETCDF4', parallel=True)
+
+        out.createDimension('Time', None)
+        if lead_day is None:
+            out.createDimension('start', None)
+            s = out.createVariable('start', self.time_type, ('start'))
+            s.units = self.time_units
+            x = out.createVariable('XTIME', self.time_type, ('start', 'Time'))
+        else:
+            x = out.createVariable('XTIME', self.time_type, ('Time'))
+        x.units = self.time_units
+
+        # the reason for using OrderedDicts in _dims_and_coords is that otherwise the order
+        # of the items is not guaranteed to be the same for all procs, and thus the loops
+        # here would deadlock since the operations are collective
+        for i in dims:
+            out.createDimension(*i)
+
+        for c in coords:
+            out.createVariable(*c)
+
+        for v in variables:
+            out.createVariable(*v[:2], np.r_[['start'], v[2]] if lead_day is None else v[2])
+
+        # apparently, writing in non-parallel mode is fine
+        # but I think it needs to be done after defining, as in F90/C
+        if self.rank == 0:
+            for k in coords:
+                if k[0] != 'station':
+                    out[k[0]][:] = ds[k[0]][1, :, :] # WRF-specific (coords for each timestep)
+            ds.close()
+        out.close()
+
+        # however, string variables are treated as 'vlen' and having an unlimited dimension, which
+        # would require collective parallel writing
+        if interp and self.rank == 0:
+            with Dataset(name, 'a') as out:
+                out['station'][:] = self._names
