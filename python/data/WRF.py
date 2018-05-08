@@ -22,6 +22,11 @@ Example Usage::
 
         mpiexec -n 1 python -c "import condor; condor.enable_sshfs_import(..., download=True); from data import tests; tests.run_tests()"
 
+.. TODO::
+    * add doc to interpolate what the returned arrays look like if netCDF4 Datasets are used
+    * combine mpi4py and single ThreadPool implementations of WRFOUT
+    * move above NOTE to tests docs
+
 """
 from glob import glob
 import os.path as pa
