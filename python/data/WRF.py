@@ -141,13 +141,12 @@ class Concatenator(object):
         self._first = self.comm.bcast(self._first, root=0)
 
         if interpolator is not None:
-            lonlatnames = self.stations(stations)
-            self.n_stations = len(lonlatnames['lon'])
+            lonlat = self.stations(stations)
             with Dataset(self._first) as ds:
                 self.intp = getattr(import_module('data.interpolate'),
                                     {'bilinear': 'BilinearInterpolator',
                                      'scipy': 'GridInterpolator'}[interpolator]
-                                    )(ds, **lonlatnames)
+                                    )(ds, **lonlat)
 
         if self.rank == 0:
             print('WRF.Concatenator initialized with {} dirs'.format(len(F.dirs)))
@@ -159,12 +158,13 @@ class Concatenator(object):
                 with pd.HDFStore(config['stations']['sta']) as sta:
                     sta = sta['stations']
             lon, lat = sta[['lon', 'lat']].as_matrix().T
+            self.n_stations = lon.size
             self._names = sta.index.values
-            lln = {'lon': lon, 'lat': lat, 'names': self._names}
+            ll = {'lon': lon, 'lat': lat}
         else:
-            lln = None
-        lln = self.comm.bcast(lln, root=0)
-        return lln
+            ll = None
+        ll = self.comm.bcast(ll, root=0)
+        return ll
 
     def remove_dirs(self, ds):
         t = ds.indexes['start'] - pd.Timedelta(self.dt, 'h')
@@ -267,29 +267,30 @@ class Concatenator(object):
         self.start = self.start + self.n_proc
 
     # all very WRF-specific
+    # only called by rank 0
     def _dims_and_coords(self, ds, var, interp):
         coords = set.union(*[set(ds[v].coordinates.split()) for v in var]) - {'XTIME'}
         dims = set.union(*[set(ds[v].dimensions) for v in var]) - {'Time'}
 
-        D, C, V = {}, {}, {}
+        D, C, V = [], [], []
         for d in dims:
             if (not interp) or (d not in self.intp.spatial_dims):
-                D[d] = ds.dimensions[d].size
+                D.append((d, ds.dimensions[d].size))
 
         for c in coords:
             d = ds[c].dimensions[1:]
             if (not interp) or (len(set(d).intersection(self.intp.spatial_dims)) == 0):
-                C[c] = (ds[c].dtype, d)
+                C.append((c, ds[c].dtype, d))
 
         for v in var:
             dims = [d for d in ds[v].dimensions if ((not interp) or (d not in self.intp.spatial_dims))]
             if interp:
                 dims.append('station')
-            V[v] = (ds[v].dtype, dims)
+            V.append((v, ds[v].dtype, dims))
 
         if interp:
-            D['station'] = self.n_stations
-            C['station'] = (str, 'station')
+            D.append(('station', self.n_stations))
+            C.append(('station', str, 'station'))
 
         return D, C, V
 
@@ -298,7 +299,7 @@ class Concatenator(object):
         # I think there's a file formate issue - I can open the WRF files only in single-proc mode
         if self.rank == 0:
             ds = Dataset(self._first)
-            dcv = self._dims_and_coords(ds, var, self.intp if interp else None)
+            dcv = self._dims_and_coords(ds, var, interp)
         else:
             dcv = None
 
@@ -317,31 +318,29 @@ class Concatenator(object):
             x = out.createVariable('XTIME', self.time_type, ('Time'))
         x.units = self.time_units
 
-        for i in dims.items():             # these loops need to be synchronized for parallel access!!!
-            i = self.comm.bcast(i, root=0) # synchronization device - barrier() doesn't seem to work here
+        # the reason for using OrderedDicts in _dims_and_coords is that otherwise the order
+        # of the items is not guaranteed to be the same for all procs, and thus the loops
+        # here would deadlock since the operations are collective
+        for i in dims:
             out.createDimension(*i)
 
-        for i in coords.items():
-            i = self.comm.bcast(i, root=0)
-            k, v = i
-            c = out.createVariable(k, v[0], v[1])
+        for c in coords:
+            out.createVariable(*c)
 
-        for i in variables.items():
-            i = self.comm.bcast(i, root=0)
-            k, v = i
-            out.createVariable(k, v[0], np.r_[['start'], v[1]] if lead_day is None else v[1])
+        for v in variables:
+            out.createVariable(*v[:2], np.r_[['start'], v[2]] if lead_day is None else v[2])
 
         # apparently, writing in non-parallel mode is fine
         # but I think it needs to be done after defining, as in F90/C
         if self.rank == 0:
-            for k in coords.keys():
-                if k != 'station':
-                    out[k][:] = ds[k][1, :, :]
+            for k in coords:
+                if k[0] != 'station':
+                    out[k[0]][:] = ds[k[0]][1, :, :] # WRF-specific (coords for each timestep)
             ds.close()
         out.close()
 
         # however, string variables are treated as 'vlen' and having an unlimited dimension, which
-        # would require communal parallel writing
+        # would require collective parallel writing
         if interp and self.rank == 0:
             with Dataset(name, 'a') as out:
                 out['station'][:] = self._names

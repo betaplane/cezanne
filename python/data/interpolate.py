@@ -157,12 +157,11 @@ class BilinearInterpolator(InterpolatorBase):
     def __init__(self, ds, **kwargs):
         from geo import Squares
         super().__init__(ds, **kwargs)
-        pr = Proj(**proj_params(ds))
         self.points = Squares.compute(self.x, self.y, *self.ij)
         K = np.ravel_multi_index(self.points.sel(var='indexes').astype(int).values,
                                  self.x.shape[:2]).reshape((4, -1))
 
-        n = self.index.size
+        n = self.ij[0].size
         self.W = np.zeros((n, np.prod(self.x.shape)))
         self.W[range(n), K] = self.points.groupby('station').apply(self._weights).transpose('square', 'station')
 
