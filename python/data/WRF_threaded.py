@@ -114,7 +114,7 @@ class Files(object):
 
 
 class Concatenator(object):
-    """WRFOUT file concatenator, for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
+    """WRFOUT file concatenator (xarray version), for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
     Class variable *max_workers* controls how many threads are used.
 
     :param domain: Domain specifier for which to search among WRFOUT-files.

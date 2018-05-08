@@ -22,6 +22,14 @@
 
 """
 from configparser import ConfigParser
+from importlib.util import find_spec
+from importlib import import_module
+
 config = ConfigParser()
 """global configuration values"""
 config.read('/HPC/arno/general.cfg')
+
+if find_spec('mpi4py') is None:
+    WRF = import_module('.WRF_threaded', 'data')
+else:
+    WRF = import_module('.WRF_mpi', 'data')
