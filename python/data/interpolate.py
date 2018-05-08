@@ -62,14 +62,16 @@ class InterpolatorBase(object):
         self.xarray = isinstance(ds, xr.Dataset)
         proj = Proj(**proj_params(ds))
         self.x, self.y = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
-        if (stations is None) and (lon is None):
-            with pd.HDFStore(config['stations']['sta']) as S:
-                stations = S['stations']
-            self.index = stations.index
-            self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
-        elif lon is not None:
+        if lon is not None:
             self.index = names
             self.ij = proj(lon, lat)
+        else:
+            if (stations is None):
+                with pd.HDFStore(config['stations']['sta']) as S:
+                    stations = S['stations']
+            self.index = stations.index
+            self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
+
 
     def netcdf(self, var):
         dims = var.dimensions

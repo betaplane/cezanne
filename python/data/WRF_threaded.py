@@ -143,14 +143,11 @@ class Concatenator(object):
 
         if interpolator is not None:
             f = glob(pa.join(self.dirs[0], self._glob_pattern))
-            # spec = spec_from_file_location('interpolate', join(dirname(__file__), 'interpolate.py'))
             with xr.open_dataset(f[0]) as ds:
-                if interpolator == 'scipy':
-                    # self.intp = getattr(module_from_spec(spec), 'GridInterpolator')(ds, self.stations)
-                    self.intp = getattr(import_module('data.interpolate'), 'GridInterpolator')(ds, self.stations)
-                elif interpolator == 'bilinear':
-                    # self.intp = getattr(module_from_spec(spec), 'BilinearInterpolator')(ds, self.stations)
-                    self.intp = getattr(import_module('data.interpolate'), 'BilinearInterpolator')(ds, self.stations)
+                self.intp = getattr(import_module('data.interpolate'), {
+                    'scipy': 'GridInterpolator',
+                    'bilinear': 'BilinearInterpolator'
+                }[interpolator])(ds, stations = self.stations)
 
         print('WRF.Concatenator initialized with {} directories'.format(len(self.dirs)))
 
