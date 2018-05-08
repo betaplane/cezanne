@@ -1,3 +1,18 @@
+"""
+Tests
+-----
+
+To run tests with mpi4py (the import form is necessary because of the config values only accessibly via the parent package :mod:`python.data`)::
+
+    mpiexec -n 1 python -c "from data import tests; tests.run_tests()"
+    # or
+    mpiexec -n python -m unittest data.tests.TestField
+
+If using :mod:`condor`, the code files need to be downloaded for the tests to work correctly (because of relative imports in the :mod:`~python.data` package)::
+
+    mpiexec -n 1 python -c "import condor; condor.enable_sshfs_import(..., download=True); from data import tests; tests.run_tests()"
+
+"""
 import unittest, re
 import xarray as xr
 import numpy as np

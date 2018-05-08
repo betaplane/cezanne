@@ -12,20 +12,11 @@ Example Usage::
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * To run tests with mpi4py (the import form is necessary because of the config values only accessibly via the parent package :mod:`data`)::
-
-        mpiexec -n 1 python -c "from data import tests; tests.run_tests()"
-        # or
-        mpiexec -n python -m unittest data.tests.TestField
-
-    * If using :mod:`condor`, the code files need to be downloaded for the tests to work correctly (because of relative imports in the :mod:`data` package)::
-
-        mpiexec -n 1 python -c "import condor; condor.enable_sshfs_import(..., download=True); from data import tests; tests.run_tests()"
 
 .. TODO::
     * add doc to interpolate what the returned arrays look like if netCDF4 Datasets are used
     * combine mpi4py and single ThreadPool implementations of WRFOUT
-    * move above NOTE to tests docs
+    * test with 4D variable
 
 """
 from glob import glob

@@ -11,6 +11,9 @@
 .. automodule:: python.data.WRF
     :members:
 
+.. automodule:: python.data.tests
+    :members:
+
 .. automodule:: python.data.IGRA
     :members:
 

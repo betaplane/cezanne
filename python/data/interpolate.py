@@ -137,7 +137,6 @@ class BilinearInterpolator(InterpolatorBase):
 
     Interpolation is carried out by calling the instantiated class with the :class:`~xarray.DataArray` containing the data::
 
-        import pandas as pd
         import xarray as xr
 
         with xr.open_dataset(...) as ds:
