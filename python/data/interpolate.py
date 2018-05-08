@@ -128,9 +128,9 @@ class GridInterpolator(InterpolatorBase):
                 y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
                 return xr.DataArray(y, coords=[('station', self.index)])
         else:
-            x = self.netcdf(x)
             if len(x.shape) > 2:
-                return np.array(self._grid_interp(x))
+                x = self.netcdf(x)
+                return np.array(self._grid_interp(x)).reshape(np.r_[[-1], self.shape_back])
             else:
                 return self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
 
