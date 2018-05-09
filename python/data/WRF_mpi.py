@@ -252,8 +252,7 @@ class Concatenator(object):
                 x = var[:]
                 dims = var.dimensions
                 if interp:
-                    x = self.intp(var)
-                    dims = self.intp.dims
+                    x, dims = self.intp.netcdf(var)
                 if lead_day is None:
                     x = np.expand_dims(x, 0)
                     D = [self._dimsize(ds, d) for d in np.r_[['start'], dims]]

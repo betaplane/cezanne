@@ -59,7 +59,6 @@ class InterpolatorBase(object):
     """The names of the latitude / longitude dimensions"""
 
     def __init__(self, ds, stations=None, lon=None, lat=None, names=None):
-        self.xarray = isinstance(ds, xr.Dataset)
         proj = Proj(**proj_params(ds))
         self.x, self.y = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
         if lon is not None:
@@ -72,19 +71,13 @@ class InterpolatorBase(object):
             self.index = stations.index
             self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
 
-
-    def netcdf(self, var):
+    def netcdf_dims(self, var):
         dims = var.dimensions
         other_dims = [d for d in dims if d not in self.spatial_dims]
         j = [dims.index(d) for d in self.spatial_dims]
         k = [dims.index(d) for d in other_dims]
         x = var[:].transpose(np.r_[j, k])
-        self.shape_back = x.shape[len(j):]
-        self.dims = np.r_[['station'], other_dims]
-        if isinstance(self, GridInterpolator):
-            return x.reshape(np.r_[x.shape[:len(j)], -1])
-        elif isinstance(self, BilinearInterpolator):
-            return x.reshape((np.prod(x.shape[:len(j)]), -1))
+        return x, x.shape[:len(j)], x.shape[len(j):], other_dims
 
 
 class GridInterpolator(InterpolatorBase):
@@ -112,27 +105,29 @@ class GridInterpolator(InterpolatorBase):
         self.mn = [range(s) for s in self.x.shape]
 
     def _grid_interp(self, data):
-        return [self.intp.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
-             for k in range(data.shape[2])]
+        return np.array([self.intp.interpn(self.mn, data[:, :, k], self.coords, self.method, bounds_error=False)
+             for k in range(data.shape[2])])
 
-    def __call__(self, x):
-        if self.xarray:
-            dims = set(x.dims).symmetric_difference(self.spatial_dims)
-            if len(dims) > 0:
-                X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
-                y = self._grid_interp(X.values)
-                ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
-                ds.coords['XTIME'] = ('Time', x.XTIME)
-                return ds
-            else:
-                y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
-                return xr.DataArray(y, coords=[('station', self.index)])
+    def xarray(self, x):
+        dims = set(x.dims).symmetric_difference(self.spatial_dims)
+        if len(dims) > 0:
+            X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
+            y = self._grid_interp(X.values)
+            ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
+            ds.coords['XTIME'] = ('Time', x.XTIME)
+            return ds
         else:
-            if len(x.shape) > 2:
-                x = self.netcdf(x)
-                return np.array(self._grid_interp(x)).reshape(np.r_[[-1], self.shape_back])
-            else:
-                return self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
+            y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
+            return xr.DataArray(y, coords=[('station', self.index)])
+
+    def netcdf(self, x):
+        if len(x.shape) > 2:
+            x, s, r, other_dims = self.netcdf_dims(x)
+            x = x.reshape(np.r_[s, [-1]])
+            return (np.moveaxis(np.array(self._grid_interp(x)).reshape(np.r_[r, [-1]]), -1, 0),
+                np.r_[['station'], other_dims])
+        else:
+            return self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
 
 class BilinearInterpolator(InterpolatorBase):
     """Implements bilinear interpolation in two spatial dimensions by precomputing a weight matrix which can be used repeatedly to interpolate to the same spatial locations. The input :class:`xarray.Dataset` / `netCDF4`_ Dataset is reshaped into a two-dimensional matrix, with one dimension consisting of the stacked two spatial dimensions (longitude / latitude), and the other dimension consisting of all other dimensions stacked. Hence, interpolation to fixed locations in the horizontal (longitude / latitude) plane can be carried out by a simple matrix multiplication with the precomputed weights matrix. Different model levels, variables and other potential dimensions can be stacked without the need to write loops in python. The interpolation weights are computed in **projected** coordinates.
@@ -168,19 +163,23 @@ class BilinearInterpolator(InterpolatorBase):
         self.W = np.zeros((n, np.prod(self.x.shape)))
         self.W[range(n), K] = self.points.groupby('station').apply(self._weights).transpose('square', 'station')
 
-    def __call__(self, x):
-        if self.xarray:
-            dims = set(x.dims).symmetric_difference(self.spatial_dims)
-            if len(dims) > 0:
-                X = x.stack(s=self.spatial_dims, t=dims)
-                y = xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
-                y.coords['XTIME'] = x.coords['XTIME']
-            else:
-                X = x.stack(s=self.spatial_dims)
-                y = xr.DataArray(self.W.dot(X), coords=[self.index])
-            return y
+    def xarray(self, x):
+        dims = set(x.dims).symmetric_difference(self.spatial_dims)
+        if len(dims) > 0:
+            X = x.stack(s=self.spatial_dims, t=dims)
+            y = xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
+            y.coords['XTIME'] = x.coords['XTIME']
         else:
-            return self.W.dot(self.netcdf(x)).reshape(np.r_[[-1], self.shape_back])
+            X = x.stack(s=self.spatial_dims)
+            y = xr.DataArray(self.W.dot(X), coords=[self.index])
+        return y
+
+    def netcdf(self, x):
+        if len(x.shape) <= 2:
+            raise Exception('2- or lower-dimensional data unsupported')
+        x, s, r, other_dims = self.netcdf_dims(x)
+        return (self.W.dot(x.reshape((np.prod(s), -1))).reshape(np.r_[[-1], r]),
+                np.r_[['station'], other_dims])
 
     def plot(self, k):
         import matplotlib.pyplot as plt

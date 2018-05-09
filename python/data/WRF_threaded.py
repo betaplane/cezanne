@@ -240,7 +240,7 @@ class Concatenator(object):
                 t = x.XTIME.to_index()
                 x = x.isel(Time = (t - t.min()).days == lead_day)
             if interp is not None:
-                x = x.apply(interp)
+                x = x.apply(interp.xarray)
             if func is not None:
                 x = func(x)
             x.load()

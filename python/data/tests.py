@@ -24,9 +24,8 @@ from . import config, WRF, interpolate
 
 # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
 class WRFTests(unittest.TestCase):
-    @staticmethod
-    def comm():
-        return MPI.COMM_SELF.Spawn(sys.executable, ['-c', 'from data import tests;tests.WRFTests.run_concat()'], maxprocs=3)
+    interpolator = 'bilinear'
+    n_proc = 3
 
     @classmethod
     def tearDownClass(cls):
@@ -35,73 +34,118 @@ class WRFTests(unittest.TestCase):
             cls.data.close()
 
     @staticmethod
-    def run_concat():
+    def run_concat(interpolator):
         comm = MPI.Comm.Get_parent()
         kwargs = None
         kwargs = comm.bcast(kwargs, root=0)
-        cc = WRF.Concatenator('d03', interpolator='bilinear')
+        cc = WRF.Concatenator('d03', interpolator=interpolator)
         if cc.rank == 0:
             cc.files.dirs = [d for d in cc.files.dirs if re.search('c01_2016120[1-3]', d)]
         cc.concat(**kwargs)
         comm.barrier()
         comm.Disconnect()
 
-class TestAllDays(WRFTests):
+    def setUp(self):
+        self.comm =  MPI.COMM_SELF.Spawn(sys.executable,
+            ['-c', 'from data import tests;tests.WRFTests.run_concat("{}")'.format(self.interpolator)],
+                                         maxprocs=self.n_proc)
+
+    def tearDown(self):
+        self.comm.Disconnect()
+        self.data.close()
+
+    def run_util(self, **kwargs):
+        self.comm.bcast(kwargs, root=MPI.ROOT)
+        self.comm.barrier()
+        self.data = xr.open_dataset('out.nc')
+
+class T2all(WRFTests):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.data = xr.open_dataset(config['tests']['all_days'])
+        cls.test = xr.open_dataset(config['tests']['T2_all'])
 
     def test_all_whole_domain(self):
-        comm = self.comm()
-        comm.bcast({'variables': 'T2'}, root=MPI.ROOT)
-        comm.barrier()
-        comm.Disconnect()
-        with xr.open_dataset('out.nc') as out:
-            np.testing.assert_allclose(
-                out['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
-                self.data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
+        tr = ('start', 'Time', 'south_north', 'west_east')
+        self.run_util(variables='T2')
+        np.testing.assert_allclose(
+            self.data['T2'].transpose(*tr),
+            self.test['field'].transpose(*tr))
 
     def test_all_interpolated(self):
-        comm = self.comm()
-        comm.bcast({'variables': 'T2', 'interpolate': True}, root=MPI.ROOT)
-        comm.barrier()
-        comm.Disconnect()
-        with xr.open_dataset('out.nc') as out:
-            np.testing.assert_allclose(
-                out['T2'].transpose('start', 'Time', 'station'),
-                self.data['interp'].transpose('start', 'Time', 'station'), rtol=1e-3)
+        self.run_util(variables='T2', interpolate=True)
+        np.testing.assert_allclose(
+            self.data['T2'].transpose('start', 'Time', 'station'),
+            self.test['interp'].transpose('start', 'Time', 'station'), rtol=1e-3)
 
-class TestLeadDay(WRFTests):
+class T2lead1(WRFTests):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.data = xr.open_dataset(config['tests']['lead_day1'])
+        cls.test = xr.open_dataset(config['tests']['T2_lead1'])
 
     def test_lead_day_whole_domain(self):
-        comm = self.comm()
-        comm.bcast({'variables': 'T2', 'lead_day': 1}, root=MPI.ROOT)
-        comm.barrier()
-        comm.Disconnect()
-        with xr.open_dataset('out.nc') as out:
-            np.testing.assert_allclose(
-                out['T2'].transpose('Time', 'south_north', 'west_east'),
-                self.data['field'].transpose('time', 'south_north', 'west_east'))
+        tr = ('Time', 'south_north', 'west_east')
+        self.run_util(variables='T2', lead_day=1)
+        np.testing.assert_allclose(
+            self.data['T2'].transpose(*tr),
+            self.test['field'].transpose(*tr))
 
     def test_lead_day_interpolated(self):
-        comm = self.comm()
-        comm.bcast({'variables': 'T2', 'lead_day': 1, 'interpolate': True}, root=MPI.ROOT)
-        comm.barrier()
-        comm.Disconnect()
-        with xr.open_dataset('out.nc') as out:
-            np.testing.assert_allclose(
-                out['T2'].transpose('Time', 'station'),
-                self.data['interp'].transpose('time', 'station'), rtol=1e-4)
+        tr = ('Time', 'station')
+        self.run_util(variables='T2', lead_day=1, interpolate=True)
+        np.testing.assert_allclose(
+            self.data['T2'].transpose(*tr),
+            self.test['interp'].transpose(*tr), rtol=1e-4)
+
+class Tall(WRFTests):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.test = xr.open_dataset(config['tests']['T_all'])
+
+    def test_all_whole_domain(self):
+        tr = ('start', 'Time', 'bottom_top', 'south_north', 'west_east')
+        self.run_util(variables='T')
+        np.testing.assert_allclose(
+            self.data['T'].transpose(*tr),
+            self.test['field'].transpose(*tr))
+
+    def test_all_interpolated(self):
+        tr = ('start', 'Time', 'bottom_top', 'station')
+        self.run_util(variables='T', interpolate=True)
+        np.testing.assert_allclose(
+            self.data['T'].transpose(*tr),
+            self.test['interp'].transpose(*tr), rtol=1e-3)
+
+class Tlead1(WRFTests):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.test = xr.open_dataset(config['tests']['T_lead1'])
+
+    def test_all_whole_domain(self):
+        tr = ('Time', 'bottom_top', 'south_north', 'west_east')
+        self.run_util(variables='T', lead_day=1)
+        np.testing.assert_allclose(
+            self.data['T'].transpose(*tr),
+            self.test['field'].transpose(*tr))
+
+    def test_all_interpolated(self):
+        tr = ('Time', 'bottom_top', 'station')
+        self.run_util(variables='T', lead_day=1, interpolate=True)
+        np.testing.assert_allclose(
+            self.data['T'].transpose(*tr),
+            self.test['interp'].transpose(*tr), rtol=1e-3)
 
 def run_tests():
+    WRFTests.interpolator = 'scipy'
     suite = unittest.TestSuite()
-    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestAllDays))
-    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestLeadDay))
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T2all))
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T2lead1))
+    # suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(Tall))
+    # suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(Tlead1))
+    # suite.addTest(Tlead1('test_all_interpolated'))
     runner = unittest.TextTestRunner()
     runner.run(suite)
 
