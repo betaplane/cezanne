@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-WRFOUT concatenation
---------------------
+WRFOUT concatenation (MPI version)
+----------------------------------
 
 Example Usage::
 
@@ -12,11 +12,6 @@ Example Usage::
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-
-.. TODO::
-    * add doc to interpolate what the returned arrays look like if netCDF4 Datasets are used
-    * combine mpi4py and single ThreadPool implementations of WRFOUT
-    * test with 4D variable
 
 """
 from glob import glob
@@ -127,10 +122,10 @@ class Concatenator(object):
         self.n_proc = self.comm.Get_size()
         if self.rank == 0:
             F = Files(paths, hour, from_date)
-            self.files = F
+            self.dirs = F.dirs
             assert len(F.dirs) > 0, "no files added"
             # so that the first file is indeed the first, for consistency with the date2num units
-            self._first = min(glob(pa.join(self.files.dirs[0], self._glob_pattern)))
+            self._first = min(glob(pa.join(self.dirs[0], self._glob_pattern)))
         else:
             self._first = None
         self._first = self.comm.bcast(self._first, root=0)
@@ -144,7 +139,7 @@ class Concatenator(object):
                                     )(ds, **lonlat)
 
         if self.rank == 0:
-            print('WRF.Concatenator initialized with {} dirs'.format(len(F.dirs)))
+            print('Concatenator initialized with {} dirs, interpolator {}'.format(len(F.dirs), interpolator))
 
     def stations(self, sta):
         # HDFStore can only be opened by one process
@@ -188,12 +183,12 @@ class Concatenator(object):
         self._create_outfile(out_name, var, lead_day, interpolate)
 
         self.start = 0
-        n_dirs = len(self.files.dirs) if self.rank == 0 else None
+        n_dirs = len(self.dirs) if self.rank == 0 else None
         n_dirs = self.comm.bcast(n_dirs, root=0)
         while n_dirs >= self.n_proc:
             if self.rank == 0:
-                dirs = self.files.dirs[:self.n_proc]
-                self.files.dirs = self.files.dirs[self.n_proc:]
+                dirs = self.dirs[:self.n_proc]
+                self.dirs = self.dirs[self.n_proc:]
             else:
                 dirs = None
             # this only works of scatter maintains the order
@@ -205,7 +200,7 @@ class Concatenator(object):
 
         if self.rank == 0:
             for i in range(n_dirs):
-                self._extract(out_name, self.files.dirs[i], var, lead_day, interpolate, parallel=False)
+                self._extract(out_name, self.dirs[i], var, lead_day, interpolate, parallel=False)
 
         print('Time taken: {} (proc {})'.format(MPI.Wtime() - start, self.rank))
 

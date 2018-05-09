@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-WRFOUT concatenation
---------------------
+WRFOUT concatenation (xarray version)
+-------------------------------------
 
 Example Usage::
 
@@ -37,7 +37,6 @@ import numpy as np
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
-# from importlib.util import spec_from_file_location, module_from_spec
 from importlib import import_module
 from os.path import join, dirname
 from . import config
@@ -149,7 +148,7 @@ class Concatenator(object):
                     'bilinear': 'BilinearInterpolator'
                 }[interpolator])(ds, stations = self.stations)
 
-        print('WRF.Concatenator initialized with {} directories'.format(len(self.dirs)))
+        print('Concatenator initialized with {} directories, interpolator {}'.format(len(self.dirs), interpolator))
 
     @property
     def stations(self):
@@ -248,49 +247,3 @@ class Concatenator(object):
                 x[v] = x[v].expand_dims('start')
             x['start'] = ('start', pd.DatetimeIndex([x.XTIME.min().item()]))
             return x
-
-
-class Tests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.wrf = Concatenator(domain='d03', interpolator='bilinear')
-        cls.wrf.dirs = [d for d in cls.wrf.dirs if re.search('c01_2016120[1-3]', d)]
-
-    def test_lead_day_interpolated(self):
-        with xr.open_dataset(config['tests']['lead_day1']) as data:
-            self.wrf.concat('T2', True, 1)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('station', 'time'),
-                data['interp'].transpose('station', 'time'), rtol=1e-4)
-
-    def test_lead_day_whole_domain(self):
-        with xr.open_dataset(config['tests']['lead_day1']) as data:
-            self.wrf.concat('T2', lead_day=1)
-            # I can't get the xarray.testing method of the same name to work (fails due to timestamps)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('south_north', 'west_east', 'time'),
-                data['field'].transpose('south_north', 'west_east', 'time'))
-
-    def test_all_whole_domain(self):
-        with xr.open_dataset(config['tests']['all_days']) as data:
-            self.wrf.concat('T2')
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('start', 'Time', 'south_north', 'west_east'),
-                data['field'].transpose('start', 'Time', 'south_north', 'west_east'))
-
-    def test_all_interpolated(self):
-        with xr.open_dataset(config['tests']['all_days']) as data:
-            self.wrf.concat('T2', True)
-            np.testing.assert_allclose(
-                self.wrf.data['T2'].transpose('start', 'station', 'Time'),
-                data['interp'].transpose('start', 'station', 'Time'), rtol=1e-3)
-
-def run_tests():
-    suite = unittest.TestSuite()
-    suite.addTests([Tests(t) for t in Tests.__dict__.keys() if t[:4]=='test'])
-    runner = unittest.TextTestRunner()
-    runner.run(suite)
-
-
-if __name__ == '__main__':
-    unittest.main()
