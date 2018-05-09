@@ -199,7 +199,7 @@ class Concatenator(object):
                 write('{}{}.nc'.format(outfile, i), start)
 
 
-    def concat(self, var, interpolate=None, lead_day=None, func=None):
+    def concat(self, variables, interpolate=None, lead_day=None, func=None):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
         :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
@@ -216,7 +216,7 @@ class Concatenator(object):
         """
         start = timer()
 
-        func = partial(self._extract, var, self._glob_pattern, lead_day, self.dt,
+        func = partial(self._extract, variables, self._glob_pattern, lead_day, self.dt,
                        self.intp if interpolate else None, func)
 
         self.data = func(self.dirs[0])
@@ -227,7 +227,7 @@ class Concatenator(object):
             if lead_day is None:
                 self.data = self.data.sortby('start')
             else:
-                self.data = self.data.stack(time=('start', 'Time')).sortby('XTIME')
+                self.data = self.data.rename({'Time': 't'}).stack(Time=('start', 't')).sortby('XTIME')
         print('Time taken: {:.2f}'.format(timer() - start))
 
     @staticmethod

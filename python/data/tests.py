@@ -17,24 +17,33 @@ import unittest, re
 import xarray as xr
 import numpy as np
 import sys, os
-from mpi4py import MPI
 from importlib import import_module
+from importlib.util import find_spec
 from . import config, WRF, interpolate
 
+if find_spec('mpi4py'):
+    MPI = import_module('mpi4py.MPI')
 
-# I can't get the xarray.testing method of the same name to work (fails due to timestamps)
+# xarray.testing methods compare dimensions etc too, which we don't want here
 class WRFTests(unittest.TestCase):
     interpolator = 'bilinear'
     n_proc = 3
 
     @classmethod
+    def setUpClass(cls):
+        if 'mpi4py.MPI' not in sys.modules:
+            cls.cc = WRF.Concatenator('d03', interpolator=cls.interpolator)
+            cls.cc.dirs = [d for d in cls.cc.dirs if re.search('c01_2016120[1-3]', d)]
+
+    @classmethod
     def tearDownClass(cls):
-        os.remove('out.nc')
+        if os.path.isfile('out.nc'):
+            os.remove('out.nc')
         if hasattr(cls, 'data'):
             cls.data.close()
 
-    @staticmethod
-    def run_concat(interpolator):
+    @classmethod
+    def run_concat(cls, interpolator):
         comm = MPI.Comm.Get_parent()
         kwargs = None
         kwargs = comm.bcast(kwargs, root=0)
@@ -46,18 +55,24 @@ class WRFTests(unittest.TestCase):
         comm.Disconnect()
 
     def setUp(self):
-        self.comm =  MPI.COMM_SELF.Spawn(sys.executable,
-            ['-c', 'from data import tests;tests.WRFTests.run_concat("{}")'.format(self.interpolator)],
+        if not hasattr(self, 'cc'):
+            self.comm =  MPI.COMM_SELF.Spawn(sys.executable,
+                ['-c', 'from data import tests;tests.WRFTests.run_concat("{}")'.format(self.interpolator)],
                                          maxprocs=self.n_proc)
 
     def tearDown(self):
-        self.comm.Disconnect()
+        if hasattr(self, 'comm'):
+            self.comm.Disconnect()
         self.data.close()
 
     def run_util(self, **kwargs):
-        self.comm.bcast(kwargs, root=MPI.ROOT)
-        self.comm.barrier()
-        self.data = xr.open_dataset('out.nc')
+        if hasattr(self, 'comm'):
+            self.comm.bcast(kwargs, root=MPI.ROOT)
+            self.comm.barrier()
+            self.data = xr.open_dataset('out.nc')
+        else:
+            self.cc.concat(**kwargs)
+            self.data = self.cc.data
 
 class T2all(WRFTests):
     @classmethod
