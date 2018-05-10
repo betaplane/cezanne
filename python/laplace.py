@@ -34,7 +34,7 @@ class LRLR(object):
     .. bibliography:: refs.bib
 
     """
-    def __init__(self, stations=None, distances=None, weights=None, laplacian=None):
+    def __init__(self, stations=None, distances=None, weights=None, laplacian=None, nearest=None):
         if stations is not None:
             d = self.distance_matrix(stations)
         if distances is not None:
@@ -42,6 +42,11 @@ class LRLR(object):
         D = 1 - d / d.max()
         self.D = D if weights is None else weights(d)
         self.L = D if laplacian is None else laplacian(d)
+        if nearest is not None:
+            D = np.zeros_like(d) + np.diag(np.ones(d.shape[0]))
+            # sort along the 'space' dimension - 'i' is the output station
+            D[d.argsort(0)[nearest-1, :], range(d.shape[1])] = 1
+            self.D = xr.DataArray(D, coords=d.coords)
 
     @staticmethod
     def distance_matrix(stations):
@@ -57,7 +62,7 @@ class LRLR(object):
     def _block(self, X, Y, t):
         # nuke time indexes here so that broadcasted multiplication with weights works
         # for any time window (otherwise, would only multiply with same indexes)
-        T = min(t, Y['time'].size)
+        T = min(t, Y['time'].size) # doesn't seem necessary
 
         try:
             X['time'] = np.arange(T) # will fail if 'time' not in dims
@@ -111,6 +116,8 @@ class LRLR(object):
         try:
             w = len(window)
         except TypeError:
+            # if window is None or a uniform box (i.e. window is a scalar)
+            # if None, it is entire length of time series
             w = window if np.isscalar(window) else Y['time'].size
             self.W = self.D.loc[i, i] * xr.DataArray(np.ones(w), dims=('time'))
         else:

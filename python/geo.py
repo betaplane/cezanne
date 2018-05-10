@@ -42,7 +42,7 @@ def df2kml(df, name, body=None, lon='lon', lat='lat'):
 
     :param df: DataFrame containing the data from which to generate the :class:`~simplekml.Kml` object.
     :type df: :class:`~pandas.DataFrame`
-    :param name: Tuple of the form (``format``, ``columns``) where format is a format string to be filled by the items in ``columns``. ``Columns`` should always be given as a list.
+    :param name: Tuple of the form (``format``, ``columns``) where format is a format string to be filled by the items in ``columns``. ``Columns`` should always be given as a list. (Use :meth:`~pandas.DataFrame.reset_index` if the index is desired as one of the 'columns'.)
     :type name: :obj:`tuple` or :obj:`list`
     :param body: Same as for ``name``, but for the popup ballon text.
     :type body: :obj:`tuple` or :obj:`list`
