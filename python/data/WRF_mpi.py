@@ -54,8 +54,8 @@ class Files(object):
         dirs = []
         if paths is None:
             assert len(config) > 0, "config file not read"
-            self.paths = [p for p in config['wrfout'].values() if pa.isdir(p)]
-        for p in self.paths:
+            paths = [p for p in config['wrfout'].values() if pa.isdir(p)]
+        for p in paths:
             for d in glob(pa.join(p, pattern)):
                 if (pa.isdir(d) and not pa.islink(d)):
                     dirs.append(d)

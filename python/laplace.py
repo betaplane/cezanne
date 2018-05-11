@@ -43,10 +43,7 @@ class LRLR(object):
         self.D = D if weights is None else weights(d)
         self.L = D if laplacian is None else laplacian(d)
         if nearest is not None:
-            D = np.zeros_like(d) + np.diag(np.ones(d.shape[0]))
-            # sort along the 'space' dimension - 'i' is the output station
-            D[d.argsort(0)[nearest-1, :], range(d.shape[1])] = 1
-            self.D = xr.DataArray(D, coords=d.coords)
+            self.D = nearest
 
     @staticmethod
     def distance_matrix(stations):
@@ -57,6 +54,17 @@ class LRLR(object):
             for j, b in stations.iterrows():
                 d.loc[i, j] = g.inv(float(a.lon), float(a.lat), float(b.lon), float(b.lat))[2]
         return xr.DataArray(d, dims=('space', 'i'))
+
+    @classmethod
+    def nearest_neighbor(cls, x, stations=None, distances=None, nearest=2, min_overlap=100):
+        d = cls.distance_matrix(stations) if distances is None else distances
+        # overlap in # of time stamps that coincide between two stations
+        o = x.notnull().values.astype(int)
+        o = xr.DataArray(o.T.dot(o), coords=[('space', x.space), ('i', x.space)])
+        i = np.argsort(d * xr.where(o >= min_overlap, 1, np.nan), 0)
+        D = np.zeros_like(o)
+        D[i[:nearest, :], range(o.shape[1])] = 1
+        return D * xr.ones_like(o)
 
 
     def _block(self, X, Y, t):
