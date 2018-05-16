@@ -29,11 +29,14 @@
 from configparser import ConfigParser
 from importlib.util import find_spec
 from importlib import import_module
+import os
 
 config = ConfigParser()
 """global configuration values"""
 
-config.read('/HPC/arno/general.cfg')
+# add this to conda environment:
+# https://conda.io/docs/user-guide/tasks/manage-environments.html#macos-and-linux
+config.read(os.environ['CEZANNE_CONFIG'])
 
 
 if find_spec('mpi4py') is None:

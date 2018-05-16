@@ -10,10 +10,8 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
+from . import config
 
-from configparser import ConfigParser
-config = ConfigParser()
-config.read('/HPC/arno/general.cfg')
 
 class FetchError(Exception):
     pass
