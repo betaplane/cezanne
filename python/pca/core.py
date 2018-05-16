@@ -83,8 +83,8 @@ class PCA(object):
         :param rotate: Whether or not to rotate the principal components (:meth:`PPCA.rotate` needs to be defined on subclass).
         :type rotate: :obj:`bool`
         :param file_name: File name to append results to.
-        :param table_name: Name of able inside file ``file_name`` to which to append results. If either ``file_name`` or ``table_name`` or **not** given, nothing will be written out.
-        :param row: Index to give the row to be appended. If none is giben, defaults to :attr:`id`.
+        :param table_name: Name of able inside file ``file_name`` to which to append results. If either ``file_name`` or ``table_name`` are **not** given, nothing will be written out.
+        :param row: Index to give the row to be appended. If none is given, defaults to :attr:`id`.
         :returns: The instance of the :class:`PCA` subclass, for method chaining.
         :rtype: :class:`PCA` subclass.
 
