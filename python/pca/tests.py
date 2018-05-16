@@ -12,6 +12,10 @@ import joblib, os
 import matplotlib.pyplot as plt
 import pca.core as core
 
+from configparser import ConfigParser
+config = ConfigParser()
+config.read(os.environ['CEZANNE_CONFIG'])
+
 
 class Data(object):
     """Data producer for test cases. Saves original principal components :attr:`Z` and loadings :attr:`W` for loss computations.
@@ -37,7 +41,7 @@ class Data(object):
         return self
 
     def real(self):
-        t = pd.read_hdf('../../data/CEAZAMet/station_data.h5', 'ta_c').xs('prom', 1, 'aggr')[['3','4','5','8','9']]
+        t = pd.read_hdf(config['stations']['data'], 'ta_c').xs('prom', 1, 'aggr')[['3','4','5','8','9']]
         t.columns = t.columns.get_level_values(0)
         x = t.resample('D').mean()
         self.mask = pd.DataFrame(x.notnull(), index=x.index, columns=x.columns)

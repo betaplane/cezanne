@@ -7,6 +7,11 @@ import os, re
 K = 273.15
 
 
+from configparser import ConfigParser
+config = ConfigParser()
+config.read(os.environ['CEZANNE_CONFIG'])
+
+
 def try_list(obj, *args):
     for a in args:
         try:
@@ -149,8 +154,7 @@ def avg(df, interval):
 
 
 def stationize(df, aggr='prom'):
-    """ Return a copy of a DataFrame with only station codes as labels (either columns or index).
-    Careful with multiple columns for same station.
+    """ Return a copy of a DataFrame with only station codes as labels (either columns or index). If the resulting set of column lables is not unique (more than one sensor for the same variable at the same station), the returned copy has the ``sensor_code`` as column labels.
 
     :param aggr: if the input DataFrame has several ``aggr`` levels (e.g. ``prom``, ``min``, ``max``), return this one
     :type aggr: :obj:`str`
@@ -158,12 +162,19 @@ def stationize(df, aggr='prom'):
     :rtype: :class:`~pandas.DataFrame`
 
     """
+    if isinstance(df, str):
+        df = pd.read_hdf(config['stations']['data'], df)
     if isinstance(df.columns, pd.MultiIndex):
+        c = df.copy()
+        stations = c.columns.get_level_values('station')
         try:
             c = df.xs(aggr, 1, 'aggr')
         except KeyError:
-            c = df.copy()
-        c.columns = c.columns.get_level_values('station')
+            pass
+        if len(stations.get_duplicates()) > 0:
+            c.columns = c.columns.get_level_values('sensor_code')
+        else:
+            c.columns = stations
     elif isinstance(df.index, pd.MultiIndex):
         c = df.copy()
         c.index = df.index.get_level_values('station')
