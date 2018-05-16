@@ -30,6 +30,11 @@ or for Antarctica::
 
 .. include:: ../python/pca/docs/index.rst
 
+Conda
+-----
+[environment variables](https://conda.io/docs/user-guide/tasks/manage-environments.html#macos-and-linux)
+
+
 Data
 ====
 .. automodule:: python.data
