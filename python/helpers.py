@@ -163,10 +163,11 @@ def stationize(df, aggr='prom'):
 
     """
     if isinstance(df, str):
-        df = pd.read_hdf(config['stations']['data'], df)
-    if isinstance(df.columns, pd.MultiIndex):
+        c = pd.read_hdf(config['stations']['data'], df)
+    else:
         c = df.copy()
-        stations = c.columns.get_level_values('station')
+    stations = c.columns.get_level_values('station')
+    if isinstance(df.columns, pd.MultiIndex):
         try:
             c = df.xs(aggr, 1, 'aggr')
         except KeyError:
@@ -176,8 +177,7 @@ def stationize(df, aggr='prom'):
         else:
             c.columns = stations
     elif isinstance(df.index, pd.MultiIndex):
-        c = df.copy()
-        c.index = df.index.get_level_values('station')
+        c.index = stations
     return c
 
 def coord_names(xr, *names):

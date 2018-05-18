@@ -64,7 +64,7 @@ import os, time
 
 
 class PCA(object):
-    """Base class for all PCA subtypes. The :meth:`critique` method computes various loss measures and appends them as a :class:`~pandas.DataFrame` to an HDF5 file. **Any \*\*kwargs passed to the constructor are appended to the DataFrame as additional columns so as to allow identification of individual experiments.** 
+    """Base class for all PCA subtypes. The :meth:`critique` method computes various loss measures and appends them as a :class:`~pandas.DataFrame` to an HDF5 file. **Any \*\*kwargs passed to the constructor are appended to the DataFrame as additional columns so as to allow identification of individual experiments.**
 
     """
 
@@ -440,8 +440,8 @@ class probPCA(PPCA):
             x = tf.boolean_mask(tf.matmul(W, Z, transpose_b=True) + m, i)
             self.data_model = ed.models.Normal(x, tau * tf.ones(tf.shape(x)))
 
-            # self.inference = ed.KLqp(KL, data={self.data_model: self.data_gathered})
-            self.inference = ed.ReparameterizationKLqp(KL, data={self.data_model: self.data_gathered})
+            self.inference = ed.KLqp(KL, data={self.data_model: self.data_gathered})
+            # self.inference = ed.ReparameterizationKLqp(KL, data={self.data_model: self.data_gathered})
 
             # this comes from edward source (class VariationalInference)
             # this way, edward automatically writes out my own summaries
@@ -516,6 +516,7 @@ class probPCA(PPCA):
                 dqm = np.mean(deque)
                 if abs(dqm - dq) < (np.std(deque) / sq_conv):
                     break
+                    self.n_iter = i + 1
                 dq = dqm
 
         print('\nexecution time: {}\n'.format(time.time() -  start_time))

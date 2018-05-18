@@ -108,7 +108,7 @@ class Test(object):
             if (self.results is not None) or os.path.isfile(data):
                 self.data = joblib.load(data)
             if self.results is not None:
-                self.row = results.index[-1] + 1
+                self.row = self.results.index[-1] + 1
             else:
                 self.data = {i :Data().toy() for i in self.args.get('data').unique()}
                 joblib.dump(self.data, data)
