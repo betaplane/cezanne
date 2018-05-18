@@ -121,8 +121,8 @@ class Test(object):
         t = self.args.loc[self.row]
         d = self.data[t.get('data')]
 
-        conv = t.pop('convergence_test') if 'convergence_test' in t else 'data_loss'
         kwargs = t[self.keys].to_dict()
+        conv = kwargs.pop('convergence_test', 100)
         config = None
 
         if t.get('config') is not None:
@@ -144,6 +144,11 @@ class Test(object):
         self.row += 1
         return 0
 
+    def unique(self):
+        return self.results.drop(
+            ['x', 'Z', 'W', 'n_iter', 'mu', 'tau', 'loss', 'data_loss', 'logs'], 1
+            ).apply(lambda x: x.unique().size)
+
     def subplot(self, ax, data, column, xaxis, colors, offset=0, **kwargs):
         col, lab = list(colors.items())[0]
         label = kwargs.pop('label', lab[0])
@@ -161,8 +166,8 @@ class Test(object):
         y = y.groupby([str(k) for k, v in combined])[column]
         y = pd.concat((y.mean(), y.std()), 1, keys=['mean_', 'std_'])
 
-        ymean = [y['mean_'].xs(i, 0, level) for i in xlab]
-        ystd = [y['std_'].xs(i, 0, level) for i in xlab]
+        ymean = [y['mean_'].xs(i, 0, level).item() for i in xlab]
+        ystd = [y['std_'].xs(i, 0, level).item() for i in xlab]
 
         x0 = np.arange(len(y))
         x = x0 + offset
