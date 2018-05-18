@@ -515,8 +515,8 @@ class probPCA(PPCA):
             if j == n_conv:
                 dqm = np.mean(deque)
                 if abs(dqm - dq) < (np.std(deque) / sq_conv):
-                    break
                     self.n_iter = i + 1
+                    break
                 dq = dqm
 
         print('\nexecution time: {}\n'.format(time.time() -  start_time))
