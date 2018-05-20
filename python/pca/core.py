@@ -367,6 +367,7 @@ class probPCA(PPCA):
         config.loc[idx['prior', 'mu', 'loc'], :]   = [True, 'data_mean']
         config.loc[idx['prior', 'mu', 'scale'], :] = [True, 'random_normal_initializer']
         config.loc['posterior', :]                 = [True, 'random_normal_initializer']
+        config.loc[idx['posterior', 'mu', 'loc'], :]   = [True, 'data_mean']
         return config
 
     def __init__(self, shape, config=None, test_data=False, **kwargs):
