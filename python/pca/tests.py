@@ -6,10 +6,8 @@ Tests
 
 import pandas as pd
 import numpy as np
-import tensorflow as tf
 from datetime import datetime
-import joblib, os
-import matplotlib.pyplot as plt
+import os
 import pca.core as core
 
 from configparser import ConfigParser
@@ -21,6 +19,13 @@ class Data(object):
     """Data producer for test cases. Saves original principal components :attr:`Z` and loadings :attr:`W` for loss computations.
 
     """
+
+    real_data = {
+        'ta_c': [
+            ['3','4','5','8','9'],
+            ['8', 'INILLA', 'LCAR', 'QS', 'TLH']
+        ]
+    }
 
     def __init__(self):
         self.id = datetime.utcnow().strftime('data%Y%m%d%H%M%S%f')
@@ -40,14 +45,30 @@ class Data(object):
         self.Z = self.W.T.dot(x).T
         return self
 
-    def real(self):
-        t = pd.read_hdf(config['stations']['data'], 'ta_c').xs('prom', 1, 'aggr')[['3','4','5','8','9']]
-        t.columns = t.columns.get_level_values(0)
-        x = t.resample('D').mean()
-        self.mask = pd.DataFrame(x.notnull(), index=x.index, columns=x.columns)
-        self.x1 = np.ma.masked_invalid(x)
+    def real(self, **kwargs):
+        k, v = kwargs.popitem()
+        t = pd.read_hdf(config['stations']['data'], k).xs('prom', 1, 'aggr')[self.real_data[k][v]]
+        sta = t.columns.get_level_values('station')
+        if len(sta.get_duplicates()) > 0:
+            t.columns = t.columns.get_level_values('sensor_code')
+        else:
+            t.columns = sta
+
+        x = t.resample('D').mean().dropna(0, 'any')
         # this is a fraction of the data without any missing values
-        self.x = x[(x.index >= pd.Timestamp('2013')) & (x.index < pd.Timestamp('2017'))]
+        # self.x = x[(x.index >= pd.Timestamp('2013')) & (x.index < pd.Timestamp('2017'))]
+
+        i, = np.where(np.diff(x.index).astype('timedelta64[D]').astype(int)>1)
+        if len(i) > 1:
+            j = np.diff(i).argmax()
+            self.x = x.iloc[i[j]+1: i[j+1]+1].T
+        elif len(i) == 0:
+            self.x = x.T
+        else:
+            raise Exception('not implemented')
+
+        self.x1 = np.ma.masked_invalid(self.x)
+        self.mask = pd.DataFrame(self.x.notnull(), index=x.index, columns=x.columns)
         return self
 
     def missing(self, frac, blocks=0):
@@ -98,6 +119,7 @@ class Test(object):
         return self.store.get(key) if key in self.store else None
 
     def __init__(self, file_name, test_name, data='data.pkl', plot=False):
+        import joblib
         self.table = test_name + '/results'
         with pd.HDFStore(file_name) as self.store:
             self.args = self._store_get(test_name + '/args')
@@ -197,6 +219,7 @@ class Test(object):
             * **figsize**, **hspace** and **wspace** are passed to the corresponding :mod:`matplotlib` calls.
 
         """
+        import matplotlib.pyplot as plt
         fig, axs = plt.subplots(2, 4, figsize=kwargs.pop('figsize', (12, 6)))
         fig.subplots_adjust(hspace=kwargs.pop('hspace', 0.3), wspace=kwargs.pop('wspace', .3))
 
@@ -253,6 +276,7 @@ def test0():
 
 @Test.case('convergence.h5')
 def convergence(n_data=10, n_seed=10):
+    import tensorboard as tf
     tests = pd.DataFrame()
 
     for i in range(n_data):
@@ -273,6 +297,7 @@ def convergence(n_data=10, n_seed=10):
 
 @Test.case('covariance.h5')
 def mu_tau(n_seed=10):
+    import tensorboard as tf
     c = []
     t = pd.DataFrame()
     for i, mu in enumerate(['none', 'full']):
@@ -324,6 +349,7 @@ def mu_tau(n_seed=10):
 
 @Test.case('experiments_copy.h5')
 def covariance(n_data=10, n_seed=10):
+    import tensorboard as tf
     t = pd.DataFrame()
     c = []
     for j, conf in enumerate([

@@ -167,17 +167,14 @@ def stationize(df, aggr='prom'):
     else:
         c = df.copy()
     stations = c.columns.get_level_values('station')
-    if isinstance(df.columns, pd.MultiIndex):
-        try:
-            c = df.xs(aggr, 1, 'aggr')
-        except KeyError:
-            pass
-        if len(stations.get_duplicates()) > 0:
-            c.columns = c.columns.get_level_values('sensor_code')
-        else:
-            c.columns = stations
-    elif isinstance(df.index, pd.MultiIndex):
-        c.index = stations
+    try:
+        c = c.xs(aggr, 1, 'aggr')
+    except KeyError:
+        pass
+    if len(stations.get_duplicates()) > 0:
+        c.columns = c.columns.get_level_values('sensor_code')
+    else:
+        c.columns = stations
     return c
 
 def coord_names(xr, *names):
