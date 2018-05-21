@@ -69,7 +69,7 @@ class PCA(object):
         self.variables = {}
         self.instance = kwargs
         self.instance.update({'class': self.__class__.__name__})
-        self.id = datetime.utcnow().strftime('pca%Y%m%d%H%M%S%f')
+        self.id = datetime.utcnow().strftime('{}%Y%m%d%H%M%S%f'.format(self.__class__.__name__))
         """A unique ID to identify instances of this class, e.g. in results tables. Constructe from :meth:`~datetime.datetime.utcnow`."""
 
     def critique(self, data=None, rotate=True, file_name=None, table_name=None, row=None):
@@ -108,18 +108,17 @@ class PCA(object):
             results.update({'missing': data.missing_fraction, 'data_id': data.id})
 
         print('')
+
+        def item(x):
+            return x[-1] if hasattr(x, '__iter__') else x
+
         for v in ['train_loss', 'tau', 'alpha']:
-            print('{}: {}'.format(v, getattr(self, v, np.nan)))
+            print('{}: {}'.format(v, item(getattr(self, v, np.nan))))
 
-        results.update({
-            'train_loss': self.train_loss,
-            'rotated': rotate,
-            'loss': self.loss,
-            'logs': self.logsubdir,
-            'n_iter': self.n_iter,
-            'convergence_test': self.convergence_test
-        })
-
+        results.update(
+            {k: item(getattr(self, k, np.nan)) for k in
+             ['train_loss', 'test_loss', 'loss', 'logsubdir', 'n_iter', 'convergence_test', 'K']})
+        results['rotated'] = rotate
         results.update(self.instance)
 
         self.results = pd.DataFrame(results, index=[self.id] if row is None else [row])
@@ -142,22 +141,32 @@ class PCA(object):
             pass
 
 class detPCA(PCA):
-    def run(self, x1, K=None, n_iter=1):
-        self.loss = np.empty(n_iter)
-        if K is None:
-            K = x1.shape[0]
+    def run(self, x1, K=None, n_iter=1, test_data=None, convergence_test=1e-8):
+        self.train_loss = []
+        self.test_loss = []
+        self.K = K
+
         data_mean = x1.mean(1, keepdims=True)
         x1 = (x1 - data_mean)
-        x = x1.filled(0)
+        x = x1.filled(0) # 0 is ok, because I have removed the mean already
+
+        if test_data is not None:
+            td = np.array(test_data)
+            td = td - td.mean(1, keepdims=True)
         for i in range(n_iter):
             self.e, v = np.linalg.eigh(np.cov(x))
             self.W = v[:, np.argsort(self.e)[::-1][:K]]
             self.Z = x.T.dot(self.W)
             self.x = self.W.dot(self.Z.T)
-            diff = x1 - x
-            m = diff.mean(1, keepdims=True)
-            x = np.where(x1.mask, self.x + m, x1)
-            self.loss[i] = np.mean(diff ** 2) ** .5
+            m = (x1 - self.x).mean(1, keepdims=True)
+            x = self.x + m
+            self.train_loss.append(np.mean((x1 - x) ** 2) ** .5)
+            x = np.where(x1.mask, x, x1)
+            if test_data is not None:
+                self.test_loss.append(np.mean((td - x) ** 2) ** .5)
+            if i > 1 and abs(np.diff(self.train_loss[-2:])) < convergence_test:
+                break
+        self.n_iter = i + 1
         self.mu = data_mean + m
         self.x = self.x + self.mu
         return self
@@ -411,9 +420,8 @@ class probPCA(PPCA):
             KL.update({Z: QZ, W: QW})
 
             self.data = self.tf.placeholder(self.dtype, shape)
-            if test_data:
-                self.test_data = self.tf.placeholder(self.dtype)
             self.data_mean = self.tf.placeholder(self.dtype, (shape[0], 1))
+
             if self.model['mu'] == 'none':
                 m = self.param_init('mu', 'posterior', 'loc') # 'posterior' variables are by default trainable
                 self.variables.update({'mu': m})
@@ -454,8 +462,10 @@ class probPCA(PPCA):
                 train_loss = self.tf.losses.mean_squared_error(self.data_gathered, self.tf.boolean_mask(xm, i))
                 self.tf.summary.scalar('train_loss', train_loss, collections=[summary_key])
                 if test_data:
+                    self.test_data = self.tf.placeholder(self.dtype, shape)
+                    j = self.tf.is_finite(self.test_data)
                     test_loss = self.tf.losses.mean_squared_error(
-                        self.tf.boolean_mask(self.test_data, i), self.tf.boolean_mask(xm, i))
+                        self.tf.boolean_mask(self.test_data, j), self.tf.boolean_mask(xm, j))
                     self.tf.summary.scalar('test_loss', test_loss, collections=[summary_key])
                     self.variables.update({'test_loss': test_loss})
 
@@ -544,10 +554,10 @@ class probPCA(PPCA):
 
 class vbPCA(PCA):
     """BayesPy_-based Bayesian PCA."""
-    def __init__(self, x1, K=None, n_iter=100, rotate=False):
+    def __init__(self, x1, K=None, n_iter=2000, rotate=False, **kwargs):
         import bayespy as bp
         import bayespy.inference.vmp.transformations as bpt
-        super().__init__(rotated=rotate)
+        super().__init__(rotated=rotate, logdir='none', **kwargs)
         self.D, self.N = x1.shape
         K = self.D if K is None else K
         self.x1 = x1
@@ -557,7 +567,7 @@ class vbPCA(PCA):
         w = bp.nodes.GaussianARD(0, alpha, plates=(self.D, 1), shape=(K, ))
         # not sure what form the hyper-mean should take
         # there are definitely convergene issues if mean is far from real one
-        hyper_m = bp.nodes.GaussianARD(15, 0.001)
+        hyper_m = bp.nodes.GaussianARD(x1.mean(), 0.001)
         m = bp.nodes.GaussianARD(hyper_m, 1, shape=(self.D, 1))
         tau = bp.nodes.Gamma(1e-5, 1e-5)
         x = bp.nodes.GaussianARD(bp.nodes.Add(bp.nodes.Dot(z, w), m), tau)

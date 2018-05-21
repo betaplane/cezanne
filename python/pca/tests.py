@@ -77,11 +77,12 @@ class Data(object):
         if blocks == 0:
             mask[np.random.choice(len(mask), n, replace=False)] = 0
         else:
-            s = np.random.poisson(n / blocks, blocks) # block lengths
-            i = np.random.choice(len(mask) - round(s.mean()), blocks, replace=False) # block start indexes
+            lam = n / blocks
+            s = np.random.poisson(lam, blocks) # block lengths
+            i = np.random.choice(int(round(len(mask) - lam)), blocks, replace=False) # block start indexes
             for j, t in zip(i, s):
                 mask[j: j + t] = 0
-        mask = np.reshape(mask, self.x.shape, {0: 'F', 1:'C'}[np.argmax(self.x.shape)])
+        mask = np.reshape(mask, self.x.shape, {0: 'F', 1:'C'}[np.argmax(selratef.x.shape)])
         self.mask = pd.DataFrame(mask, index=self.x.index, columns=self.x.columns)
         x1 = self.x * self.mask.replace(0, np.nan)
         self.x1 = np.ma.masked_invalid(x1)
