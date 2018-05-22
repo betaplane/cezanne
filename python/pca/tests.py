@@ -73,16 +73,19 @@ class Data(object):
 
     def missing(self, frac, blocks=0):
         mask = np.ones(self.x.shape).flatten()
-        n = int(round(frac * len(mask)))
+        N = int(round(frac * len(mask)))
         if blocks == 0:
-            mask[np.random.choice(len(mask), n, replace=False)] = 0
+            mask[np.random.choice(len(mask), N, replace=False)] = 0
         else:
-            lam = n / blocks
-            s = np.random.poisson(lam, blocks) # block lengths
-            i = np.random.choice(int(round(len(mask) - lam)), blocks, replace=False) # block start indexes
-            for j, t in zip(i, s):
-                mask[j: j + t] = 0
-        mask = np.reshape(mask, self.x.shape, {0: 'F', 1:'C'}[np.argmax(selratef.x.shape)])
+            bl = N / blocks
+            idx = np.arange(len(mask))
+            n = N
+            while n > 0:
+                s = min(n, np.random.poisson(bl, 1).item()) # block lengths
+                j = np.random.choice(idx[mask.astype(bool)][:-s], 1).item()
+                mask[j: j + s] = 0
+                n = int(mask.sum() - len(mask) + N)
+        mask = np.reshape(mask, self.x.shape, {0: 'F', 1:'C'}[np.argmax(self.x.shape)])
         self.mask = pd.DataFrame(mask, index=self.x.index, columns=self.x.columns)
         x1 = self.x * self.mask.replace(0, np.nan)
         self.x1 = np.ma.masked_invalid(x1)

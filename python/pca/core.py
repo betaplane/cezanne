@@ -141,7 +141,7 @@ class PCA(object):
             pass
 
 class detPCA(PCA):
-    def run(self, x1, K=None, n_iter=1, test_data=None, convergence_test=1e-8):
+    def run(self, x1, K=None, n_iter=1, test_data=None, convergence_test=1e-6):
         self.train_loss = []
         self.test_loss = []
         self.K = K
@@ -153,6 +153,7 @@ class detPCA(PCA):
         if test_data is not None:
             td = np.array(test_data)
             td = td - td.mean(1, keepdims=True)
+
         for i in range(n_iter):
             self.e, v = np.linalg.eigh(np.cov(x))
             self.W = v[:, np.argsort(self.e)[::-1][:K]]
@@ -161,11 +162,12 @@ class detPCA(PCA):
             m = (x1 - self.x).mean(1, keepdims=True)
             x = self.x + m
             self.train_loss.append(np.mean((x1 - x) ** 2) ** .5)
-            x = np.where(x1.mask, x, x1)
             if test_data is not None:
                 self.test_loss.append(np.mean((td - x) ** 2) ** .5)
+
             if i > 1 and abs(np.diff(self.train_loss[-2:])) < convergence_test:
                 break
+            x = np.where(x1.mask, x, x1)
         self.n_iter = i + 1
         self.mu = data_mean + m
         self.x = self.x + self.mu
@@ -464,6 +466,7 @@ class probPCA(PPCA):
                 if test_data:
                     self.test_data = self.tf.placeholder(self.dtype, shape)
                     j = self.tf.is_finite(self.test_data)
+                    # NOTE: this is the SQUARED loss, not the RMS
                     test_loss = self.tf.losses.mean_squared_error(
                         self.tf.boolean_mask(self.test_data, j), self.tf.boolean_mask(xm, j))
                     self.tf.summary.scalar('test_loss', test_loss, collections=[summary_key])
@@ -583,8 +586,11 @@ class vbPCA(PCA):
         w.initialize_from_random()
         self.inference.update(repeat=n_iter)
 
-        self.W = w.get_moments()[0].squeeze()
-        self.Z = z.get_moments()[0].squeeze()
+        def make2D(x):
+            return np.atleast_2d(x).T if x.ndim == 1 else x
+
+        self.W = make2D(w.get_moments()[0].squeeze())
+        self.Z = make2D(z.get_moments()[0].squeeze())
         self.mu = m.get_moments()[0]
         self.tau = tau.get_moments()[0].item()
         self.x = self.W.dot(self.Z.T) + self.mu

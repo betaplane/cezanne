@@ -17,12 +17,12 @@ def cc(a, c, exp):
 
 for m in np.arange(0, 1, .1):
     for d in [d1, d2]:
-        d.missing(m, 20)
+        d.missing(m)
         for K in range(1, 5):
             print(m, K)
             idx = ('K', range(K))
-            p = core.detPCA().run(d.x1, test_data=d.x, n_iter=1000, K=K)
-            p.critique(d, file_name='lima_det_blocks.h5', table_name='determ/results', rotate=False)
+            p = core.detPCA().run(d.x1, test_data=d.x, n_iter=100, K=K)
+            p.critique(d, file_name='lima_det.h5', table_name='determ/results', rotate=False)
             x = cc(xr.DataArray(p.x, coords=[d.x.index, d.x.columns]), x, p.id)
             mu = cc(xr.DataArray(p.mu.flatten(), coords=[d.x.index]), mu, p.id)
             Z = cc(xr.DataArray(p.Z, coords=[d.x.columns, idx]), Z, p.id)
@@ -30,6 +30,4 @@ for m in np.arange(0, 1, .1):
                 ('D', d.x.index.values), idx]), W, p.id)
             ds = xr.Dataset({'x': x[0], 'mu': mu[0], 'Z': Z[0], 'W': W[0]})
 
-            ds.to_netcdf('lima_det_blocks.nc')
-
-0
+            ds.to_netcdf('lima_det.nc')
