@@ -560,7 +560,7 @@ class vbPCA(PCA):
     def __init__(self, x1, K=None, n_iter=2000, rotate=False, **kwargs):
         import bayespy as bp
         import bayespy.inference.vmp.transformations as bpt
-        super().__init__(rotated=rotate, logdir='none', **kwargs)
+        super().__init__(rotated=rotate, logdir='none', K=K, **kwargs)
         self.D, self.N = x1.shape
         K = self.D if K is None else K
         self.x1 = x1

@@ -7,10 +7,10 @@ import os, re
 K = 273.15
 
 
-from configparser import ConfigParser
-config = ConfigParser()
-config.read(os.environ['CEZANNE_CONFIG'])
-
+from socket import gethostname
+hostname = gethostname().split('.')[0]
+from configobj import ConfigObj
+config = ConfigObj(os.path.expanduser(os.environ['CEZANNE_CONFIG']))
 
 def try_list(obj, *args):
     for a in args:
@@ -163,7 +163,7 @@ def stationize(df, aggr='prom'):
 
     """
     if isinstance(df, str):
-        c = pd.read_hdf(config['stations']['data'], df)
+        c = pd.read_hdf(config[hostname]['stations']['data'], df)
     else:
         c = df.copy()
     stations = c.columns.get_level_values('station')

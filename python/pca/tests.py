@@ -7,12 +7,12 @@ Tests
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import os
 import pca.core as core
+import os
 
-from configparser import ConfigParser
-config = ConfigParser()
-config.read(os.environ['CEZANNE_CONFIG'])
+from socket import gethostname
+from configobj import ConfigObj
+config = ConfigObj(os.environ['CEZANNE_CONFIG'])
 
 
 class Data(object):
@@ -47,7 +47,9 @@ class Data(object):
 
     def real(self, **kwargs):
         k, v = kwargs.popitem()
-        t = pd.read_hdf(config['stations']['data'], k).xs('prom', 1, 'aggr')[self.real_data[k][v]]
+        t = pd.read_hdf(
+            config[gethostname.split('.')[0]]['stations']['data'], k
+        ).xs('prom', 1, 'aggr')[self.real_data[k][v]]
         sta = t.columns.get_level_values('station')
         if len(sta.get_duplicates()) > 0:
             t.columns = t.columns.get_level_values('sensor_code')
