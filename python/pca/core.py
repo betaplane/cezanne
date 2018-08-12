@@ -67,7 +67,7 @@ class PCA(object):
 
     def __init__(self, **kwargs):
         self.variables = {}
-        self.instance = kwargs
+        self.instance = {k: v for k, v in kwargs.items() if not hasattr(v, '__iter__')}
         self.instance.update({'class': self.__class__.__name__})
         self.id = datetime.utcnow().strftime('{}%Y%m%d%H%M%S%f'.format(self.__class__.__name__))
         """A unique ID to identify instances of this class, e.g. in results tables. Constructe from :meth:`~datetime.datetime.utcnow`."""
@@ -109,8 +109,14 @@ class PCA(object):
 
         print('')
 
+        # def item(x):
+        #     return x[-1] if hasattr(x, '__iter__') else x
+
         def item(x):
-            return x[-1] if hasattr(x, '__iter__') else x
+            if hasattr(x, '__iter__'):
+                return None if x==[] else x[-1]
+            else:
+                return x
 
         for v in ['train_loss', 'tau', 'alpha']:
             print('{}: {}'.format(v, item(getattr(self, v, np.nan))))
@@ -121,7 +127,10 @@ class PCA(object):
         results['rotated'] = rotate
         results.update(self.instance)
 
-        self.results = pd.DataFrame(results, index=[self.id] if row is None else [row])
+        if hasattr(self, 'results'):
+            self.results = self.results.append(results, ignore_index=True)
+        else:
+            self.results = pd.DataFrame(results, index=[self.id] if row is None else [row])
         if (file_name is not None) and (table_name is not None):
             self.results.to_hdf(file_name, table_name, format='t', append=True)
         else:

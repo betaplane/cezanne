@@ -7,12 +7,9 @@ Tests
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from importlib import import_module
 import pca.core as core
 import os
-
-from socket import gethostname
-from configobj import ConfigObj
-config = ConfigObj(os.environ['CEZANNE_CONFIG'])
 
 
 class Data(object):
@@ -45,11 +42,11 @@ class Data(object):
         self.Z = self.W.T.dot(x).T
         return self
 
-    def real(self, **kwargs):
+    def real(self, config=None, **kwargs):
         k, v = kwargs.popitem()
-        t = pd.read_hdf(
-            config[gethostname.split('.')[0]]['stations']['data'], k
-        ).xs('prom', 1, 'aggr')[self.real_data[k][v]]
+        if config is None:
+            config = import_module('cezar')
+        t = pd.read_hdf(config.stations['data'], k).xs('prom', 1, 'aggr')[self.real_data[k][v]]
         sta = t.columns.get_level_values('station')
         if len(sta.get_duplicates()) > 0:
             t.columns = t.columns.get_level_values('sensor_code')
@@ -70,7 +67,7 @@ class Data(object):
             raise Exception('not implemented')
 
         self.x1 = np.ma.masked_invalid(self.x)
-        self.mask = pd.DataFrame(self.x.notnull(), index=x.index, columns=x.columns)
+        self.mask = pd.DataFrame(self.x.notnull(), index=self.x.index, columns=self.x.columns)
         return self
 
     def missing(self, frac, blocks=0):

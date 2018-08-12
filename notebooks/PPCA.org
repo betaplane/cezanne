@@ -1,0 +1,1172 @@
+#+LINK: tf http://tensorflow.org/
+#+LINK: ed http://edwardlib.org
+
+* Notes
+** [[http://condor:6006][tensorboard]]
+** org-babel commands
+| C-c C-v s | org-babel-execute-subtree |
+** matplotlib / ipython config
+*** [[https://ipython.org/ipython-doc/2/config/options/notebook.html][InlineBackend.close_figures]]
+#+begin_src ipython :session :results silent
+%config InlineBackend.close_figures = False
+#+end_src
+*** %config InlineBackend.figure_format = 'pdf'
+*** %config InlineBackend.figure_formats = ['png', 'pdf']
+*** pdfs as inline files
+#+begin_src emacs-lisp :results silent
+(add-to-list 'image-type-file-name-regexps '("\\.pdf\\'" . imagemagick))
+(add-to-list 'image-file-name-extensions "pdf")
+(setq imagemagick-types-inhibit (remove 'PDF imagemagick-types-inhibit))
+#+end_src
+*** changing configuration in context block (with...)
+    #+BEGIN_EXAMPLE python
+      with plt.rc_context({'axes.edgecolor':'w', 'xtick.color': 'w', 'ytick.color': 'w', 'axes.facecolor': 'none'}):
+    #+END_EXAMPLE
+
+** org-babel
+*** [[https://orgmode.org/manual/var.html]]
+** https://zzamboni.org/post/beautifying-org-mode-in-emacs/
+** useful link: [[https://pandas.pydata.org/pandas-docs/stable/style.html][pandas styling]]
+* Data
+** conventions
+| N  | number of data points ('examples')                            |
+| D  | dimensionality of input data                                  |
+| K  | dimensionality of principal component space                   |
+| x1 | noisy data                                                    |
+| x  | noiseless (in case of toy) or complete (in case of real) date |
+** Imports
+#+name: imports
+#+begin_src ipython :session :results silent
+import sys
+sys.path.append('../python/')
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+from datetime import datetime
+import helpers as hh
+from pca import core, tests
+from plots import availability_matrix as avail
+#+end_src
+
+#+begin_src ipython :results silent :session :var styles=(expand-file-name "nandu_dark.mplstyle" nandu-mpl-styles-directory)
+mpl.use('agg')
+plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
+#+end_src
+** code
+#+begin_src ipython :session :results silent
+d = hh.stationize('ta_c')
+#+end_src
+
+#+begin_src ipython :session :results raw :savefig "avail_t.png"
+  plt.switch_backend('agg')
+  avail(d.resample('D').mean().notnull(), figsize=(8, 12))
+#+end_src
+
+#+RESULTS:
+[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/avail_t.png]]
+
+
+#+begin_src ipython :session :results silent
+t = tests.Data().toy()
+#+end_src
+
+#+begin_src ipython :session :results raw :savefig "avail_blocks.png"
+fig, axs = plt.subplots(2, 1, figsize=(14, 3))
+t.missing(.3)
+avail(t.mask.T, axs[0])
+t.missing(.3, 20)
+avail(t.mask.T, axs[1], bottom=.1)
+axs[0].set_xticklabels([])
+#+end_src
+
+#+NAME: fig:avail-blocks
+#+CAPTION: Two different ways of generating missing values:
+#+CAPTION: *TOP*: missing values inserted at random with a uniform distribution over the length of the record.
+#+CAPTION: 
+#+CAPTION: *bottom*: in blocks whose length is drawn from a poisson distribution with mean rate (total length / number of blocks) and location of block start uniformly distributed over the total length.
+#+RESULTS:
+[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/avail_blocks.png]]
+
+
+#+begin_src ipython :results silent :session
+  x = np.linspace(0, 1, 20)[:-1]
+  p1 = core.detPCA()
+  for mv in x:
+      p1.run(t.missing(mv).x1).critique(t, rotate=False)
+
+  p2 = core.detPCA()
+  for mv in x:
+      p2.run(t.missing(mv).x1, n_iter=10).critique(t, rotate=False)
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "determ_iterations.png"
+  plt.figure()
+  plt.plot(x, p1.results.x, label='1 iteration')
+  plt.plot(x, p2.results.x, label='10 iterations')
+  plt.legend()
+  plt.xlabel('MV fraction')
+#+end_src
+
+#+CAPTION: Comparison 1 vs 10 iterations of deterministic PCA
+#+RESULTS:
+[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/determ_iterations.png]]
+
+
+#+begin_src ipython :results silent :session
+  plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
+#+end_src
+
+
+ppca.tf.get_variable_scope().reuse_variables()
+
+
+* Experiments
+** Toy data
+*** Experiment 1
+- 0% missing
+- 10 different toy data sets
+- 10 different random seeds for probabilistic
+
+# In[979]:
+
+
+n_data = 10
+n_seed = 10
+n_iter = 2000
+
+for _ in range(n_data):
+    d = tests.data().toy()
+    p2 = pca.detPCA().run(d.x1).critique(d)
+    for s in range(n_seed):
+        p1 = ppca.probPCA(d.x1, seed=s, logdir='ppca_logs')
+        p1.run(n_iter).critique(d)
+        p1.critique(d, rotate=True)
+
+
+# In[7]:
+
+
+S = pd.HDFStore('./ppca_logs/ppca_experiments.h5')
+
+
+# In[9]:
+
+
+S.keys()
+
+
+# In[81]:
+
+
+loss = pd.concat((S['exp1'], S['exp1vb']), 0).replace('None', np.nan)
+
+
+# In[86]:
+
+
+a = loss.groupby(['class', 'rotated']).mean()
+
+fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+a[['x', 'Z', 'data_loss']].T.plot.bar(ax=axs[0])
+a[['mu', 'W', 'tau']].T.plot.bar(ax=axs[1])
+
+
+# In[993]:
+
+
+# Only the rotated, probabilistic results
+b = loss[(loss['class']=='probPCA') & (loss['rotated']==True)]
+
+fig, axs = plt.subplots(2, 2, figsize=(10, 6))
+fig.subplots_adjust(hspace=.3)
+b.groupby('data').mean()['x'].plot.kde(ax=axs[0, 0], title='x')
+b.groupby('seed').mean()['x'].plot.kde(ax=axs[0, 0])
+b.groupby('data').mean()['Z'].plot.kde(ax=axs[0, 1], title='Z')
+b.groupby('seed').mean()['Z'].plot.kde(ax=axs[0, 1])
+b.groupby('data').mean()['mu'].plot.kde(ax=axs[1, 0], title='mu')
+b.groupby('seed').mean()['mu'].plot.kde(ax=axs[1, 0])
+b.groupby('data').mean()['tau'].plot.kde(ax=axs[1, 1], title='tau')
+b.groupby('seed').mean()['tau'].plot.kde(ax=axs[1, 1]);
+
+
+# The result distribution from random initializations of the probabilistic algorithm (**orange**) is generally much more pointed than that resulting from different random toy data (**blue**). Does the slight hint of a bi- or multi-modality arise from non-uniqueness of the solutions?
+
+# In[68]:
+
+
+n_data = 10
+n_seed = 10
+n_iter = 100
+
+for i in range(n_data):
+    d = tests.data().toy()
+    for j in range(n_seed):
+        p1 = pca.vbPCA(d.x1).critique(d)
+        p2 = pca.vbPCA(d.x1, rotate=True).critique(d)
+        
+with pd.HDFStore('./ppca_logs/ppca_experiments.f5') as S:
+    S['exp1vb']=p1.losses
+
+
+# In[95]:
+
+
+b = loss[(loss['class']=='vbPCA') & (loss['rotated']==True)]
+
+fig, axs = plt.subplots(2, 2, figsize=(10, 6))
+fig.subplots_adjust(hspace=.3)
+b.groupby('data').mean()['x'].plot.kde(ax=axs[0, 0], title='x')
+b['x'].plot.kde(ax=axs[0, 0])
+b.groupby('data').mean()['Z'].plot.kde(ax=axs[0, 1], title='Z')
+b['Z'].plot.kde(ax=axs[0, 1])
+b.groupby('data').mean()['mu'].plot.kde(ax=axs[1, 0], title='mu')
+b['mu'].plot.kde(ax=axs[1, 0])
+b.groupby('data').mean()['tau'].plot.kde(ax=axs[1, 1], title='tau')
+b['tau'].plot.kde(ax=axs[1, 1]);
+
+*** Experiment 2
+  # 
+  # 
+
+  # In[101]:
+
+
+  n_seed = 10
+  n_iter = 2000
+
+  d = tests.data().toy()
+  for i, cov in enumerate([
+      {'posterior': 'fact', 'prior': {'W': 'full', 'Z': 'fact'}},
+      {'posterior': 'fact', 'prior': {'W': 'fact', 'Z': 'full'}},
+      {'posterior': 'fact', 'prior': {'W': 'full', 'Z': 'full'}},
+      {'posterior': {'W': 'full', 'Z': 'fact'}, 'prior': {'W': 'full', 'Z': 'fact'}},
+      {'posterior': {'W': 'fact', 'Z': 'full'}, 'prior': {'W': 'fact', 'Z': 'full'}},
+      {'posterior': {'W': 'full', 'Z': 'full'}, 'prior': {'W': 'full', 'Z': 'full'}},
+  ]):
+      pca.probPCA.covariance = cov
+      for s in range(n_seed):
+          p1 = pca.probPCA(d.x1, seed=s, logdir='ppca_logs', covariance=i)
+          p1.run(n_iter).critique(d, rotate=True)
+
+
+  # In[106]:
+
+
+  loss = p1.losses.replace('None', np.nan)
+
+
+  # In[122]:
+
+
+  a = loss.groupby('covariance').mean()
+
+  fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+  a[['x', 'Z', 'data_loss']].T.plot.bar(ax=axs[0])
+  a[['mu', 'W', 'tau']].T.plot.bar(ax=axs[1])
+
+
+  |     | experiments | routines | changed                     |
+  |-----+-------------+----------+-----------------------------|
+  | old |           1 | detPCA   | data                        |
+  |     |             | probPCA  | seeds                       |
+  |     |             | vbPCA    |                             |
+  |     |           2 | probPCA  | covariances                 |
+  |     |           3 | probPCA  | $\mu$                       |
+  | new |           1 | probPCA  | covariances, initialization |
+  |     |           2 | probPCA  | $\mu$, $\tau$               |
+
+*** Experiment 3
+**** with trainable hyper mean parameter in full mean prior (hyper = 1), or without hyperparameter (hyper = 0), but the same approximation to the posterior.
+
+  # In[164]:
+
+
+  n_iter = 2000
+  n_seed = 10
+
+  for i in range(n_seed):
+      for h in [False, True]:
+          p1 = pca.probPCA(d.x1, logdir='ppca_logs', hyper=h, seed=i, mean='full').run(n_iter).critique(d, rotate=True)
+
+
+  # In[150]:
+
+
+  loss.groupby('hyper').mean()
+
+
+  # In[168]:
+
+
+  loss = p1.losses.copy()
+
+
+  # In[181]:
+
+
+  # using hyper_mean as 'mu' in code (examples 20-29 in loss exp3)
+  n_iter = 2000
+  n_seed = 10
+
+  for i in range(n_seed):
+      p1 = pca.probPCA(d.x1, logdir='ppca_logs', hyper=True, seed=i, mean='full').run(n_iter).critique(d, rotate=True)
+
+
+  # In[199]:
+
+
+  loss.loc[:19].groupby('hyper').mean()
+
+
+  # In[206]:
+
+
+  loss[loss.hyper][['mu', 'seed']].pivot(columns='seed')
+
+
+  # In[307]:
+
+
+  S = pd.HDFStore('../python/pca/exp.h5')
+
+
+  # In[25]:
+
+
+  config = core.probPCA.configure(True)
+
+
+  # In[30]:
+
+
+  def color_table(data, shape, **kwargs):
+      a = np.repeat(['background-color: none'], shape)
+      for k, v in kwargs.items():
+          for i in v:
+              a[i] = 'background-color: {}'.format(k)
+      return a
+
+
+* Defaults
+  - $\mu$ and $\tau$ are by default ('none' as kwargs in init) set to the **posterior** values in the config table
+      - $\mu$ to the **loc** value and $\tau$ to the **scale** value
+  - otherwise (~tau = 'full'~ in instantiation), $\tau$ is prior is a fixed Gamma and posterior is always trainable, but its initialization can be set
+  - $\mu$ prior and posterior are set to the table values (if ~mu = 'full'~)
+  
+
+  # In[31]:
+
+
+  config.style.apply(color_table, shape=config.shape[0], red=[4, 7], axis=0)
+
+
+  # In[153]:
+
+
+  colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+
+  # In[287]:
+
+
+  fig, axs = plt.subplots(2, 3, figsize=(14, 8))
+
+  for k, x in enumerate(['x', 'Z', 'W', 'mu', 'tau', 'data_loss']):
+      i = k // 3
+      j = k % 3
+      epl(axs[i, j], loss, x, -.25, covariance=[0,1,2], initialization=[0], label='prior/fixed/ones')
+      epl(axs[i, j], loss, x, -.15, covariance=[0,1,2], initialization=[1], label='prior/train/ones')
+      epl(axs[i, j], loss, x, -.05, covariance=[0,1,2], initialization=[2], label='prior/train/random')
+      epl(axs[i, j], loss, x, .05, covariance=[3,4,5], initialization=[0], label='both/fixed/ones')
+      epl(axs[i, j], loss, x, .15, covariance=[3,4,5], initialization=[1], label='both/train/ones')
+      epl(axs[i, j], loss, x, .25, covariance=[3,4,5], initialization=[2], label='both/train/random')
+      axs[i, j].set_xticklabels(['W','Z','both'])
+
+  axs[0, 0].legend(); #loc='upper left', bbox_to_anchor=(1, 1));
+
+
+* Effect of convergence measure
+  - `exp3` uses data_loss.std() (over 100 iterations) < 1e-4 as measure for convergence
+  - I accidentally run the first experiment twice (with different data), hence the two colors
+
+  # In[4]:
+
+
+  S = pd.HDFStore('../python/pca/exp3.h5')
+
+
+  # In[90]:
+
+
+  with pd.HDFStore('../python/pca/convergence_tests.h5') as C:
+      loss3 = C['test3']
+      loss4 = C['test4']
+
+
+  # In[97]:
+
+
+  fig, axs = plt.subplots(2, 4, figsize=(12, 6))
+  fig.subplots_adjust(hspace=0.3, wspace=.3)
+  dat = loss3.data.unique()
+
+  for k, x in enumerate(['x', 'Z', 'W', 'n_iter', 'mu', 'tau', 'loss', 'data_loss']):
+      i = k // 4
+      j = k % 4
+      epl(axs[i, j], loss3, x, -.2, covariance=[0,1], data=[dat[0]], label='fixed only')
+      epl(axs[i, j], loss3, x, covariance=[0,1], data=[dat[1]], label='same data')
+      epl(axs[i, j], loss4, x, .2, covariance=[0,1], label='different data')
+      axs[i, j].set_xticklabels(['fixed', 'trained'])
+      axs[i, j].set_xlim([-.5, 1.5])
+  axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+
+
+* Tests with full system (tests.py)
+
+** In some places, I compare two different versions of the [[https://www.tensorflow.org/api_docs/][TensorFlow]]-based scheme, corresponding to two branches of the git repo: 
+   1. **'old'**: Here the data is loaded into the graph on construction, so that the graph needs to be reconstructed every time new data is used. (Tests are in pca/convergence.h5)
+   2. **'master'**: Here, graph construction and data are separated by means of tf.placeholder use. This is now the master branch, (Tests are in pca/convergence2.h5)
+
+* Convergence 
+** [[http://edwardlib.org][Edward]] has two methods available for [[http://edwardlib.org/api/ed/KLqp][KLqp]] divergence:
+*** score function gradients 
+**** [[zotero://select/items/1_HCD9LGWZ][Paisley, John, David Blei, and Michael Jordan. “Variational Bayesian Inference with Stochastic Search.” ArXiv Preprint ArXiv:1206.6430, 2012.]]
+*** reparameterization gradients 
+**** [[zotero://select/items/1_MTAV2HE4][Kingma, Diederik P., and Max Welling. “Auto-Encoding Variational Bayes.” ArXiv Preprint ArXiv:1312.6114, 2013.]]
+** The variance of the loss function is related to the number of samples (~n_samples~ in ~initialize()~).
+
+
+  # 'master' branch
+
+  fig, axs = plt.subplots(2, 4, figsize=(12, 6))
+  fig.subplots_adjust(hspace=0.3, wspace=.3)
+
+  for k, x in enumerate(['x', 'Z', 'W', 'n_iter', 'mu', 'tau', 'loss', 'data_loss']):
+      i = k // 4
+      j = k % 4
+      epl(axs[i, j], results, x, -.1, covariance=['none'], convergence_test=['data_loss', 'elbo'])
+      epl(axs[i, j], results, x, .1, covariance=['full'], convergence_test=['data_loss', 'elbo'])
+      axs[i, j].set_xlim([-.5, 1.5])
+  axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+
+
+  # In[66]:
+
+
+  from pca.tests import Test
+
+
+  # In[83]:
+
+
+  test = Test('../python/pca/convergence2.h5', 'data_loss_vs_elbo', plot=True)
+
+
+  # In[70]:
+
+
+  # 'pca_tf_placeholder' branch
+
+  axs = test.plot('convergence_test', {'covariance': ['none', 'full']})
+  axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+
+
+  # Losses evaluated for the individual components of the PCA decomposition in depence of:   
+  # **x-axis:** measure used for evaluating convergence   
+  # **color:** posterior approximation to the ``W`` and ``Z`` matrices (factorized or full covariance).
+  # 
+  # Each of the four groups contains 100 samples of 10 different random data instances and 10 different seeds for the variable initialization.
+
+  # In[110]:
+  
+
+  # 'master' branch
+
+  fig, axs = plt.subplots(2, 4, figsize=(12, 6))
+  fig.subplots_adjust(hspace=0.3, wspace=.3)
+  data = results.data_id.unique()
+
+  for k, x in enumerate(['x', 'Z', 'W', 'n_iter', 'mu', 'tau', 'loss', 'data_loss']):
+      i = k // 4
+      j = k % 4
+      for l, d in enumerate(data):
+          epl(axs[i, j], results, x, (l-4.5)/20, covariance=['none', 'full'], convergence_test=['data_loss'], data_id=[d])
+      axs[i, j].set_xlim([-.5, 1.5])
+
+
+  # In[71]:
+
+
+  # 'pca_tf_placeholder' branch
+
+  axs = test.plot({'covariance': ['none', 'full']}, 'data_id', convergence_test=['data_loss'])
+
+
+  # **Only data_loss as convergence measure.** Colors denote different data instances (i.e. the spread is over different initial seeds).
+
+  # In[111]:
+
+
+  # 'master' branch
+
+  fig, axs = plt.subplots(2, 4, figsize=(12, 6))
+  fig.subplots_adjust(hspace=0.3, wspace=.3)
+  seed = results.seed.unique()
+
+  for k, x in enumerate(['x', 'Z', 'W', 'n_iter', 'mu', 'tau', 'loss', 'data_loss']):
+      i = k // 4
+      j = k % 4
+      for l, s in enumerate(seed):
+          epl(axs[i, j], results, x, (l-4.5)/20, covariance=['none', 'full'], convergence_test=['data_loss'], seed=[s])
+      axs[i, j].set_xlim([-.5, 1.5])
+
+
+  # In[72]:
+
+
+  # 'pca_tf_placeholder' branch
+
+  axs = test.plot({'covariance': ['none', 'full']}, 'seed', convergence_test=['data_loss'])
+
+
+  # **Only data_loss as convergence measure.** Colors denote different random seeds for initialization (i.e. the spread is over different data).
+
+  # There is a substantial fraction of runs that did not converge according to the 'elbo' measure.
+
+  # In[24]:
+
+
+  results[results.n_iter==20000].groupby('convergence_test').count()
+
+
+  # **REMEMBER** to check for the n_iter=20000 runs
+
+  # In[79]:
+
+
+  # 'pca_tf_placeholder' branch
+
+  axs = test.plot('convergence_test', {'covariance': ['none', 'full']}, results=results[results.n_iter!=20000])
+  axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+
+
+  # In[81]:
+
+
+  # 'pca_tf_placeholder' branch
+
+  axs = test.plot('convergence_test', {'covariance': ['none', 'full']}, results=results[results.n_iter==20000])
+  axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+
+
+  # In[137]:
+
+
+  test = tests.Test('../python/pca/covariance.h5', 'covariance_variations', plot=True)
+
+
+  # In[86]:
+
+
+  (test.results.n_iter==20000).sum()
+
+
+* Variations in estimation of $\mu$ and $\tau$
+
+** $\mu$ variations
+
+   axs = test.plot('l', 'mu_variations', xlabels=['tau point', 'tau full'])
+   axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+
+
+*** Observations
+    1. The runs which don't converge with 20,000 iterations are the ones which don't allow training in one or both variables. However it seems more the scale is what needs training. (??)
+    2. The outlier is generally the point estimation of $\mu$.
+    3. Scale initialization with ~tf.ones~ needs a lower number of iterations, but that's to be expected given that the 'true' scale is 1.
+
+**** NOTE
+     The alternatives to the point estimation differ only in the specification of the prior, i.e. whether the prior is fixed to some value or itself contains hyperparamteters that are trainable. If the prior is set not to train, it is set to
+
+     $$
+     \mu \sim \mathcal{N}\left(\mu; m, \nu_{\mu} \mathbf{I}\right)
+     $$
+
+     where $m$ is the 'data_mean' and $\nu_{\mu} = 1$
+
+
+     axs = test.plot({'tau_variations':['point', 'no_train', 'loc_random_scale_random']}, 'mu_variations')
+     axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+
+
+** $\tau$ variations
+
+   axs = test.plot('i', 'tau_variations', xlabels=['mu point', 'mu full'])
+   axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+
+
+*** Observations
+    1. Again, point estimation appears to fare worse.
+    2. $\mu$ ~full~'s wide range of errors may be because it comprises all of the cases of trainability, including the ones that don't converge. In fact, **see below**: The error in the ~full~ $\mu$ cases seems to emenate mostly from the ~no train~ cases.
+    3. Otherwise there seems little difference in how we specify the prior for $\tau$, not even for no trainability - but that might be because the noise level is fixed in the data at 1.
+
+
+    #+begin_src ipython :results raw :session
+axs = test.plot({'mu_variations':['point', 'no_train', 'loc_train']}, 'tau_variations')
+axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+    #+end_src
+
+
+*** Observations
+    1. Point estimation in both variables seems to concurr with generally larger errors, except in $\mu$ itself.
+    2. In general, the error due to point estimation is more pronounced in the principal component variables, $W$ and $Z$. This seems to imply some sort of tradeoff between where the algorithm allocates weights and uncertainty.
+
+    **Question:   
+    Do the better results in $W$ and $Z$ with a full-prior $\mu$ and $\tau$ imply that full Bayesian treatment takes better account of the uncertainties?** (The $\mu$ use in the data generation has a distribution.) 
+
+
+    #+begin_src ipython :results  :session
+axs = test.plot({'mu_variations':['point', 'scale_train_ones', 'scale_train_random']}, 'tau_variations')
+axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+    #+end_src
+
+
+    #+begin_src ipython :results  :session
+axs = test.plot({'mu_variations':['scale_train_ones', 'scale_train_random', 'loc_scale_train_random']}, 'tau_variations')
+axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+    #+end_src
+
+
+
+** Conclusions
+   1. make $\mu$ and $\tau$ trainable and fully Bayesian. The nature of initialization is more relevant for number of iterations needed than for results.
+   2. $\mu$ scale is more relvant than $\mu$ location, but then, the location is always initialized from data means.
+   3. With $\tau$, a Bayesian treatment appears to be better than point estimation.
+
+*** NOTE:
+    The $\tau$ prior is unchanging anyway, that's why the results are all the same, i.e. if $\tau$ is ``full`` estimated, its prior is always
+    $$
+    \tau \sim \Gamma(\tau; 1 \times 10^{-5}, 1 \times 10^{-5}).
+    $$
+  
+  
+    I make the default configuration for the priors over $\mu$ and $\tau$ now Bayesian and trainable:
+
+    #+begin_src ipython :results raw :session
+  p2o.table(core.probPCA.configure())
+    #+end_src
+
+    #+RESULTS:
+    |           |     |       | trainable | initializer               |
+    |-----------+-----+-------+-----------+---------------------------|
+    | posterior | W   | loc   | True      | random_normal_initializer |
+    |           |     | scale | True      | random_normal_initializer |
+    |           | Z   | loc   | True      | random_normal_initializer |
+    |           |     | scale | True      | random_normal_initializer |
+    |           | mu  | loc   | True      | data_mean                 |
+    |           |     | scale | True      | random_normal_initializer |
+    |           | tau | loc   | True      | random_normal_initializer |
+    |           |     | scale | True      | random_normal_initializer |
+    | prior     | W   | loc   | False     | zeros_initializer         |
+    |           |     | scale | False     | ones_initializer          |
+    |           | Z   | loc   | False     | zeros_initializer         |
+    |           |     | scale | False     | ones_initializer          |
+    |           | mu  | loc   | True      | data_mean                 |
+    |           |     | scale | True      | random_normal_initializer |
+    |           | tau | loc   | False     | zeros_initializer         |
+    |           |     | scale | False     | ones_initializer          |
+
+
+
+#+begin_src ipython :results  :session
+t = tests.Test('../python/pca/experiments.h5', 'covariance', plot=True)
+#+end_src
+
+#+begin_src ipython :results  :session
+r[r.convergence_test=='data_loss']
+#+end_src
+
+#+begin_src ipython :results  :session
+axs = test.plot('seed', {'covariance': ['none', 'full']}, results=r[r.convergence_test=='data_loss'])
+axs[0, 3].legend(loc='upper left', bbox_to_anchor=(1, 1));
+#+end_src
+
+#+begin_src ipython :results  :session
+d.missing(.3)
+#+end_src
+
+
+* Lima
+** exploratory
+#+begin_src ipython :results  :session
+import sys
+sys.path.append('../python/')
+from pca import core, tests
+#+end_src
+
+#+begin_src ipython :results  :session
+d = tests.Data().real(ta_c=0)
+#+end_src
+
+#+begin_src ipython :results  :session
+conf = core.probPCA.configure()
+conf.loc[('posterior', 'mu', 'loc'), 'initializer'] = 'data_mean'
+#+end_src
+
+#+begin_src ipython :results  :session
+reload(core)
+#+end_src
+
+#+begin_src ipython :results  :session
+p = core.probPCA(d.x.shape, logdir='ppca_logs', seed=1, test_data=True)
+#+end_src
+
+#+begin_src ipython :results  :session
+p.run(d.x1, n_iter=2000, test_data=d.x).critique(d)
+#+end_src
+
+#+begin_src ipython :results  :session
+xr.concat((_, ), 'new')
+#+end_src
+
+#+begin_src ipython :results  :session
+plt.figure()
+plt.plot(d.x1[3, :])
+plt.plot(p.x[3,:])
+#+end_src
+
+#+begin_src ipython :results  :session
+plt.figure()
+plt.plot(d.x1[2, :])
+plt.plot(dp.x[2,:])
+#+end_src
+
+#+begin_src ipython :results  :session
+bp = core.vbPCA(d.x1, n_iter=1000, rotate=True)
+#+end_src
+
+#+begin_src ipython :results  :session
+plt.figure()
+plt.plot(d.x1[0, :])
+plt.plot(bp.x[0, :])
+#+end_src
+
+#+begin_src ipython :results  :session
+plt.figure()
+plt.plot(p.x[0, :])
+plt.plot(d.x.values[0, :])
+#+end_src
+
+** figures
+#+begin_src ipython :results silent :session
+  with pd.HDFStore('../python/pca/tests/lima/lima.h5') as S:
+      ed = S['edward/random/']
+      bp = S['bayespy/random']
+      det = S['determ/random']
+      ed_bl = S['edward/blocks']
+      bp_bl = S['bayespy/blocks']
+      det_bl = S['determ/blocks']
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "determ1-4KvsProbK5.png"
+  from matplotlib import lines
+  fig = plt.figure(figsize=(12, 6))
+
+  colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+  fmt = ['-^', '-s']
+
+  ax = plt.subplot(1, 2, 1)
+  for k in range(4):
+      for i, d in enumerate(det.data_id.unique()):
+          x = det[(det.K==k+1) & (det.data_id==d)].sort_values('missing')
+          ax.plot(x.missing, x.x, fmt[i], color=colors[k])
+
+  for i, d in enumerate(ed.data_id.unique()):
+      x = ed[ed.data_id==d].groupby('missing')
+      xm = x.mean()
+      ax.errorbar(xm.index, xm.x, x.x.std(), fmt=fmt[i], color=colors[4], capsize=5)
+
+  for i, d in enumerate(bp.data_id.unique()):
+      x = bp[bp.data_id==d].groupby('missing')
+      xm = x.mean()
+      ax.errorbar(xm.index, xm.x, x.x.std(), fmt=fmt[i], color=colors[5], capsize=5)
+
+  ax.grid()
+
+  ## blocks
+
+  ax = plt.subplot(1, 2, 2, sharex=ax, sharey=ax)
+  for k in range(4):
+      x = det_bl[det_bl.K==k+1].groupby('missing')
+      xm = x.mean()
+      ax.errorbar(xm.index, xm.x, x.x.std(), fmt='-s', color=colors[k], capsize=5)
+
+  x = ed_bl[ed_bl.K==5].groupby('missing')
+  xm = x.mean()
+  ax.errorbar(xm.index, xm.x, x.x.std(), fmt='-s', color=colors[4], capsize=5)
+
+  x = bp_bl[bp_bl.K==5].groupby('missing')
+  xm = x.mean()
+  ax.errorbar(xm.index, xm.x, x.x.std(), fmt='-s', color=colors[5], capsize=5)
+
+  ax.grid()
+
+  ax.legend(
+      [lines.Line2D([], [], color=c) for c in colors[:6]],
+      [1, 2, 3, 4, 'SFG', 'VMP'],
+      loc='lower right'
+  )
+#+end_src
+
+#+CAPTION: RMSE of PCA-based reconstructions of a function of the fraction of data that is missing (missing value fraction, MVF). The labels in the legend refer to: (1-4) the number of PCs used in the reconstruction via deterministic PCA, and (SCF, VMP) the algorithm used for the solution of the VB problem resulting from a probabilistic Bayesian formulation of PCA (SCF: [[score function gradients]]; VMP: Variational Message Passing). 
+#+CAPTION: *Left:* Random pattern of data removal (as in top panel of [[fig:avail-blocks]]). The vertical error bars in the /SFG/, /VMP/ give +/- the Standard Deviation across 20 differently seeded random realizations of the VB algorithms (there's no random element associated with the deterministic PCA, hence no spread). Different symbols (squares / triangles) refer to two different 5-station data sets (~tests.Data.real(ta_c=[0, 1])~).
+#+CAPTION: *Right:* Block pattern of data removal (as in bottom panel of [[fig:avail-blocks]]). Here, the vertical error bars give +/- the Standard Deviation across different block patterns with the same MVF. Each 'group' (with same MVF) contains 10 realizations of a 10-block pattern and 10 of a 20-block pattern. Only one data set is used.
+#+RESULTS:
+[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/determ1-4KvsProbK5.png]]
+
+#+begin_src ipython :results silent :session
+  with pd.HDFStore('../python/pca/tests/lima/lima.h5') as S:
+      ed_k = S['edward/K_all']
+      bp_k = S['bayespy/K_all']
+      ed_k_bl = S['edward/blocks']
+      bp_k_bl = S['bayespy/blocks']
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig prob1-5K.png
+  from matplotlib import lines
+  colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+  fig = plt.figure(figsize=(12, 6))
+
+  ax = plt.subplot(1, 2, 1)
+  for k in range(5):
+      x = ed_k[ed_k.K==k+1].groupby('missing')
+      xm = x.mean()
+      ax.errorbar(xm.index, xm.x, x.x.std(), fmt='-s', color=colors[k], capsize=5)
+
+      x = bp_k[bp_k.K==k+1].groupby('missing')
+      xm = x.mean()
+      ax.errorbar(xm.index, xm.x, x.x.std(), fmt='-^', color=colors[k], capsize=5)
+
+  ax.grid()
+
+  # blocks
+
+  ax = plt.subplot(1, 2, 2, sharex=ax, sharey=ax)
+  for k in range(5):
+      x = ed_k_bl[ed_k_bl.K==k+1].groupby('missing')
+      xm = x.mean()
+      ax.errorbar(xm.index, xm.x, x.x.std(), fmt='-s', color=colors[k], capsize=5)
+
+      x = bp_k_bl[bp_k_bl.K==k+1].groupby('missing')
+      xm = x.mean()
+      ax.errorbar(xm.index, xm.x, x.x.std(), fmt='-^', color=colors[k], capsize=5)
+
+  ax.grid()
+
+  ax.legend(
+      [lines.Line2D([], [], color=c) for c in colors[:5]],
+      [1,2,3,4,5],
+      loc='lower right'
+      )
+#+end_src
+
+#+CAPTION: RMSE of different dimensionalities (1-5, legend) of the VB-based data reconstructions.
+#+CAPTION: *Left:* "Random" pattern of MV removal. One data point corresponds to one experiment. 
+#+CAPTION: *Right:* "Block" pattern of MV removal. Error bars indicate Standard Deviation across 10 different random block patterns with given MVF. 
+#+CAPTION: Different markers represent different VB algorithms: score function gradient (squares) and Variational Message Passing (triangles). The high variance in the estimates with the score function gradient method (edward / tensorflow) od probably due to an imperfect choice of stopping criterium rather than fundamental shortcomings of the method.
+#+RESULTS:
+[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/prob1-5K.png]]
+
+    # In[610]:
+
+
+    p.critique(d)
+
+
+    # In[30]:
+
+
+    d=tests.Data().real(ta_c=0)
+
+
+    # In[35]:
+
+
+    fig, axs = plt.subplots(2, 1, figsize=(14, 3))
+    d.missing(.3)
+    avail(d.mask.T, axs[0])
+    d.missing(.3, 20)
+    avail(d.mask.T, axs[1], bottom=.1)
+    axs[0].set_xticklabels([])
+    axs[0].set_yticklabels(range(1, 6))
+    axs[1].set_yticklabels(range(1, 6))
+
+
+    # In[36]:
+
+
+    fig.savefig('/Users/arno/Dropbox/work/Lima/fig2.pdf')
+
+
+    # In[38]:
+
+
+    S = pd.HDFStore('../python/lima3.h5')
+
+
+    # In[41]:
+
+
+    t = S['/edward/results']
+
+
+    # In[44]:
+
+
+    ed_k.shape
+
+
+    # In[49]:
+
+
+    t['class'].unique()
+
+
+    # In[55]:
+
+
+    d = tests.Data().real(ta_c=1)
+
+
+    # In[66]:
+
+
+    plt.figure()
+    x = det[det.data_id=='data20180521235330796373']
+    for k in range(k):
+    y = x.mu[x.K==k+1].sort_values('missing')
+    plt.plot(y.missing, y)
+
+    import xarray as xr
+    # In[150]:
+
+
+    mu = xr.open_dataset('../python/lima_det.nc')['mu']
+    mu_bl = xr.open_dataset('../python/lima_det_blocks2.nc')['mu']
+    mu_p = xr.open_dataset('../python/pca/lima.nc')['mu']
+    mu_p_bl = xr.open_dataset('../python/lima_blocks2.nc')['mu']
+
+
+    # In[176]:
+
+
+#+begin_src ipython :results silent :session
+  fmt = ['*', 's', 'o', '^', 'v']
+
+  fig = plt.figure(figsize=(12, 6)) 
+
+  ax = plt.subplot(1, 2, 1)
+
+  for m in d.x.mean(1):
+      ax.axhline(m, color='grey')
+
+  x = det[det.data_id=='data20180521235330796373'].sort_values('missing')
+  for k in range(4):
+      y = mu.sel(exp=x[x.K==k+1].index).dropna('station', 'all')
+      sta = y.station
+      for i, s in enumerate(sta):
+          ax.plot(np.arange(0, 1, .1), y.sel(station=s), fmt[i], color=colors[k])
+
+  x1 = ed[ed.data_id=='data20180520160130159155']
+  x2 = bp[bp.data_id=='data20180520160130159155']
+  x = mu_p.sel(exp=x1.index)
+  x['exp'] = ('exp', pd.MultiIndex.from_arrays((x1.index.values, x1.missing.values)))
+  for i, s in enumerate(sta):
+      z = x.sel(station=s).groupby('exp_level_1')
+      ax.errorbar(np.arange(0, 1, .1), z.mean(), yerr=z.std(), fmt=fmt[i], 
+                  color=colors[4], capsize=5)
+
+  # blocks
+  ax = plt.subplot(1, 2, 2, sharey=ax)
+
+  x = mu_bl.copy()
+  x['exp'] = ('exp', pd.MultiIndex.from_tuples(
+  list(det_bl.loc[mu_bl.exp][['K', 'blocks', 'missing']].values)))
+
+  for m in d.x.mean(1):
+      ax.axhline(m, color='grey')
+
+  for k in range(4):
+      b = 10
+      for i, s in enumerate(sta): # same y as above!
+          z = x.sel(exp=(k+1, b), station=s).groupby('exp_level_2')
+          ax.errorbar(np.arange(0, 1, .1), z.mean(), yerr=z.std(), fmt=fmt[i], 
+                      color=colors[k], capsize=5)
+#+end_src
+
+
+
+    # In[154]:
+
+
+    x1 = ed[ed.data_id=='data20180520160130159155']
+    x2 = bp[bp.data_id=='data20180520160130159155']
+    y = mu_p.sel(exp=x1.index)
+
+
+    # In[172]:
+
+
+    x = mu_p.sel(exp=x1.index)
+    x['exp'] = ('exp', pd.MultiIndex.from_arrays((x1.index.values, x1.missing.values)))
+
+
+    # In[174]:
+
+
+    x.sel(station=s).groupby('exp_level_1').mean()
+
+
+    # In[ ]:
+
+
+
+
+** reconstruction
+*** .nc files contain the actual data (x, mu, tau, Z, W, alpha)
+*** .pkl files contain data for repeat experiments
+*** code
+**** pca
+       - missing 0:.9:.1 (=10 steps)
+***** lima.py
+****** lima.h5
+       - 400
+       - default settings
+       - real data sets 1 and 2, 20 seeds
+       - n_iter=20000
+****** lima_blocks.h5 [x]
+       - 400
+       - 20 blocks
+***** lima2.py
+****** lima4.h5 [x]
+       - 20
+       - K (dimensions: 4, 5)
+***** lima3.py
+****** lima_blocks3 [x]
+       - 396
+       - 10 seeds
+       - 10, 20 blocks
+       - K 4, 5
+       - missing 2 each in missing .8, .9, seeds 0, 1, blocks 10
+***** lima_det.py
+****** lima_det [x]
+       - 80
+       - data 0, 1
+       - K 1-4
+***** lima_det2.py
+****** lima_det_blocks2 [x]
+       - 800
+       - 10 seeds
+       - K 1-4
+       - blocks 10, 20
+****** lima_det_blocks [?]
+       - 80
+       - K 1-4
+***** test.py 
+      - [ ] convergence.h5
+      - [ ] covariance.h5
+      - [X] convariance.pkl
+      - [ ] mu_tau ?
+      - [ ] experiments_copy.h5
+***** unclear
+****** lima2.h5
+      - 30
+      - K 1-3
+****** lima3.h5
+      - 53
+      - K 1-3
+      - blocks 10, 20
+      - 0 missing only
+      - 8 x 6 seed + 5
+      - 1 data
+      - i.e. one seed missing + 1 less on the last present one
+      - something went wrong with MVs
+****** lima_blocks2.h5
+      - 600
+      - 1 data
+      - K: nan
+      - blocks 10, 20
+      - 10 seeds
+****** lima_det.h5 (python)
+      - 80
+      - K 1-4
+      - 2 data
+****** lima.h5 (Dropbox)
+      - 399
+      - 2 data
+      - 0 missing only 39 instead 40
+*** data
+**** pca
+     - [X] lima
+     - [X] lima_blocks
+     - [X] lima_det
+     - [X] lima_det_blocks
+     - [ ] convergence_new.pkl
+     - [ ] convergence_old.npy
+     - [ ] covariance.pkl
+     - [ ] mu_tau.pkl
+     - [ ] ppca_experiments.h5
+     - [ ] experiments.h5
+**** python
+     - [X] lima2
+     - [X] lima3
+     - [X] lima4
+     - [X] lima_blocks2
+     - [X] lima_blocks3
+     - [X] lima_det
+     - [X] lima_det_blocks2
+*** used
+**** fig2
+***** ed_k: python/lima2.h5, lima4.h5
+***** bp_k: python/lima2, 4
+***** ed_k_bl: python/lima_blocks2, 3
+***** bp_k_bl: python/lima_blocks2, 3
+**** fig3:
+***** ed, bp: pca/lima.h5 
+***** det: python/lima_det.h5
+***** ed_bl, bp_bl: python/lima_blocks3.h5
+***** det_bl: python/lima_det_blocks2.h5
+
+*** table
+**** original
+|        |                  |    n |      |   K |     | data | seeds | blocks | notes  |
+| wd     |                  |   ed |   bp |  ed | bp  |      |       |        |        |
+|--------+------------------+------+------+-----+-----+------+-------+--------+--------|
+| python | lima2            |   30 |   30 | 1-3 | nan |    1 |     - | -      |        |
+|        | lima3            |   53 |   53 | 1-3 | nan |    1 |     9 | -      | [fn:8] |
+|        | lima4            |   20 |   20 | 4,5 | 4,5 |    1 |     - | -      |        |
+|        | lima_blocks2     |  600 |  600 | 1-3 | nan |    1 |    10 | 10, 20 | [fn:1] |
+|        | lima_blocks3     |  396 |  399 | 4,5 | nan |    1 |    10 | 10, 20 | [fn:1] |
+|        | lima_blocks      | 1000 | 1000 | 1-5 | 1-5 |    1 |    10 | 10, 20 | [fn:2] |
+|        | lima_det         |   80 |    x | 1-4 | x   |  *2* |     - | -      | [fn:3] |
+|        | lima_det_blocks2 |  800 |    x | 1-4 | x   |    1 |    10 | 10, 20 | [fn:4] |
+| pca    | lima             |  400 |  399 |   5 |     |  *2* |    20 |        | [fn:7] |
+|        | lima_blocks      |  400 |      |   5 |     |  *2* |    20 | 20     | [fn:5] |
+|        | lima_det         |   80 |    x | 1-4 | x   |  *2* |       |        | [fn:6] |
+|        | lima_det_blocks  |   80 |    x | 1-4 | x   |  *2* |       |        | [fn:6] |
+
+[fn:1] combined into lima_blocks, deleted
+[fn:2] lima_blocks2, 3 & det_blocks2 combined and completed (failed exps. repeated)
+[fn:3] probably lower n_iter than the equivalents in /pca/
+[fn:4] renamed lima_det_blocks (see [fn:3]
+[fn:5] missing values messed up (0 - 0.6 MVF only)
+[fn:6] deleted (see [fn:3], [fn:4])
+[fn:7] combined with python/lima_det to ta_c-[0, 1]/
+[fn:8] deleted
+**** consolidated (../python/pca/tests/)
+***** lima.zip -> ta_c-0/[edward | bayespy | determ].nc
+               -> ta_c-1/[edward | bayespy | determ].nc
+               -> blocks.nc (all blocks in one file)
+               -> K1-5.nc (original lima2, lima4.nc)
+** tasks
+*** TODO do missing runs with second data set (or a more different 2nd data se

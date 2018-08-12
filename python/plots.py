@@ -114,9 +114,8 @@ class Coquimbo(object):
         from cartopy.io import shapereader
         from os.path import join
         if path is None:
-            from configparser import ConfigParser
-            c = ConfigParser()
-            c.read(config_file)
+            from configobj import ConfigObj
+            c = ConfigObj(config_file)
             path = c['GSHHG']['path']
         self.coast = shapereader.Reader(join(path, 'coast.shp'))
         self.border = shapereader.Reader(join(path, 'border.shp'))

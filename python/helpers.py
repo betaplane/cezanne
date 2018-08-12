@@ -7,11 +7,6 @@ import os, re
 K = 273.15
 
 
-from socket import gethostname
-hostname = gethostname().split('.')[0]
-from configobj import ConfigObj
-config = ConfigObj(os.path.expanduser(os.environ['CEZANNE_CONFIG']))
-
 def try_list(obj, *args):
     for a in args:
         try:
@@ -153,7 +148,7 @@ def avg(df, interval):
     return m
 
 
-def stationize(df, aggr='prom'):
+def stationize(X, aggr='prom'):
     """ Return a copy of a DataFrame with only station codes as labels (either columns or index). If the resulting set of column lables is not unique (more than one sensor for the same variable at the same station), the returned copy has the ``sensor_code`` as column labels.
 
     :param aggr: if the input DataFrame has several ``aggr`` levels (e.g. ``prom``, ``min``, ``max``), return this one
@@ -162,10 +157,11 @@ def stationize(df, aggr='prom'):
     :rtype: :class:`~pandas.DataFrame`
 
     """
-    if isinstance(df, str):
-        c = pd.read_hdf(config[hostname]['stations']['data'], df)
+    if isinstance(X, pd.DataFrame):
+        c = X.copy()
     else:
-        c = df.copy()
+        import cezar
+        c = pd.read_hdf(cezar.stations['data'], X)
     stations = c.columns.get_level_values('station')
     try:
         c = c.xs(aggr, 1, 'aggr')

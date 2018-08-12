@@ -1,0 +1,531 @@
+* Notes
+  https://matplotlib.org/gallery/style_sheets/style_sheets_reference.html
+  https://matplotlib.org/users/style_sheets.html
+  quit(keep_kernel=True)
+  http://ergoemacs.org/emacs/emacs_org_markup.html
+
+** ipython table (tabulate, MIME type)
+   #+name: styles
+   #+begin_src ipython :session :results raw drawer
+  from tabulate import tabulate
+  # t = tabulate([plt.style.available],tablefmt='orgtbl')
+  t = plt.style.available 
+  # display.publish_display_data({'text/org': t})
+   #+end_src
+
+** pure python org-babel list
+   (setq python-shell-interpreter "python3")
+
+   #+name: styles
+   #+begin_src python :session :results list
+import matplotlib.pyplot as plt
+plt.style.available
+   #+end_src
+
+   #+RESULTS: styles
+   - seaborn-dark
+   - seaborn-darkgrid
+   - seaborn-ticks
+   - fivethirtyeight
+   - seaborn-whitegrid
+   - classic
+   - _classic_test
+   - fast
+   - seaborn-talk
+   - seaborn-dark-palette
+   - seaborn-bright
+   - seaborn-pastel
+   - grayscale
+   - seaborn-notebook
+   - ggplot
+   - seaborn-colorblind
+   - seaborn-muted
+   - seaborn
+   - Solarize_Light2
+   - seaborn-paper
+   - bmh
+   - seaborn-white
+   - dark_background
+   - seaborn-poster
+   - seaborn-deep
+
+* code
+** main python code
+   
+ #+begin_src ipython :session :results silent
+ import numpy as np
+ import matplotlib as mpl
+ mpl.use('agg')
+ import matplotlib.pyplot as plt
+ plt.rcParams['figure.dpi'] = 200
+
+ # Fixing random state for reproducibility
+ np.random.seed(19680801)
+
+
+ def plot_scatter(ax, prng, nb_samples=100):
+     """Scatter plot.
+     """
+     for mu, sigma, marker in [(-.5, 0.75, 'o'), (0.75, 1., 's')]:
+         x, y = prng.normal(loc=mu, scale=sigma, size=(2, nb_samples))
+         ax.plot(x, y, ls='none', marker=marker)
+     ax.set_xlabel('X-label')
+     return ax
+
+
+ def plot_colored_sinusoidal_lines(ax):
+     """Plot sinusoidal lines with colors following the style color cycle.
+     """
+     L = 2 * np.pi
+     x = np.linspace(0, L)
+     nb_colors = len(plt.rcParams['axes.prop_cycle'])
+     shift = np.linspace(0, L, nb_colors, endpoint=False)
+     for s in shift:
+         ax.plot(x, np.sin(x + s), '-')
+     ax.set_xlim([x[0], x[-1]])
+     return ax
+
+
+ def plot_bar_graphs(ax, prng, min_value=5, max_value=25, nb_samples=5):
+     """Plot two bar graphs side by side, with letters as x-tick labels.
+     """
+     x = np.arange(nb_samples)
+     ya, yb = prng.randint(min_value, max_value, size=(2, nb_samples))
+     width = 0.25
+     ax.bar(x, ya, width)
+     ax.bar(x + width, yb, width, color='C2')
+     ax.set_xticks(x + width)
+     ax.set_xticklabels(['a', 'b', 'c', 'd', 'e'])
+     return ax
+
+
+ def plot_colored_circles(ax, prng, nb_samples=15):
+     """Plot circle patches.
+
+     NB: draws a fixed amount of samples, rather than using the length of
+     the color cycle, because different styles may have different numbers
+     of colors.
+     """
+     for sty_dict, j in zip(plt.rcParams['axes.prop_cycle'], range(nb_samples)):
+         ax.add_patch(plt.Circle(prng.normal(scale=3, size=2),
+                                 radius=1.0, color=sty_dict['color']))
+     # Force the limits to be the same across the styles (because different
+     # styles may have different numbers of available colors).
+     ax.set_xlim([-4, 8])
+     ax.set_ylim([-5, 6])
+     ax.set_aspect('equal', adjustable='box')  # to plot circles as circles
+     return ax
+
+
+ def plot_image_and_patch(ax, prng, size=(20, 20)):
+     """Plot an image with random values and superimpose a circular patch.
+     """
+     values = prng.random_sample(size=size)
+     ax.imshow(values, interpolation='none')
+     c = plt.Circle((5, 5), radius=5, label='patch')
+     ax.add_patch(c)
+     # Remove ticks
+     ax.set_xticks([])
+     ax.set_yticks([])
+
+
+ def plot_histograms(ax, prng, nb_samples=10000):
+     """Plot 4 histograms and a text annotation.
+     """
+     params = ((10, 10), (4, 12), (50, 12), (6, 55))
+     for a, b in params:
+         values = prng.beta(a, b, size=nb_samples)
+         ax.hist(values, histtype="stepfilled", bins=30,
+                 alpha=0.8, density=True)
+     # Add a small annotation.
+     ax.annotate('Annotation', xy=(0.25, 4.25), xycoords='data',
+                 xytext=(0.9, 0.9), textcoords='axes fraction',
+                 va="top", ha="right",
+                 bbox=dict(boxstyle="round", alpha=0.2),
+                 arrowprops=dict(
+                           arrowstyle="->",
+                           connectionstyle="angle,angleA=-95,angleB=35,rad=10"),
+                 )
+     return ax
+
+
+ def plot_figure(style_label=""):
+     """Setup and plot the demonstration figure with a given style.
+     """
+     # Use a dedicated RandomState instance to draw the same "random" values
+     # across the different figures.
+     prng = np.random.RandomState(96917002)
+
+     # Tweak the figure size to be better suited for a row of numerous plots:
+     # double the width and halve the height. NB: use relative changes because
+     # some styles may have a figure size different from the default one.
+     (fig_width, fig_height) = plt.rcParams['figure.figsize']
+     fig_size = [fig_width * 2, fig_height / 2]
+
+     fig, axes = plt.subplots(ncols=6, nrows=1, num=style_label,
+                              figsize=fig_size, squeeze=True)
+     axes[0].set_ylabel(style_label)
+
+     plot_scatter(axes[0], prng)
+     plot_image_and_patch(axes[1], prng)
+     plot_bar_graphs(axes[2], prng)
+     plot_colored_circles(axes[3], prng)
+     plot_colored_sinusoidal_lines(axes[4])
+     plot_histograms(axes[5], prng)
+
+     fig.tight_layout()
+
+     return fig
+ #+end_src
+
+** babel-org named python function
+ #+name: show
+ #+header: :var style="default" nandu=1
+ #+begin_src ipython :session :results raw
+   styles = [style,
+             '/Users/arno/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle'] if nandu else style
+   with plt.style.context(styles):
+       plot_figure(style_label=style)
+ #+end_src
+
+** generate the needed code blocks in elisp
+   
+   table in org prose as input:
+   #+tblname: tstyles
+   | seaborn-dark | seaborn-darkgrid | seaborn-ticks | fivethirtyeight | seaborn-whitegrid | classic | _classic_test | fast | seaborn-talk | seaborn-dark-palette | seaborn-bright | seaborn-pastel | grayscale | seaborn-notebook | ggplot | seaborn-colorblind | seaborn-muted | seaborn | Solarize_Light2 | seaborn-paper | bmh | seaborn-white | dark_background | seaborn-poster | seaborn-deep |
+
+   *NOTE*: since tstyles is a table, it will be a nested list as elisp variable (~styles~), hence the ~(car styles)~.
+   #+begin_src emacs-lisp :var styles=tstyles :result silent
+     (goto-line (point-max))
+     (mapc (lambda (el) 
+             (insert (format "** %s\n#+name: %s
+     ,#+call: show(\"%s\") :ipyfile \"./%s\"
+
+     " el el el (file-relative-name (expand-file-name el ob-ipython-resources-dir))))
+             ) (car styles))
+   #+end_src
+
+** org-walker
+*** mark region:
+  #+call: show(style="{}", nandu=1) :savefig "nandu-{}.png" :style "nandu_dark"
+*** nandu-insert-into-leaves with "style"
+
+** add headlines (no longer relevant)
+*** replace "@@@" with "\n"
+**** vim search-and-replace: :%s:...:...:g
+     #+begin_src emacs-lisp :results silent
+   (let ((lines (org-element-map (org-element-parse-buffer) 'babel-call
+                  (lambda (el)
+                    (cons (count-lines 1 (org-element-property :begin el))
+                     (org-element-property :name el))))))
+     (mapc (lambda (el)
+             (goto-line (1+ (car el)))
+             (insert (format "** %s@@@" (cdr el)))) lines))
+     #+end_src
+
+* style example plots
+** seaborn
+*** same palette
+**** seaborn-dark
+  #+name: seaborn-dark
+  #+call: show("seaborn-dark") :ipyfile "./obipy-resources/style_sheets/seaborn-dark"
+
+  #+RESULTS: seaborn-dark
+  [[file:./obipy-resources/style_sheets/seaborn-dark.png]]
+
+  #+call: show(style="seaborn-dark", nandu=1) :savefig "nandu-seaborn-dark.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-dark.png]]
+
+**** seaborn-darkgrid
+  #+name: seaborn-darkgrid
+  #+call: show("seaborn-darkgrid") :ipyfile "./obipy-resources/style_sheets/seaborn-darkgrid"
+
+  #+RESULTS: seaborn-darkgrid
+  [[file:./obipy-resources/style_sheets/seaborn-darkgrid.png]]
+  
+  #+call: show(style="seaborn-darkgrid", nandu=1) :savefig "nandu-seaborn-darkgrid.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-darkgrid.png]]
+
+**** seaborn-white
+  #+name: seaborn-white
+  #+call: show("seaborn-white") :ipyfile "./obipy-resources/style_sheets/seaborn-white"
+
+  #+RESULTS: seaborn-white
+  [[file:./obipy-resources/style_sheets/seaborn-white.png]]
+
+
+  #+call: show(style="seaborn-white", nandu=1) :savefig "nandu-seaborn-white.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-white.png]]
+
+**** seaborn-whitegrid
+  #+name: seaborn-whitegrid
+  #+call: show("seaborn-whitegrid") :ipyfile "./obipy-resources/style_sheets/seaborn-whitegrid"
+
+  #+RESULTS: seaborn-whitegrid
+  [[file:./obipy-resources/style_sheets/seaborn-whitegrid.png]]
+  
+  #+call: show(style="seaborn-whitegrid", nandu=1) :savefig "nandu-seaborn-whitegrid.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-whitegrid.png]]
+
+**** seaborn-ticks
+  #+name: seaborn-ticks
+  #+call: show(style="seaborn-ticks", nandu=0) :savefig "seaborn-ticks.png"
+
+  #+RESULTS: seaborn-ticks
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/seaborn-ticks.png]]
+
+  #+call: show(style="seaborn-ticks", nandu=1) :savefig "nandu-seaborn-ticks.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-ticks.png]]
+
+**** fast
+  #+name: fast
+  #+call: show("fast") :ipyfile "./obipy-resources/style_sheets/fast"
+
+  #+RESULTS: fast
+  [[file:./obipy-resources/style_sheets/fast.png]]
+
+  #+call: show(style="fast", nandu=1) :savefig "nandu-fast.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-fast.png]]
+
+**** seaborn-talk
+  #+name: seaborn-talk
+  #+call: show("seaborn-talk") :ipyfile "./obipy-resources/style_sheets/seaborn-talk"
+
+  #+RESULTS: seaborn-talk
+  [[file:./obipy-resources/style_sheets/seaborn-talk.png]]
+
+  #+call: show(style="seaborn-talk", nandu=1) :savefig "nandu-seaborn-talk.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-talk.png]]
+
+**** seaborn-poster
+  #+name: seaborn-poster
+  #+call: show("seaborn-poster") :ipyfile "./obipy-resources/style_sheets/seaborn-poster"
+
+  #+RESULTS: seaborn-poster
+  [[file:./obipy-resources/style_sheets/seaborn-poster.png]]
+
+  #+call: show(style="seaborn-poster", nandu=1) :savefig "nandu-seaborn-poster.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-poster.png]]
+
+**** seaborn-paper
+  #+name: seaborn-paper
+  #+call: show(style="seaborn-paper", nandu=0) :savefig "seaborn-paper.png"
+
+  #+RESULTS: seaborn-paper
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/seaborn-paper.png]]
+  
+  #+call: show(style="seaborn-paper", nandu=1) :savefig "nandu-seaborn-paper.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-paper.png]]
+
+**** seaborn-notebook
+  #+name: seaborn-notebook
+  #+call: show("seaborn-notebook") :ipyfile "./obipy-resources/style_sheets/seaborn-notebook"
+
+  #+RESULTS: seaborn-notebook
+  [[file:./obipy-resources/style_sheets/seaborn-notebook.png]]
+  
+  #+call: show(style="seaborn-notebook", nandu=1) :savefig "nandu-seaborn-notebook.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-notebook.png]]
+
+*** different palettes
+**** seaborn
+  #+name: seaborn
+  #+call: show(style="seaborn", nandu=0) :savefig "seaborn.png"
+
+  #+RESULTS: seaborn
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/seaborn.png]]
+  
+  #+call: show(style="seaborn", nandu=1) :savefig "nandu-seaborn.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn.png]]
+
+**** seaborn-deep
+   #+name: seaborn-deep
+   #+call: show("seaborn-deep") :ipyfile "./obipy-resources/style_sheets/seaborn-deep"
+
+   #+RESULTS: seaborn-deep
+   [[file:./obipy-resources/style_sheets/seaborn-deep.png]]
+   
+  #+call: show(style="seaborn-deep", nandu=1) :savefig "nandu-seaborn-deep.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-deep.png]]
+
+**** seaborn-dark-palette
+  #+name: seaborn-dark-palette
+  #+call: show("seaborn-dark-palette") :ipyfile "./obipy-resources/style_sheets/seaborn-dark-palette"
+
+  #+RESULTS: seaborn-dark-palette
+  [[file:./obipy-resources/style_sheets/seaborn-dark-palette.png]]
+
+  #+call: show(style="seaborn-dark-palette", nandu=1) :savefig "nandu-seaborn-dark-palette.png" :style "nandu_dark"
+
+**** seaborn-bright
+  #+name: seaborn-bright
+  #+call: show("seaborn-bright") :ipyfile "./obipy-resources/style_sheets/seaborn-bright"
+
+  #+RESULTS: seaborn-bright
+  [[file:./obipy-resources/style_sheets/seaborn-bright.png]]
+
+  #+call: show(style="seaborn-bright", nandu=1) :savefig "nandu-seaborn-bright.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-bright.png]]
+
+**** seaborn-pastel
+  #+name: seaborn-pastel
+  #+call: show("seaborn-pastel") :ipyfile "./obipy-resources/style_sheets/seaborn-pastel"
+
+  #+RESULTS: seaborn-pastel
+  [[file:./obipy-resources/style_sheets/seaborn-pastel.png]]
+
+  #+call: show(style="seaborn-pastel", nandu=1) :savefig "nandu-seaborn-pastel.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-pastel.png]]
+
+**** seaborn-colorblind
+  #+name: seaborn-colorblind
+  #+call: show("seaborn-colorblind") :ipyfile "./obipy-resources/style_sheets/seaborn-colorblind"
+
+  #+RESULTS: seaborn-colorblind
+  [[file:./obipy-resources/style_sheets/seaborn-colorblind.png]]
+
+  #+call: show(style="seaborn-colorblind", nandu=1) :savefig "nandu-seaborn-colorblind.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-colorblind.png]]
+
+**** seaborn-muted
+  #+name: seaborn-muted
+  #+call: show("seaborn-muted") :ipyfile "./obipy-resources/style_sheets/seaborn-muted"
+
+  #+RESULTS: seaborn-muted
+  [[file:./obipy-resources/style_sheets/seaborn-muted.png]]
+
+  #+call: show(style="seaborn-muted", nandu=1) :savefig "nandu-seaborn-muted.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-seaborn-muted.png]]
+
+** others
+*** classic
+ #+name: classic
+ #+call: show("classic") :ipyfile "./obipy-resources/style_sheets/classic"
+
+ #+RESULTS: classic
+ [[file:./obipy-resources/style_sheets/classic.png]]
+
+  #+call: show(style="classic", nandu=1) :savefig "nandu-classic.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-classic.png]]
+
+*** _classic_test
+ #+name: _classic_test
+ #+call: show("_classic_test") :ipyfile "./obipy-resources/style_sheets/_classic_test"
+
+ #+RESULTS: _classic_test
+ [[file:./obipy-resources/style_sheets/_classic_test.png]]
+
+  #+call: show(style="_classic_test", nandu=1) :savefig "nandu-_classic_test.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-_classic_test.png]]
+
+*** grayscale
+ #+name: grayscale
+ #+call: show("grayscale") :ipyfile "./obipy-resources/style_sheets/grayscale"
+
+ #+RESULTS: grayscale
+ [[file:./obipy-resources/style_sheets/grayscale.png]]
+
+  #+call: show(style="grayscale", nandu=1) :savefig "nandu-grayscale.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-grayscale.png]]
+
+*** ggplot
+ #+name: ggplot
+ #+call: show("ggplot") :ipyfile "./obipy-resources/style_sheets/ggplot"
+
+ #+RESULTS: ggplot
+ [[file:./obipy-resources/style_sheets/ggplot.png]]
+
+  #+call: show(style="ggplot", nandu=1) :savefig "nandu-ggplot.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-ggplot.png]]
+
+*** Solarize_Light2
+ #+name: Solarize_Light2
+ #+call: show("Solarize_Light2") :ipyfile "./obipy-resources/style_sheets/Solarize_Light2"
+
+ #+RESULTS: Solarize_Light2
+ [[file:./obipy-resources/style_sheets/Solarize_Light2.png]]
+
+  #+call: show(style="Solarize_Light2", nandu=1) :savefig "nandu-Solarize_Light2.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-Solarize_Light2.png]]
+
+*** bmh
+ #+name: bmh
+ #+call: show("bmh") :ipyfile "./obipy-resources/style_sheets/bmh"
+
+ #+RESULTS: bmh
+ [[file:./obipy-resources/style_sheets/bmh.png]]
+
+  #+call: show(style="bmh", nandu=1) :savefig "nandu-bmh.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-bmh.png]]
+
+*** fivethirtyeight
+ #+name: fivethirtyeight
+ #+call: show("fivethirtyeight") :ipyfile "./obipy-resources/style_sheets/fivethirtyeight"
+
+ #+RESULTS: fivethirtyeight
+ [[file:./obipy-resources/style_sheets/fivethirtyeight.png]]
+
+  #+call: show(style="fivethirtyeight", nandu=1) :savefig "nandu-fivethirtyeight.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-fivethirtyeight.png]]
+
+*** dark_background
+ #+name: dark_background
+ #+call: show("dark_background") :ipyfile "./obipy-resources/style_sheets/dark_background"
+
+ #+RESULTS: dark_background
+ [[file:./obipy-resources/style_sheets/dark_background.png]]
+ 
+  #+call: show(style="dark_background", nandu=1) :savefig "nandu-dark_background.png" :style "nandu_dark"
+
+  #+RESULTS:
+  [[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/style_sheets/nandu-dark_background.png]]
+
+
+
+ 
