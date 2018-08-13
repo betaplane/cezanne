@@ -1,6 +1,13 @@
 #+LINK: tf http://tensorflow.org/
 #+LINK: ed http://edwardlib.org
 
+https://orgmode.org/worg/exporters/beamer/tutorial.html
+#+EXPORT_SELECT_TAGS: export
+#+EXPORT_EXCLUDE_TAGS: noexport
+#+BEAMER_FRAME_LEVEL: 2
+https://orgmode.org/manual/Export-settings.html#Export-settings
+#+OPTIONS: broken-links:t
+
 * Notes
 ** [[http://condor:6006][tensorboard]]
 ** org-babel commands
@@ -64,7 +71,7 @@ d = hh.stationize('ta_c')
 #+end_src
 
 #+RESULTS:
-[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/avail_t.png]]
+[[file:./obipy-resources/PPCA/avail_t.png]]
 
 
 #+begin_src ipython :session :results silent
@@ -86,7 +93,7 @@ axs[0].set_xticklabels([])
 #+CAPTION: 
 #+CAPTION: *bottom*: in blocks whose length is drawn from a poisson distribution with mean rate (total length / number of blocks) and location of block start uniformly distributed over the total length.
 #+RESULTS:
-[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/avail_blocks.png]]
+[[file:./obipy-resources/PPCA/avail_blocks.png]]
 
 
 #+begin_src ipython :results silent :session
@@ -110,7 +117,7 @@ axs[0].set_xticklabels([])
 
 #+CAPTION: Comparison 1 vs 10 iterations of deterministic PCA
 #+RESULTS:
-[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/determ_iterations.png]]
+[[file:./obipy-resources/PPCA/determ_iterations.png]]
 
 
 #+begin_src ipython :results silent :session
@@ -751,14 +758,14 @@ plt.plot(d.x1[0, :])
 plt.plot(bp.x[0, :])
 #+end_src
 
-#+begin_src ipython :results  :session
+#+begin_src ipython :results :session
 plt.figure()
 plt.plot(p.x[0, :])
 plt.plot(d.x.values[0, :])
 #+end_src
 
-** figures
-#+begin_src ipython :results silent :session
+** figures :export:
+#+begin_src ipython :results silent :session :exports none
   with pd.HDFStore('../python/pca/tests/lima/lima.h5') as S:
       ed = S['edward/random/']
       bp = S['bayespy/random']
@@ -768,7 +775,7 @@ plt.plot(d.x.values[0, :])
       det_bl = S['determ/blocks']
 #+end_src
 
-#+begin_src ipython :results raw :session :savefig "determ1-4KvsProbK5.png"
+#+begin_src ipython :results raw :session :savefig "determ1-4KvsProbK5.png" :exports none
   from matplotlib import lines
   fig = plt.figure(figsize=(12, 6))
 
@@ -822,8 +829,8 @@ plt.plot(d.x.values[0, :])
 #+CAPTION: *Left:* Random pattern of data removal (as in top panel of [[fig:avail-blocks]]). The vertical error bars in the /SFG/, /VMP/ give +/- the Standard Deviation across 20 differently seeded random realizations of the VB algorithms (there's no random element associated with the deterministic PCA, hence no spread). Different symbols (squares / triangles) refer to two different 5-station data sets (~tests.Data.real(ta_c=[0, 1])~).
 #+CAPTION: *Right:* Block pattern of data removal (as in bottom panel of [[fig:avail-blocks]]). Here, the vertical error bars give +/- the Standard Deviation across different block patterns with the same MVF. Each 'group' (with same MVF) contains 10 realizations of a 10-block pattern and 10 of a 20-block pattern. Only one data set is used.
 #+RESULTS:
-[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/determ1-4KvsProbK5.png]]
-
+[[file:./obipy-resources/PPCA/determ1-4KvsProbK5.png]]
+** figures2 :noexport:
 #+begin_src ipython :results silent :session
   with pd.HDFStore('../python/pca/tests/lima/lima.h5') as S:
       ed_k = S['edward/K_all']
@@ -875,7 +882,7 @@ plt.plot(d.x.values[0, :])
 #+CAPTION: *Right:* "Block" pattern of MV removal. Error bars indicate Standard Deviation across 10 different random block patterns with given MVF. 
 #+CAPTION: Different markers represent different VB algorithms: score function gradient (squares) and Variational Message Passing (triangles). The high variance in the estimates with the score function gradient method (edward / tensorflow) od probably due to an imperfect choice of stopping criterium rather than fundamental shortcomings of the method.
 #+RESULTS:
-[[file:/Users/arno/Documents/cezanne/notebooks/obipy-resources/PPCA/prob1-5K.png]]
+[[file:./obipy-resources/PPCA/prob1-5K.png]]
 
     # In[610]:
 
