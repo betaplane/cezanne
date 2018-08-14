@@ -8,6 +8,8 @@ https://orgmode.org/worg/exporters/beamer/tutorial.html
 https://orgmode.org/manual/Export-settings.html#Export-settings
 #+OPTIONS: broken-links:t
 
+#+LATEX_HEADER: \usepackage{/Users/arno/Dropbox/spacemacs/private/nandu/stylelib/beamerthemelankton-keynote}
+
 * Notes
 ** [[http://condor:6006][tensorboard]]
 ** org-babel commands
