@@ -1,11 +1,11 @@
 #!/usr/bin/env python
+import os
+from importlib import import_module
 import numpy as np
 import matplotlib.pyplot as plt
 from cartopy import crs
 from helpers import stationize
 
-config_file = '/HPC/arno/general.cfg'
-"name of the config file"
 
 def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, **kwargs):
     """Plot a matrix of the times when a given :class:`~pandas.DataFrame` has valid observations. Not sure with what data types it'll still work, but in general 0/False(/nan?) should work for nonexistent times, and 1/count for exisitng ones. Figure size is automatically computed, but can be overridden with the **figsize** or **fig_width** arguments.
@@ -108,18 +108,13 @@ def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
         lim = np.abs(plot.get_clim()).max() if isinstance(center, bool) else center
         plot.set_clim(-lim, lim)
 
-
 class Coquimbo(object):
-    def __init__(self, path=None):
-        from cartopy.io import shapereader
-        from os.path import join
-        if path is None:
-            from configobj import ConfigObj
-            c = ConfigObj(config_file)
-            path = c['GSHHG']['path']
-        self.coast = shapereader.Reader(join(path, 'coast.shp'))
-        self.border = shapereader.Reader(join(path, 'border.shp'))
-        self.rivers = shapereader.Reader(join(path, 'river.shp'))
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        gshhs = import_module('data.GSHHS')
+        self.coast = gshhs.GSHHS_Reader('GSHHS_shp/i/GSHHS_i_L1')
+        self.border = gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_border_i_L1')
+        self.rivers = gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_river_i_L05')
 
     def __call__(self, ax, proj=crs.PlateCarree(), lines_only=False, colors=['k']):
         if lines_only:

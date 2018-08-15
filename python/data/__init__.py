@@ -26,19 +26,12 @@
 .. _netCDF4: http://unidata.github.io/netcdf4-python/
 
 """
-from configparser import ConfigParser
-from importlib.util import find_spec
-from importlib import import_module
-import os
+# from configparser import ConfigParser
+# from importlib.util import find_spec
+# from importlib import import_module
+# import os
 
-"""global configuration values"""
-
-# add this to conda environment:
-# https://conda.io/docs/user-guide/tasks/manage-environments.html#macos-and-linux
-# config.read(os.environ['CEZANNE_CONFIG'])
-
-
-if find_spec('mpi4py') is None:
-    WRF = import_module('.WRF_threaded', 'data')
-else:
-    WRF = import_module('.WRF_mpi', 'data')
+# if find_spec('mpi4py') is None:
+#     WRF = import_module('.WRF_threaded', 'data')
+# else:
+#     WRF = import_module('.WRF_mpi', 'data')
