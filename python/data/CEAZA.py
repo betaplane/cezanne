@@ -3,15 +3,16 @@ CEAZAMet stations webservice
 ----------------------------
 """
 #!/usr/bin/env python
-import requests, csv
+import requests, csv, os
 from io import StringIO
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
-from . import config
+from traitlets.config.loader import PyFileConfigLoader
 
+config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
 
 class FetchError(Exception):
     pass

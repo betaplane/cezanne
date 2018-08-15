@@ -3,9 +3,11 @@ from datetime import tzinfo, timedelta
 import numpy as np
 import pandas as pd
 import os, re
+from traitlets.config.loader import PyFileConfigLoader
+
+config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
 
 K = 273.15
-
 
 def try_list(obj, *args):
     for a in args:
