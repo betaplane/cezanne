@@ -159,6 +159,7 @@ plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
 #+CAPTION: Linear interpolation of land (1) and sea (0) values to station locations on the various model grids.
 #+RESULTS:
 
+** TODO move stations.h5 path onto CEAZAMet object, with traitlets
 
 
 * T2
