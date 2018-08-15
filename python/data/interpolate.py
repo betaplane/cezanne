@@ -22,6 +22,8 @@ The points in ij, k in :meth:`.weights` are ordered::
 
 In the x-direction, two interpolations are performed on the lines denoted *x0* and *x1* (to the points *X0* and *X1*), whereas in the y-directions, the interpolation weights are also computed for the lines *y0* and *y0*, and the final interpolation between *X0* and *X1* is performed with the mean of these two sets of points.
 
+.. Note::
+    The documentation is out of date: calls are now to either :meth:`xarray` or :meth:`netcdf`, not to __call__() anymore.
 """
 
 import xarray as xr
