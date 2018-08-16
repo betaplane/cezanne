@@ -39,7 +39,7 @@
    import matplotlib.pyplot as plt
    from matplotlib import ticker
    from cartopy import crs
-   from plots import Coquimbo
+   from plots import Coquimbo, cbar
    # import interpolation as ip
    # import mapping as mp
    # from netCDF4 import Dataset
