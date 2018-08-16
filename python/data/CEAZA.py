@@ -10,9 +10,10 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
-from traitlets.config.loader import PyFileConfigLoader
+from traitlets.config.configurable import Configurable
+from traitlets import Unicode, Instance, Dict
+from importlib import import_module
 
-config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
 
 class FetchError(Exception):
     pass
@@ -36,40 +37,25 @@ class _Reader(StringIO):
         self.seek(self.start)
 
 
-class Downloader(object):
+class CEAZAMet(Configurable):
     """Class to download data from CEAZAMet webservice. Main reason for having a class is
     to be able to reference the data (Downloader.data) in case something goes wrong at some point.
     """
-    from_date = datetime(2003, 1, 1)
+    url = Unicode('').tag(config = True)
+    raw_url = Unicode('').tag(config = True)
+    from_date = Instance(datetime, (2003, 1, 1))
+    field = Dict().tag(config = True)
+    station = Dict().tag(config = True)
+    data = Dict().tag(config = True)
 
     def __init__(self, trials=10, max_workers=16):
+        loader = import_module('traitlets.config.loader')
+        super().__init__(
+            config = loader.PyFileConfigLoader(
+                os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+        )
         self.trials = range(trials)
-        self.config = config['CEAZAMet']
         self.max_workers = max_workers
-
-    field = {
-        'fn': 'GetListaSensores',
-        'p_cod': 'ceazamet',
-        'c0': 'tm_cod',
-        'c1': 's_cod',
-        'c2': 'tf_nombre',
-        'c3': 'um_notacion',
-        'c4': 's_altura',
-        'c5': 's_primera_lectura',
-        'c6': 's_ultima_lectura'
-    }
-
-    station = {
-        'fn': 'GetListaEstaciones',
-        'p_cod': 'ceazamet',
-        'c0': 'e_cod',
-        'c1': 'e_nombre',
-        'c2': 'e_lon',
-        'c3': 'e_lat',
-        'c4': 'e_altitud',
-        'c5': 'e_primera_lectura',
-        'c6': 'e_ultima_lectura'
-    }
 
     def _get(self, f, from_date, raw):
         if from_date is None:
@@ -125,17 +111,13 @@ class Downloader(object):
     def fetch(self, code, from_date=None):
         from_date = self.from_date if from_date is None else from_date
         cols = ['ultima_lectura', 'min', 'prom', 'max', 'data_pc']
-        params = {
-            'fn': 'GetSerieSensor',
-            'interv': 'hora',
-            'valor_nan': 'nan',
+        params = self.data.update({
             's_cod': code,
             'fecha_inicio': from_date.strftime('%Y-%m-%d'),
             'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
-            'user': self.config['user']
-            }
+        })
         for trial in self.trials:
-            r = requests.get(self.config['url'], params=params)
+            r = requests.get(self.url, params=params)
             if not r.ok:
                 continue
             reader = _Reader(r.text)
@@ -154,7 +136,7 @@ class Downloader(object):
                   'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
                   's_cod': code}
         for trial in self.trials:
-            r = requests.get(self.config['raw_url'], params=params)
+            r = requests.get(self.raw_url, params=params)
             if not r.ok:
                 continue
             reader = _Reader(r.text)
@@ -187,7 +169,7 @@ class Downloader(object):
 
         """
         for trial in self.trials:
-            req = requests.get(self.config['url'], params=self.station)
+            req = requests.get(self.url, params=self.station)
             if not req.ok:
                 continue
             with StringIO(req.text) as sio:
@@ -219,7 +201,7 @@ class Downloader(object):
             params['e_cod'] = st[0]
             for trial in self.trials:
                 print(st[1].full)
-                req = requests.get(self.config['url'], params=params)
+                req = requests.get(self.url, params=params)
                 if not req.ok:
                     continue
                 with StringIO(req.text) as sio:

@@ -52,6 +52,8 @@
    # # rc('text', usetex=True)
    # plt.rcParams.update({'text.usetex': False, 'mathtext.fontset': 'stixsans'})
    coq = Coquimbo()
+   sta = pd.read_hdf(hh.config.stations['meta'], 'stations')
+   plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
  #+end_src
  
 
@@ -125,19 +127,9 @@
 #+end_src
 
 * Land-Sea mask
-#+begin_src ipython :results silent :session
-S = pd.HDFStore('../../ceaza/data/LinearLinear.h5')
-D = pd.HDFStore('../../ceaza/data/stations.h5')
-sta = D['stations']
-#+end_src
-
-#+begin_src ipython :results silent :session
-plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
-#+end_src
-
 #+begin_src ipython :results raw :session :savefig "landmask.png"
   plt.set_cmap('viridis')
-  d = S['land_mask']
+  d = hh.read_hdf({'kiwi': '../../ceaza/data/LinearLinear.h5'}, 'land_mask')
   ll = sta.loc[d.index][['lon', 'lat']].astype(float).as_matrix().T
   fig, axs = plt.subplots(1, 5, figsize=(13, 4), subplot_kw={'projection': crs.PlateCarree()})
   for i, (n, c) in enumerate(d.iteritems()):
@@ -158,8 +150,6 @@ plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
 
 #+CAPTION: Linear interpolation of land (1) and sea (0) values to station locations on the various model grids.
 #+RESULTS:
-
-** TODO move stations.h5 path onto CEAZAMet object, with traitlets
 
 
 * T2
