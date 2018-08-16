@@ -129,11 +129,13 @@
 * Land-Sea mask
 #+begin_src ipython :results raw :session :savefig "landmask.png"
   plt.set_cmap('viridis')
+  plt.subplots_adjust(right=0.875)
   d = hh.read_hdf({'kiwi': '../../ceaza/data/LinearLinear.h5'}, 'land_mask')
-  ll = sta.loc[d.index][['lon', 'lat']].astype(float).as_matrix().T
+  dmin, dmax = np.nanmin(d), np.nanmax(d)
+  ll = sta.loc[d.index, ['lon', 'lat']].astype(float).as_matrix().T
   fig, axs = plt.subplots(1, 5, figsize=(13, 4), subplot_kw={'projection': crs.PlateCarree()})
   for i, (n, c) in enumerate(d.iteritems()):
-      axs[i].scatter(*ll, c=c, transform=crs.PlateCarree())
+      pl = axs[i].scatter(*ll, c=c, vmin=dmin, vmax=dmax, transform=crs.PlateCarree())
       coq(axs[i])
       axs[i].set_title(n)
       axs[i].outline_patch.set_edgecolor('w')
@@ -141,8 +143,10 @@
       gl.xlocator = ticker.FixedLocator(range(-73, -68))
       gl.ylocator = ticker.FixedLocator(range(-33, -27))
       gl.xlabels_top = False
+      gl.ylabels_right = False
       if i > 0: gl.ylabels_left = False
-      if i < d.shape[1] - 1: gl.ylabels_right = False
+      if i == d.shape[1] - 1:
+          cbar(pl, space=.02, width=.02)
 #+end_src
 
 #+RESULTS:

@@ -8,7 +8,7 @@ from traitlets.config.loader import PyFileConfigLoader
 config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
 
 def read_hdf(filedict, key):
-    return pd.read_csv(filedict[config.hostname], key)
+    return pd.read_hdf(filedict[config.hostname], key)
 
 K = 273.15
 
