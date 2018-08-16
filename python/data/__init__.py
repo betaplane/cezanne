@@ -26,10 +26,8 @@
 .. _netCDF4: http://unidata.github.io/netcdf4-python/
 
 """
-# from configparser import ConfigParser
 # from importlib.util import find_spec
 # from importlib import import_module
-# import os
 
 # if find_spec('mpi4py') is None:
 #     WRF = import_module('.WRF_threaded', 'data')

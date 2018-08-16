@@ -17,16 +17,22 @@ The module-level variable :data:`n_proc` can be changed (default is 3)  to test 
 Tests in this module should work with both versions of the WRF-Concatenator.
 
 """
-import unittest, re
+import unittest, re, os
 import xarray as xr
 import numpy as np
 import sys, os
 from importlib import import_module
 from importlib.util import find_spec
-from . import config, WRF, interpolate
+from . import interpolate
+from traitlets.config.loader import PyFileConfigLoader
+
+config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
 
 if find_spec('mpi4py'):
     MPI = import_module('mpi4py.MPI')
+    WRF = import_module('.WRF_mpi', 'data')
+else:
+    WRF = import_module('.WRF_threaded', 'data')
 
 interpolator = 'scipy'
 """which interpolator to use (see :mod:`.interpolate`)"""

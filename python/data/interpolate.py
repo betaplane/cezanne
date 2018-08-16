@@ -22,24 +22,44 @@ The points in ij, k in :meth:`.weights` are ordered::
 
 In the x-direction, two interpolations are performed on the lines denoted *x0* and *x1* (to the points *X0* and *X1*), whereas in the y-directions, the interpolation weights are also computed for the lines *y0* and *y0*, and the final interpolation between *X0* and *X1* is performed with the mean of these two sets of points.
 
-.. Note::
-    The documentation is out of date: calls are now to either :meth:`xarray` or :meth:`netcdf`, not to __call__() anymore.
+
+Usage
+=====
+All classes (:class:`GridInterpolator`, :class:`BilinearInterpolator`) inherit from a the :class:`Interpolator` base class, all of whose keyword arguments can be set on the subclasses too. It is furthermore configurable via the :mod:`traitlets.config` module.
+
+Interpolation is carried out by calling either of the two methods :meth:`xarray` or :meth:`netcdf` on the instantiated class, depending on whether the dataset being interpolated is an :class:`xarray.Dataset` or a `netCDF4`_ dataset::
+
+    import xarray as xr
+
+    with xr.open_dataset(...) as ds:
+        BLI = BilinearInterpolator(ds, ...)
+        result = BLI.xarray(ds['T2'])
+
+If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array` - also, **this only works as expected if all the variables share the same dimensions** and if ``ds`` is an :class:`xarray.Dataset` and not a `netCDF4`_ one::
+
+    result = BLI.xarray(ds[['T2', 'Q2']].to_array())
+
+On the other hand, it shouldn't be too much of a penaltiy efficiency-wise to apply the interpolation by variable::
+
+    result = ds[['T', 'PH']].apply(BLI.xarray)
+
 """
 
 import xarray as xr
 import numpy as np
 import pandas as pd
-from pyproj import Proj
-import unittest
+import unittest, os
 from geo import proj_params
 from importlib import import_module
-from . import config
+from traitlets.config.configurable import Configurable
+from traitlets import List, Unicode
+
 
 def g2d(v):
     m, n = v.shape[-2:]
     return np.array(v[:]).flatten()[-m * n:].reshape((m, n))
 
-class InterpolatorBase(object):
+class Interpolator(Configurable):
     """Base class for the interpolators in this module. The parameters common to all routines are described here.
 
     :param ds: netCDF Dataset from which to interpolate (and which contains projection parameters as attributes).
@@ -55,19 +75,36 @@ class InterpolatorBase(object):
         None of the keyword arguments are necessary; if none are given, the default list of stations is loaded according to the values specified in the config file (see :mod:`data`). Alternatively, ``lon``, ``lat`` and ``names`` can be specified directly (but ``names``) is currently not used if ``ds`` is a `netCDF4`_ Dataset.
 
     """
-    spatial_dims = ['south_north', 'west_east']
+    spatial_dims = List(['south_north', 'west_east'])
     """The names of the latitude / longitude dimensions"""
 
+    spatial_vars = List([['XLONG', 'XLAT'], ['XLONG_M', 'XLAT_M']]).tag(config=True)
+
+    time_dim_var = List(['Time', 'XTIME'])
+
+    station_meta = Unicode('').tag(config=True)
+    """The path to the stations metadata ``.h5`` file."""
+
     def __init__(self, ds, stations=None, lon=None, lat=None, names=None):
-        proj = Proj(**proj_params(ds))
-        self.x, self.y = proj(g2d(ds['XLONG']), g2d(ds['XLAT']))
+        loader = import_module('traitlets.config.loader')
+        super().__init__(
+            config = loader.PyFileConfigLoader(
+                os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+        )
+
+        pyproj = import_module('pyproj')
+        proj = pyproj.Proj(**proj_params(ds))
+        for V in self.spatial_vars:
+            try:
+                self.x, self.y = proj(*[g2d(ds[v]) for v in V])
+                break
+            except: pass
         if lon is not None:
             self.index = names
             self.ij = proj(lon, lat)
         else:
             if (stations is None):
-                with pd.HDFStore(config['stations']['sta']) as S:
-                    stations = S['stations']
+                stations = pd.read_hdf(self.station_meta, 'stations')
             self.index = stations.index
             self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
 
@@ -79,8 +116,7 @@ class InterpolatorBase(object):
         x = var[:].transpose(np.r_[j, k])
         return x, x.shape[:len(j)], x.shape[len(j):], other_dims
 
-
-class GridInterpolator(InterpolatorBase):
+class GridInterpolator(Interpolator):
     """Uses :mod:`scipy.interpolate` to interpolate a model field horizontally to station locations. Loops over the non-lon/lat dimensions. Once per instantiation, the following steps are performed:
 
         #. Project model ``XLONG``/``XLAT`` coordinates according to the grid parameters given as netCDF attributes in the :class:`xarray.Dataset`.
@@ -109,12 +145,14 @@ class GridInterpolator(InterpolatorBase):
              for k in range(data.shape[2])])
 
     def xarray(self, x):
-        dims = set(x.dims).symmetric_difference(self.spatial_dims)
+        dims = [d for d in x.dims if d not in self.spatial_dims]
         if len(dims) > 0:
             X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
             y = self._grid_interp(X.values)
-            ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)]).unstack('n')
-            ds.coords['XTIME'] = ('Time', x.XTIME)
+            ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)])
+            ds = ds.unstack('n') if len(dims) > 1 else ds.rename({'n': dims[0]})
+            if hasattr(x, self.time_dim_var[1]):
+                ds.coords[self.time_dim_var[1]] = (self.time_dim_var[0], x[self.time_dim_var[1]])
             return ds
         else:
             y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
@@ -129,27 +167,10 @@ class GridInterpolator(InterpolatorBase):
         else:
             return self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
 
-class BilinearInterpolator(InterpolatorBase):
+class BilinearInterpolator(Interpolator):
     """Implements bilinear interpolation in two spatial dimensions by precomputing a weight matrix which can be used repeatedly to interpolate to the same spatial locations. The input :class:`xarray.Dataset` / `netCDF4`_ Dataset is reshaped into a two-dimensional matrix, with one dimension consisting of the stacked two spatial dimensions (longitude / latitude), and the other dimension consisting of all other dimensions stacked. Hence, interpolation to fixed locations in the horizontal (longitude / latitude) plane can be carried out by a simple matrix multiplication with the precomputed weights matrix. Different model levels, variables and other potential dimensions can be stacked without the need to write loops in python. The interpolation weights are computed in **projected** coordinates.
 
     See :class:`InterpolatorBase` for a description of the parameters common to all interpolators.
-
-    Interpolation is carried out by calling the instantiated class with the :class:`~xarray.DataArray` containing the data::
-
-        import xarray as xr
-
-        with xr.open_dataset(...) as ds:
-            BLI = BilinearInterpolator(ds, ...)
-            result = BLI(ds['T2'])
-
-    If several variables should be interpolated at the same time, one should (probably) use :meth:`~xarray.Dataset.to_array` - also, **this only works as expected if all the variables share the same dimensions** and if ``ds`` is an :class:`xarray.Dataset` and not a `netCDF4`_ one::
-
-        result = BLI(ds[['T2', 'Q2']].to_array())
-
-    On the other hand, it shouldn't be too much of a penaltiy efficiency-wise to apply the interpolation by variable::
-
-        result = ds[['T', 'PH']].apply(BLI)
-
     """
 
     def __init__(self, ds, **kwargs):
@@ -241,8 +262,8 @@ class Test(unittest.TestCase):
     def setUp(self):
         d = '/nfs/temp/sata1_ceazalabs/carlo/WRFOUT_OPERACIONAL/c01_2015051900/wrfout_d03*'
         self.ds = xr.open_mfdataset(d)
-        with pd.HDFStore(config['stations']['sta']) as S:
-            self.intp = BilinearInterpolator(self.ds, S['stations'])
+        sta = pd.read_hdf(self.station_meta, 'stations')
+        self.intp = BilinearInterpolator(self.ds, sta)
 
     def tearDown(self):
         self.ds.close()

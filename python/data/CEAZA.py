@@ -1,8 +1,8 @@
+#!/usr/bin/env python
 """
 CEAZAMet stations webservice
 ----------------------------
 """
-#!/usr/bin/env python
 import requests, csv, os
 from io import StringIO
 from datetime import datetime, timedelta
@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
-from traitlets.config.configurable import Configurable
+from traitlets.config import Application
 from traitlets import Unicode, Instance, Dict
 from importlib import import_module
 
@@ -37,7 +37,7 @@ class _Reader(StringIO):
         self.seek(self.start)
 
 
-class CEAZAMet(Configurable):
+class CEAZAMet(Application):
     """Class to download data from CEAZAMet webservice. Main reason for having a class is
     to be able to reference the data (Downloader.data) in case something goes wrong at some point.
     """
@@ -47,6 +47,11 @@ class CEAZAMet(Configurable):
     field = Dict().tag(config = True)
     station = Dict().tag(config = True)
     data = Dict().tag(config = True)
+    station_meta = Unicode('').tag(config = True)
+    station_data = Unicode('').tag(config = True)
+
+    app_method = Unicode('').tag(config = True)
+    flags = Dict({'s': ({'CEAZAMet': {'app_method': 'get_stations'}}, 'get station and variable list')})
 
     def __init__(self, trials=10, max_workers=16):
         loader = import_module('traitlets.config.loader')
@@ -186,43 +191,59 @@ class CEAZAMet(Configurable):
         if len(self.stations) == 0:
             raise NoNewStationError
 
-        stations = pd.DataFrame.from_items(
+        station_meta = pd.DataFrame.from_items(
             self.stations,
             columns = ['full', 'lon', 'lat', 'elev', 'first', 'last'],
             orient='index'
         )
-        stations.index.name = 'station'
+        station_meta.index.name = 'station'
+        station_meta.sort_index(inplace=True)
 
-        if not fields:
-            return stations.sort_index()
+        if fields:
+            def get(st):
+                params = self.field.copy()
+                params['e_cod'] = st[0]
+                for trial in self.trials:
+                    print(st[1].full)
+                    req = requests.get(self.url, params=params)
+                    if not req.ok:
+                        continue
+                    with StringIO(req.text) as sio:
+                        try:
+                            return [((st[0], l[0], l[1]), l[2:6])
+                                      for l in csv.reader(sio) if l[0][0] != '#']
+                        except:
+                            print('attempt #{}'.format(trial))
 
-        def get(st):
-            params = self.field.copy()
-            params['e_cod'] = st[0]
-            for trial in self.trials:
-                print(st[1].full)
-                req = requests.get(self.url, params=params)
-                if not req.ok:
-                    continue
-                with StringIO(req.text) as sio:
-                    try:
-                        return [((st[0], l[0], l[1]), l[2:6])
-                                  for l in csv.reader(sio) if l[0][0] != '#']
-                    except:
-                        print('attempt #{}'.format(trial))
+            with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
+                field_meta = [exe.submit(get, s) for s in station_meta.iterrows()]
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
-            fields = [exe.submit(get, s) for s in stations.iterrows()]
+            self.fields = [f for g in as_completed(field_meta) for f in g.result()]
 
-        self.fields = [f for g in as_completed(fields) for f in g.result()]
+            field_meta = pd.DataFrame.from_items(
+                self.fields,
+                columns = ['full', 'unit', 'elev', 'first'],
+                orient = 'index'
+            )
+            field_meta.index = pd.MultiIndex.from_tuples(
+                field_meta.index.tolist(),
+                names = ['station', 'field', 'sensor_code']
+            )
+            field_meta.sort_index(inplace=True)
+            if self.app_method == '':
+                return station_meta, field_meta
+        else:
+            if self.app_method != '':
+                return station_meta
 
-        fields = pd.DataFrame.from_items(
-            self.fields,
-            columns = ['full', 'unit', 'elev', 'first'],
-            orient = 'index'
-        )
-        fields.index = pd.MultiIndex.from_tuples(
-            fields.index.tolist(),
-            names = ['station', 'field', 'sensor_code']
-        )
-        return stations.sort_index(), fields.sort_index()
+        with pd.HDFStore(self.station_meta, mode='w') as S:
+            S['stations'] = station_meta
+            if fields:
+                S['fields'] = field_meta
+
+if __name__ == '__main__':
+    import sys
+    app = CEAZAMet()
+    app.parse_command_line(sys.argv)
+    func = getattr(app, app.app_method)
+    func()

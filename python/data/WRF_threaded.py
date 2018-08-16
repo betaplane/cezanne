@@ -28,7 +28,7 @@ Example Usage::
 
 """
 
-import re, unittest
+import re, unittest, os
 from glob import glob
 import os.path as pa
 import xarray as xr
@@ -39,8 +39,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
 from importlib import import_module
 from os.path import join, dirname
-from . import config
+from traitlets.config.loader import PyFileConfigLoader
 
+config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
 
 def align_stations(wrf, df):
     """Align :class:`~pandas.DataFrame` with station data (as produced by :class:`.CEAZA.Downloader`) with a concatenated (and interpolated to station locations) netCDF file as produced by :class:`.Concatenator`. For now, works with a single field.

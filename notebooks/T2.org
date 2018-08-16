@@ -1,3 +1,7 @@
+#+EXPORT_SELECT_TAGS: export
+#+BEAMER_FRAME_LEVEL: 1
+#+OPTIONS: broken-links:t
+
 * Notes
 ** List of original code files incorporated into this notebook:
  - bias_err_T2.py
@@ -37,9 +41,9 @@
    import pandas as pd
    import helpers as hh
    import matplotlib.pyplot as plt
-   from matplotlib import ticker
+   from matplotlib import ticker, gridspec
    from cartopy import crs
-   from plots import Coquimbo, cbar
+   import plots as cplots
    # import interpolation as ip
    # import mapping as mp
    # from netCDF4 import Dataset
@@ -51,8 +55,6 @@
    # # rc('font', **{'family':'sans-serif','sans-serif':['Helvetica']})
    # # rc('text', usetex=True)
    # plt.rcParams.update({'text.usetex': False, 'mathtext.fontset': 'stixsans'})
-   coq = Coquimbo()
-   sta = pd.read_hdf(hh.config.stations['meta'], 'stations')
    plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
  #+end_src
  
@@ -92,13 +94,8 @@
 #+end_src
 
 
-#+begin_src ipython :results silent :session
- # helper to get the correct elevation data for each model 'name'
- def dem(s):
-     if s=='d03_orl': return s
-     elif s[:3]=='d03': return 'd03_op'
-     else: return s[:3]
 
+#+begin_src ipython :results silent :session
  D = pd.HDFStore('../../data/tables/station_data.h5')
 
  # CEAZAMet station location info
@@ -126,47 +123,95 @@
  dz = (sta['elev'] - Z.T).T
 #+end_src
 
-* Land-Sea mask
-#+begin_src ipython :results raw :session :savefig "landmask.png"
-  plt.set_cmap('viridis')
-  plt.subplots_adjust(right=0.875)
-  d = hh.read_hdf({'kiwi': '../../ceaza/data/LinearLinear.h5'}, 'land_mask')
-  dmin, dmax = np.nanmin(d), np.nanmax(d)
-  ll = sta.loc[d.index, ['lon', 'lat']].astype(float).as_matrix().T
-  fig, axs = plt.subplots(1, 5, figsize=(13, 4), subplot_kw={'projection': crs.PlateCarree()})
-  for i, (n, c) in enumerate(d.iteritems()):
-      pl = axs[i].scatter(*ll, c=c, vmin=dmin, vmax=dmax, transform=crs.PlateCarree())
-      coq(axs[i])
-      axs[i].set_title(n)
-      axs[i].outline_patch.set_edgecolor('w')
-      gl = axs[i].gridlines(linestyle='--', color='w', draw_labels=True)
-      gl.xlocator = ticker.FixedLocator(range(-73, -68))
-      gl.ylocator = ticker.FixedLocator(range(-33, -27))
-      gl.xlabels_top = False
-      gl.ylabels_right = False
-      if i > 0: gl.ylabels_left = False
-      if i == d.shape[1] - 1:
-          cbar(pl, space=.02, width=.02)
+** data
+#+begin_src ipython :results silent :session
+ # helper to get the correct elevation data for each model 'name'
+ def dem(s):
+     if s=='d03_orl': return s
+     elif s[:3]=='d03': return 'd03_op'
+     else: return s[:3]
 #+end_src
 
-#+RESULTS:
-[[file:./obipy-resources/T2/landmask.png]]
+#+begin_src ipython :results silent :session
+  LinearLinear = {'kiwi': '../../ceaza/data/LinearLinear.h5',
+           'condor': '../../data/WRF/h5/LinearLinear.h5'}
+  sta = pd.read_hdf(hh.config.CEAZAMet.station_meta, 'stations')
+  T = hh.stationize(pd.read_hdf(hh.config.CEAZAMet.station_data, 'ta_c').drop(10, 1, 'elev')) + 273.15
+  Tm = hh.read_hdf(LinearLinear, 'T2')
+  B = Tm.add( -T )
+  Bm = B.mean(1)
+  Z = hh.read_hdf(LinearLinear, 'z')[[dem(z) for z in B.items]]
+  Z.columns = B.items
+  dz = - Z.add(-sta['elev'].astype(float), 0)
+#+end_src
+
+** functions
+#+begin_src ipython :results silent :session
+  # coq = cplots.Coquimbo()
+  def coqplot(df, lonlat=None, cbar='right', vmin=None, vmax=None,
+              subplot_spec=gridspec.GridSpec(1, 1)[0]):
+      if lonlat is None:
+          sta = pd.read_hdf(hh.config.CEAZAMet.station_meta, 'stations').loc[df.index]
+          lonlat = sta[['lon', 'lat']].astype(float).as_matrix().T
+      cmin = np.nanmin(df) if vmin is None else vmin
+      cmax = np.nanmax(df) if vmax is None else vmax
+      geom = subplot_spec.get_geometry()
+      print(geom)
+      g = gridspec.GridSpecFromSubplotSpec(1, df.shape[1], subplot_spec=subplot_spec)
+      for i, (n, c) in enumerate(df.iteritems()):
+          ax = plt.gcf().add_subplot(g[0, i], projection=crs.PlateCarree())
+          pl = ax.scatter(*lonlat, c=c, vmin=cmin, vmax=cmax, transform=crs.PlateCarree())
+          coq(ax)
+          ax.outline_patch.set_edgecolor('w')
+          gl = ax.gridlines(linestyle='--', color='w', draw_labels=True)
+          gl.xlocator = ticker.FixedLocator(range(-73, -68))
+          gl.ylocator = ticker.FixedLocator(range(-33, -27))
+          gl.xlabels_top = False
+          gl.ylabels_right = False
+          if geom[2] == 0:
+              ax.set_title(n)
+          if (geom[2] < geom[0] - 1):
+              gl.xlabels_bottom = False
+          if i > 0: gl.ylabels_left = False
+          if (cbar is not None) and (i == df.shape[1] - 1):
+              cplots.cbar(pl, loc=cbar, space=.02, width=.02)
+#+end_src
+
+* Land-Sea mask :export:
+#+begin_src ipython :results raw :session :savefig "landmask.png" :exports none
+  d = hh.read_hdf(LinearLinear, 'land_mask')
+  fig = plt.figure(figsize=(13, 4))
+  plt.set_cmap('cividis')
+  plt.subplots_adjust(right=0.875)
+  coqplot(d)
+#+end_src
 
 #+CAPTION: Linear interpolation of land (1) and sea (0) values to station locations on the various model grids.
 #+RESULTS:
-
+[[file:./obipy-resources/T2/landmask.png]]
 
 * T2
+** data
 ** Mean bias
-#+begin_src ipython :results silent :session
- fig = plt.figure(
-     figsize=(15, 10),
-     subplotpars=SubplotParams(left=0.08, right=0.86, wspace=0.06, hspace=0.06))
- plt.set_cmap('coolwarm')
- x = ['d01', 'd02', 'd03_0_00', 'd03_0_12', 'd03_orl', 'fnl']
- plot(pd.Panel({0:dz, 1:Bm, 2:Bm - 0.0065 * dz}), cols=x, clims=[1750,13,13])
+#+begin_src ipython :results raw :session
+  fig = plt.figure(figsize=(14, 10))
+  fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
+  plt.set_cmap('Spectral')
+  x = ['d01', 'd02', 'd03_0_00', 'd03_0_12', 'd03_orl', 'fnl']
+  gs = gridspec.GridSpec(3, 1)
+  coqplot(dz[x], subplot_spec=gs[0], vmin=-1700, vmax=1700)
+  coqplot(Bm[x], subplot_spec=gs[1], vmin=-13, vmax=13)
+  coqplot(Bm[x] - 0.0065 * dz[x], subplot_spec=gs[2], vmin=-13, vmax=13)
+  # plot(pd.Panel({0:dz, 1:Bm, 2:Bm - 0.0065 * dz}), cols=x, clims=[1750,13,13])
 #+end_src
 
+#+RESULTS:
+[[file:./obipy-resources/T2/JbKMyS.png]]
+
+
+#+begin_src ipython :results silent :session
+x = ['d01', 'd02', 'd03_0_00', 'd03_0_12', 'd03_orl', 'fnl']
+#+end_src
 
 #+CAPTION: **top**: elevation bias (true station elevation minus model DEM elevation interpolated to station location)  
 #+CAPTION: **middle**: 2m temperature bias (model - station)  

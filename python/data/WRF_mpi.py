@@ -14,7 +14,7 @@ Example Usage::
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
 
 """
-from glob import glob
+from glob import glob, os
 import os.path as pa
 import pandas as pd
 import numpy as np
@@ -23,7 +23,9 @@ from netCDF4 import Dataset, MFDataset, num2date, date2num
 from datetime import datetime, timedelta
 from functools import partial
 from importlib import import_module
-from . import config
+from traitlets.config.loader import PyFileConfigLoader
+
+config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
 
 
 def align_stations(wrf, df):

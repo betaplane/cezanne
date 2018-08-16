@@ -2,8 +2,9 @@
 from datetime import tzinfo, timedelta
 import numpy as np
 import pandas as pd
-import os, re
 from traitlets.config.loader import PyFileConfigLoader
+from functools import singledispatch
+import os, re
 
 config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
 
@@ -152,31 +153,34 @@ def avg(df, interval):
         m.index = pd.DatetimeIndex(['{}T{}:00'.format(*i) for i in m.index.tolist()])
     return m
 
+@singledispatch
+def stationize(df, aggr='prom'):
+    """ Return a copy of a DataFrame with only station codes as column labels. If the resulting set of column lables is not unique (more than one sensor for the same variable at the same station), the returned copy has the ``sensor_code`` as column labels.
 
-def stationize(X, aggr='prom'):
-    """ Return a copy of a DataFrame with only station codes as labels (either columns or index). If the resulting set of column lables is not unique (more than one sensor for the same variable at the same station), the returned copy has the ``sensor_code`` as column labels.
-
-    :param aggr: if the input DataFrame has several ``aggr`` levels (e.g. ``prom``, ``min``, ``max``), return this one
+    :param df: Input DataFrame with :class:`pandas.MultiIndex` in columns. If :obj:`str`, load the DataFrame from the ``.h5`` file specified as :attr:`data.CEAZAMet.station_data`.
+    :type df: :class:`~pandas.DataFrame` (or :obj:`str`)
+    :param aggr: If the input DataFrame has several ``aggr`` levels (e.g. ``prom``, ``min``, ``max``), return this one.
     :type aggr: :obj:`str`
-    :returns: DataFrame with simple column index (containing station labels)
+    :returns: DataFrame with simple column index (containing station labels, or sensor codes in case the station index in not unique).
     :rtype: :class:`~pandas.DataFrame`
 
     """
-    if isinstance(X, pd.DataFrame):
-        c = X.copy()
-    else:
-        import cezar
-        c = pd.read_hdf(cezar.stations['data'], X)
-    stations = c.columns.get_level_values('station')
     try:
-        c = c.xs(aggr, 1, 'aggr')
+        df = df.xs(aggr, 1, 'aggr')
     except KeyError:
         pass
+
+    stations = df.columns.get_level_values('station')
     if len(stations.get_duplicates()) > 0:
-        c.columns = c.columns.get_level_values('sensor_code')
+        df.columns = df.columns.get_level_values('sensor_code')
     else:
-        c.columns = stations
-    return c
+        df.columns = stations
+    return df
+
+@stationize.register(str)
+def stationize_str(s, *args, **kwargs):
+    df = pd.read_hdf(config.CEAZAMet.station_data, s)
+    return stationize(df, *args, **kwargs)
 
 def coord_names(xr, *names):
     return [[c for c in xr.coords if re.search(n, c, re.IGNORECASE)][0] for n in names]
