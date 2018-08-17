@@ -4,6 +4,8 @@ from importlib import import_module
 import numpy as np
 import matplotlib.pyplot as plt
 from cartopy import crs
+from traitlets.config.configurable import Configurable
+from traitlets import List
 from helpers import stationize
 
 
@@ -108,21 +110,44 @@ def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
         lim = np.abs(plot.get_clim()).max() if isinstance(center, bool) else center
         plot.set_clim(-lim, lim)
 
-class Coquimbo(object):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+class Coquimbo(Configurable):
+    """Add map features for Coquimbo region to a given :class:`~cartopy.mpl.geoaxes.GeoAxes` instance. Usage::
+
+        from cartopy import crs
+        coq = Coquimbo()
+        ax = plt.axes(projection = crs.PlateCarree())
+        coq(ax)
+
+    :Keyword Arguments:
+        * **lines_only** - only draw coasline and country border without area fill
+        * **colors** - :obj:`iterable` of one or two colors to be used for (coast, border)
+    """
+
+    bbox = List([-72.2, -69.8, -32.5, -28.2])
+    """configurable bounding box (minx, miny, maxx, maxy) of the region"""
+
+    def __init__(self):
+        loader = import_module('traitlets.config.loader')
+        super().__init__(
+            config = loader.PyFileConfigLoader(
+                os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+        )
         gshhs = import_module('data.GSHHS')
-        self.coast = gshhs.GSHHS_Reader('GSHHS_shp/i/GSHHS_i_L1')
-        self.border = gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_border_i_L1')
-        self.rivers = gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_river_i_L05')
+        self.coast = self.clip(gshhs.GSHHS_Reader('GSHHS_shp/i/GSHHS_i_L1'))
+        self.border = self.clip(gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_border_i_L1'))
+        self.rivers = self.clip(gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_river_i_L05'))
 
     def __call__(self, ax, proj=crs.PlateCarree(), lines_only=False, colors=['k']):
         if lines_only:
-            ax.add_geometries(self.coast.geometries(), crs=proj, facecolor='none', edgecolor=colors[0], zorder=10)
-            ax.add_geometries(self.border.geometries(), crs=proj, facecolor='none', edgecolor=colors[-1], linewidth=.5, zorder=10)
+            ax.add_geometries(self.coast, crs=proj, facecolor='none', edgecolor=colors[0], zorder=10)
+            ax.add_geometries(self.border, crs=proj, facecolor='none', edgecolor=colors[-1], linewidth=.5, zorder=10)
         else:
             ax.background_patch.set_color('lightblue')
-            ax.add_geometries(self.coast.geometries(), crs=proj, facecolor='lightgray', edgecolor='k', zorder=0)
-            ax.add_geometries(self.rivers.geometries(), crs=proj, facecolor='none', edgecolor='b', zorder=0)
-            ax.add_geometries(self.border.geometries(), crs=proj, facecolor='none', edgecolor='g', linewidth=.5, zorder=0)
-            ax.set_extent((-72.2, -69.8, -32.5, -28.2), crs=proj)
+            ax.add_geometries(self.coast, crs=proj, facecolor='lightgray', edgecolor='k', zorder=0)
+            ax.add_geometries(self.rivers, crs=proj, facecolor='none', edgecolor='b', zorder=0)
+            ax.add_geometries(self.border, crs=proj, facecolor='none', edgecolor='g', linewidth=.5, zorder=0)
+            ax.set_extent(self.bbox, crs=proj)
+
+    def clip(self, reader):
+        f = lambda b: np.all(np.r_[b[:2], self.bbox[:2]] <= np.r_[self.bbox[2:], b[2:]])
+        return [g for g in reader.geometries() if f(np.array(g.envelope.bounds))]

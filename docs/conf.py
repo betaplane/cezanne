@@ -203,5 +203,6 @@ intersphinx_mapping = {
     'bp': ('http://bayespy.org/', None),
     'kml': ('https://simplekml.readthedocs.io/en/latest', None),
     'mpi4py': ('https://mpi4py.readthedocs.io/en/stable/', None),
-    'traitlets': ('https://traitlets.readthedocs.io/en/stable/', None)
+    'traitlets': ('https://traitlets.readthedocs.io/en/stable/', None),
+    'cartopy': ('https://scitools.org.uk/cartopy/docs/latest/', None)
 }

@@ -1,13 +1,11 @@
 from importlib import import_module
 from cartopy.io.shapereader import Reader, GEOMETRY_FACTORIES
-from traitlets import Unicode, List
+from traitlets import Unicode
 from traitlets.config.configurable import Configurable
-import numpy as np
 import os
 
 class GSHHS_Reader(Configurable, Reader):
     path = Unicode('').tag(config = True)
-    bbox = List([-72.2, -69.8, -32.5, -28.2])
 
     def __init__(self, filename, path=None):
         loader = import_module('traitlets.config.loader')
@@ -27,6 +25,3 @@ class GSHHS_Reader(Configurable, Reader):
         self._geometry_factory = GEOMETRY_FACTORIES.get(self._reader.shapeType)
         self._fields = self._reader.fields
         z.close()
-
-    def clip(self, geom):
-        np.array(geom.envelope.bounds) < self.bbox
