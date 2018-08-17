@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 import os
-from importlib import import_module
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib import ticker, gridspec as gs
 from cartopy import crs
 from traitlets.config.configurable import Configurable
 from traitlets import List
+from importlib import import_module
 from helpers import stationize
 
 
@@ -81,17 +83,24 @@ def title(fig, title, height=.94):
     ax.set_title(title)
     fig.draw_artist(ax)
 
-def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
+def rowlabel(subplot_spec, label, rotation=0, size=12, labelpad=40, **kwargs):
+    ax = plt.gcf().add_subplot(subplot_spec)
+    ax.set_frame_on(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_ylabel(label, rotation=rotation, size=size, labelpad=labelpad, **kwargs)
+
+def cbar(plot, loc='right', center=False, width=.01, space=.01, label=None):
     """Wrapper to attach colorbar on either side of a :class:`~matplotlib.axes.Axes.plot` and to add coastlines and grids.
 
     :param plot: Plot to attach the colorbar to.
     :type plot: :class:`~matplotlib.axes.Axes.plot`
     :param loc: 'left' or 'right'
-    :param center: Whether or not the colors should be centered (divergent).
+    :param center: Whether or not the colors should be centered at 0 (divergent).
     :type center: :obj:`bool`
     :param width: Width of the colorbar.
     :param space: Space between edge of plot and colorbar.
-    :param lat: latitude circle at which to cut of the plot.
+    :param label: Label for the colorbar (units) - currently placed inside the colorbar.
 
     """
     try:
@@ -103,12 +112,12 @@ def cbar(plot, loc='right', center=False, width=.01, space=.01, lat=-65):
     cax = ax.figure.add_axes([x, bb.y0, width, bb.y1-bb.y0])
     plt.colorbar(plot, cax=cax)
     cax.yaxis.set_ticks_position(loc)
-    # ax.coastlines()
-    # ax.gridlines()
-    # ax.set_extent((-180, 180, -90, lat), crs.PlateCarree())
     if center is not False:
         lim = np.abs(plot.get_clim()).max() if isinstance(center, bool) else center
         plot.set_clim(-lim, lim)
+
+    if label is not None:
+        cax.text(.5, .95, label, ha='center', va='top', size=12, fontweight='bold', usetex=True)
 
 class Coquimbo(Configurable):
     """Add map features for Coquimbo region to a given :class:`~cartopy.mpl.geoaxes.GeoAxes` instance. Usage::
@@ -121,6 +130,9 @@ class Coquimbo(Configurable):
     :Keyword Arguments:
         * **lines_only** - only draw coasline and country border without area fill
         * **colors** - :obj:`iterable` of one or two colors to be used for (coast, border)
+
+    ..NOTE:
+        The bounding box of the plot is set via the :attr:`bbox` class attribute, which is a :class:`traitlets.List` configurable and can also be set in a configuration file.
     """
 
     bbox = List([-72.2, -69.8, -32.5, -28.2])
@@ -151,3 +163,43 @@ class Coquimbo(Configurable):
     def clip(self, reader):
         f = lambda b: np.all(np.r_[b[:2], self.bbox[:2]] <= np.r_[self.bbox[2:], b[2:]])
         return [g for g in reader.geometries() if f(np.array(g.envelope.bounds))]
+
+    def plotrow(self, df, subplot_spec=gs.GridSpec(1, 1)[0], **kwargs):
+        """Plot the columns of :class:`~pandas.DataFrame` ``df`` as a raw of Coquimbo-area plots.
+
+        :Keyword Arguments:
+            * **subplot_spec** - A :class:`matplotlib.gridspec.SubplotSpec` (e.g. a row from a :class:`matplotlib.gridspec.GridSpec`) in which to embed the generated plot, or ``None``
+            * **lonlat** - A :class:`numpy.ndarray` containing longitues, latitudes as columns and stations corresponding to the passed DataFrame as rows. If none is passed, the default 'stations' DataFrame is loaded and indexed according to the index of the passed DataFrame.
+            * **vmin** - see :func:`matplotlib.pyplot.scatter`
+            * **vmax** - see :func:`matplotlib.pyplot.scatter`
+            * **cbar** - Colorbar location (see :func:`matplotlib.pyplot.colorbar`) or ``None`` if none is desired (default 'right').
+            * **cbar_label** - Unit string with which to label the colorbar (see :func:`cbar`)
+
+        """
+        try:
+            lonlat = kwargs['lonlat']
+        except KeyError:
+            sta = pd.read_hdf(self.config.CEAZAMet.station_meta, 'stations').loc[df.index]
+            lonlat = sta[['lon', 'lat']].astype(float).as_matrix().T
+        vmin = kwargs.get('vmin', np.nanmin(df))
+        vmax = kwargs.get('vmax', np.nanmax(df))
+        geom = subplot_spec.get_geometry()
+        g = gs.GridSpecFromSubplotSpec(1, df.shape[1], subplot_spec=subplot_spec)
+        for i, (n, c) in enumerate(df.iteritems()):
+            ax = plt.gcf().add_subplot(g[0, i], projection=crs.PlateCarree())
+            pl = ax.scatter(*lonlat, c=c, vmin=vmin, vmax=vmax, transform=crs.PlateCarree())
+            self(ax)
+            ax.outline_patch.set_edgecolor('w')
+            gl = ax.gridlines(linestyle='--', color='w', draw_labels=True)
+            gl.xlocator = ticker.FixedLocator(range(-73, -68))
+            gl.ylocator = ticker.FixedLocator(range(-33, -27))
+            gl.xlabels_top = False
+            gl.ylabels_right = False
+            if geom[2] == 0:
+                ax.set_title(n)
+            if (geom[2] < geom[0] - 1):
+                gl.xlabels_bottom = False
+            if i > 0: gl.ylabels_left = False
+        cb = kwargs.get('cbar', 'right')
+        if (cb is not None):
+            cbar(pl, loc=cb, space=.02, width=.02, label=kwargs.get('cbar_label', None))

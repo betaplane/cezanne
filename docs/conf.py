@@ -204,5 +204,6 @@ intersphinx_mapping = {
     'kml': ('https://simplekml.readthedocs.io/en/latest', None),
     'mpi4py': ('https://mpi4py.readthedocs.io/en/stable/', None),
     'traitlets': ('https://traitlets.readthedocs.io/en/stable/', None),
-    'cartopy': ('https://scitools.org.uk/cartopy/docs/latest/', None)
+    'cartopy': ('https://scitools.org.uk/cartopy/docs/latest/', None),
+    'ipython': ('https://ipython.readthedocs.io/en/stable/', None)
 }

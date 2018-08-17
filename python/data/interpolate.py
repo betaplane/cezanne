@@ -82,9 +82,6 @@ class Interpolator(Configurable):
 
     time_dim_var = List(['Time', 'XTIME'])
 
-    station_meta = Unicode('').tag(config=True)
-    """The path to the stations metadata ``.h5`` file."""
-
     def __init__(self, ds, stations=None, lon=None, lat=None, names=None):
         loader = import_module('traitlets.config.loader')
         super().__init__(
@@ -104,7 +101,7 @@ class Interpolator(Configurable):
             self.ij = proj(lon, lat)
         else:
             if (stations is None):
-                stations = pd.read_hdf(self.station_meta, 'stations')
+                stations = pd.read_hdf(self.config.CEAZAMet.station_meta, 'stations')
             self.index = stations.index
             self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
 
