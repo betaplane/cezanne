@@ -22,7 +22,11 @@ To fetch the CEAZAMet station metadata and save it in the file specified in the 
 
 To save it in a different file, pass the file name as an command-line argument::
 
-    ./CEAZA.py meta --CEAZAMet.station_meta=filename
+    ./CEAZA.py meta --Meta.file_name=filename
+
+or with alias::
+
+    ./CEAZA.py meta --f=filename
 
 To fetch a particular field (e.g. 'ta_c') from all stations, do::
 
@@ -34,7 +38,7 @@ or with the alias::
 
 To change the file in which the results are save, pass the file name to :attr:`CEAZAMet.station_data`::
 
-    ./CEAZA.py data --v=ta_c --CEAZAMet.station_data=filename
+    ./CEAZA.py data --v=ta_c --f=filename
 
 """
 import requests, csv, os
@@ -76,13 +80,16 @@ class Field(Application):
     from_date = Instance(datetime, (2003, 1, 1))
     var_name = Unicode('', help='Field to fetch, e.g. ta_c.').tag(config = True)
     raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.')
+    file_name = Unicode('').tag(config = True)
 
-    aliases = Dict({'v': 'Field.var_name'})
+    aliases = Dict({'v': 'Field.var_name', 'f':'Field.file_name'})
 
     def start(self, interactive=False):
+        print(self.file_name)
+        return None
         if self.raw and not interactive:
             raise Exception('Raw saving not supported yet in command-line mode.')
-        var_table = pd.read_hdf(self.parent.station_meta, 'fields').xs(self.var_name, 0, 'field', False)
+        var_table = pd.read_hdf(self.file_name, 'fields').xs(self.var_name, 0, 'field', False)
         with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
             self.parent.data = [exe.submit(self._get, c) for c in var_table.iterrows()]
 
@@ -92,9 +99,9 @@ class Field(Application):
         if not self.raw:
             data = pd.concat(data.values(), 1).sort_index(axis=1)
         if not interactive:
-            with pd.HDFStore(self.parent.station_data, 'a') as S:
+            with pd.HDFStore(self.file_name, 'a') as S:
                 S[self.var_name] = data
-            print('Field {} fetched and saved in file {}'.format(self.var_name, self.parent.station_data))
+            print('Field {} fetched and saved in file {}'.format(self.var_name, self.file_name))
         else:
             return data
 
@@ -181,6 +188,9 @@ class Field(Application):
 class Meta(Application):
     field = Dict().tag(config = True)
     station = Dict().tag(config = True)
+    file_name = Unicode('').tag(config = True)
+
+    aliases = Dict({'f':'Field.file_name'})
 
     def start(self, sta, fields, interactive=False):
         for trial in range(self.parent.trials):
@@ -247,11 +257,11 @@ class Meta(Application):
             if interactive:
                 return meta
 
-        with pd.HDFStore(self.parent.station_meta, mode='w') as S:
+        with pd.HDFStore(self.file_name, mode='w') as S:
             S['stations'] = meta
             if fields:
                 S['fields'] = field_meta
-        print("CEAZAMet station metadata saved in file {}.".format(self.parent.station_meta))
+        print("CEAZAMet station metadata saved in file {}.".format(self.file_name))
 
 class CEAZAMet(Application):
     """Class to download data from CEAZAMet webservice. Main reason for having a class is
@@ -259,8 +269,6 @@ class CEAZAMet(Application):
 
     """
     url = Unicode('').tag(config = True)
-    station_meta = Unicode('').tag(config = True)
-    station_data = Unicode('').tag(config = True)
 
     flags = Dict({'s': ({'CEAZAMet': {'app_method': 'get_stations'}}, 'get station and variable list')})
     subcommands = Dict({'meta': (Meta, 'get stations and field metadata'),

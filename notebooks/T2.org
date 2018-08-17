@@ -215,8 +215,6 @@
 #+RESULTS:
 [[file:./obipy-resources/T2/mean_bias_restricted.png]]
 
-
-
 #+begin_src ipython :results silent :session
  x = ['fnl', 'd01', 'd02', 'd03_orl', 'd03_0_00']
 

@@ -101,7 +101,7 @@ class Interpolator(Configurable):
             self.ij = proj(lon, lat)
         else:
             if (stations is None):
-                stations = pd.read_hdf(self.config.CEAZAMet.station_meta, 'stations')
+                stations = pd.read_hdf(self.config.Meta.file_name, 'stations')
             self.index = stations.index
             self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
 
