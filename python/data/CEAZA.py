@@ -186,6 +186,8 @@ class Field(Application):
 
 class Meta(Application):
     field = Dict().tag(config = True)
+    field_index = Instance(slice, (0, 2))
+    field_data = Instance(slice, (2, 6))
     station = Dict().tag(config = True)
     file_name = Unicode('').tag(config = True)
     get_fields = Bool(True).tag(config = True)
@@ -194,8 +196,9 @@ class Meta(Application):
     flags = Dict({'n': ({'Meta': {'get_fields': False}}, "do not fetch field metadata")})
 
     def start(self, stations=None, interactive=False):
+        params = {k: v[0] for k, v in self.station.items()}
         for trial in range(self.parent.trials):
-            req = requests.get(self.parent.url, params=self.station)
+            req = requests.get(self.parent.url, params = params)
             if not req.ok:
                 continue
             with StringIO(req.text) as sio:
@@ -213,26 +216,27 @@ class Meta(Application):
         if len(self.parent.data) == 0:
             raise NoNewStationError
 
+        cols = [v[1] for k, v in sorted(self.station.items(), key=lambda k: k[0]) if k[0]=='c']
         meta = pd.DataFrame.from_items(
             self.parent.data,
-            columns = ['full', 'lon', 'lat', 'elev', 'first', 'last'],
+            columns = cols[1:], # 0 is index
             orient='index'
         )
-        meta.index.name = 'station'
+        meta.index.name = cols[0]
         meta.sort_index(inplace=True)
 
         if self.get_fields:
+            params = {k: v[0] for k, v in self.field.items()}
             def get(st):
-                params = self.field.copy()
                 params['e_cod'] = st[0]
                 for trial in range(self.parent.trials):
                     print(st[1].full)
-                    req = requests.get(self.parent.url, params=params)
+                    req = requests.get(self.parent.url, params = params)
                     if not req.ok:
                         continue
                     with StringIO(req.text) as sio:
                         try:
-                            return [((st[0], l[0], l[1]), l[2:6])
+                            return [(tuple(np.r_[st[:1], l[self.field_index]]), l[self.field_data])
                                       for l in csv.reader(sio) if l[0][0] != '#']
                         except:
                             print('attempt #{}'.format(trial))
@@ -242,14 +246,15 @@ class Meta(Application):
 
             self.parent.data = [f for g in as_completed(field_meta) for f in g.result()]
 
+            cols = [v[1] for k, v in sorted(self.field.items(), key=lambda k: k[0]) if k[0]=='c']
             field_meta = pd.DataFrame.from_items(
                 self.parent.data,
-                columns = ['full', 'unit', 'elev', 'first'],
+                columns = cols[self.field_data],
                 orient = 'index'
             )
             field_meta.index = pd.MultiIndex.from_tuples(
                 field_meta.index.tolist(),
-                names = ['station', 'field', 'sensor_code']
+                names = np.r_[['station'], cols[self.field_index]]
             )
             field_meta.sort_index(inplace=True)
 
