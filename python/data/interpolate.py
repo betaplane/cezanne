@@ -49,6 +49,7 @@ import xarray as xr
 import numpy as np
 import pandas as pd
 import unittest, os
+from pyproj import Proj
 from geo import proj_params
 from importlib import import_module
 from traitlets.config.configurable import Configurable
@@ -82,15 +83,11 @@ class Interpolator(Configurable):
 
     time_dim_var = List(['Time', 'XTIME'])
 
-    def __init__(self, ds, stations=None, lon=None, lat=None, names=None):
-        loader = import_module('traitlets.config.loader')
-        super().__init__(
-            config = loader.PyFileConfigLoader(
-                os.path.expanduser('~/Dropbox/work/config.py')).load_config()
-        )
+    def __init__(self, ds, *args, stations=None, lon=None, lat=None, names=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
 
-        pyproj = import_module('pyproj')
-        proj = pyproj.Proj(**proj_params(ds))
+        proj = Proj(**proj_params(ds))
         for V in self.spatial_vars:
             try:
                 self.x, self.y = proj(*[g2d(ds[v]) for v in V])

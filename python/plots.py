@@ -138,12 +138,10 @@ class Coquimbo(Configurable):
     bbox = List([-72.2, -69.8, -32.5, -28.2])
     """configurable bounding box (minx, miny, maxx, maxy) of the region"""
 
-    def __init__(self):
-        loader = import_module('traitlets.config.loader')
-        super().__init__(
-            config = loader.PyFileConfigLoader(
-                os.path.expanduser('~/Dropbox/work/config.py')).load_config()
-        )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+
         gshhs = import_module('data.GSHHS')
         self.coast = self.clip(gshhs.GSHHS_Reader('GSHHS_shp/i/GSHHS_i_L1'))
         self.border = self.clip(gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_border_i_L1'))

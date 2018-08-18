@@ -50,7 +50,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 from traitlets.config import Application
 from traitlets import Unicode, Instance, Dict, Integer, Bool
-from importlib import import_module
 
 
 class FetchError(Exception):
@@ -82,12 +81,12 @@ class Field(Application):
     raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.')
     file_name = Unicode('').tag(config = True)
 
-    aliases = Dict({'v': 'Field.var_name', 'f':'Field.file_name'})
+    aliases = Dict({'v': 'Field.var_name', 'f': 'Field.file_name'})
 
-    def start(self, interactive=False):
+    def start(self):
         print(self.file_name)
         return None
-        if self.raw and not interactive:
+        if self.raw and self.cli_config != {}:
             raise Exception('Raw saving not supported yet in command-line mode.')
         var_table = pd.read_hdf(self.file_name, 'fields').xs(self.var_name, 0, 'field', False)
         with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
@@ -98,7 +97,7 @@ class Field(Application):
 
         if not self.raw:
             data = pd.concat(data.values(), 1).sort_index(axis=1)
-        if not interactive:
+        if self.cli_config != {}:
             with pd.HDFStore(self.file_name, 'a') as S:
                 S[self.var_name] = data
             print('Field {} fetched and saved in file {}'.format(self.var_name, self.file_name))
@@ -189,10 +188,12 @@ class Meta(Application):
     field = Dict().tag(config = True)
     station = Dict().tag(config = True)
     file_name = Unicode('').tag(config = True)
+    get_fields = Bool(True).tag(config = True)
 
-    aliases = Dict({'f':'Field.file_name'})
+    aliases = Dict({'f': 'Meta.file_name'})
+    flags = Dict({'n': ({'Meta': {'get_fields': False}}, "do not fetch field metadata")})
 
-    def start(self, sta, fields, interactive=False):
+    def start(self, stations=None, interactive=False):
         for trial in range(self.parent.trials):
             req = requests.get(self.parent.url, params=self.station)
             if not req.ok:
@@ -205,10 +206,11 @@ class Meta(Application):
                 else:
                     break
 
-        if sta is not None:
-            self.parent.data = [(c, st) for c, st in self.parent.data if c not in sta.index]
+        # for update, although I'm not using this currently
+        if stations is not None:
+            self.parent.data = [(c, st) for c, st in self.parent.data if c not in stations.index]
 
-        if len(self.stations) == 0:
+        if len(self.parent.data) == 0:
             raise NoNewStationError
 
         meta = pd.DataFrame.from_items(
@@ -219,7 +221,7 @@ class Meta(Application):
         meta.index.name = 'station'
         meta.sort_index(inplace=True)
 
-        if fields:
+        if self.get_fields:
             def get(st):
                 params = self.field.copy()
                 params['e_cod'] = st[0]
@@ -251,15 +253,15 @@ class Meta(Application):
             )
             field_meta.sort_index(inplace=True)
 
-            if interactive:
+            if self.cli_config == {}:
                 return meta, field_meta
         else:
-            if interactive:
+            if self.cli_config == {}:
                 return meta
 
         with pd.HDFStore(self.file_name, mode='w') as S:
             S['stations'] = meta
-            if fields:
+            if self.get_fields:
                 S['fields'] = field_meta
         print("CEAZAMet station metadata saved in file {}.".format(self.file_name))
 
@@ -270,7 +272,6 @@ class CEAZAMet(Application):
     """
     url = Unicode('').tag(config = True)
 
-    flags = Dict({'s': ({'CEAZAMet': {'app_method': 'get_stations'}}, 'get station and variable list')})
     subcommands = Dict({'meta': (Meta, 'get stations and field metadata'),
                         'data': (Field, 'get one field from all stations')})
 
@@ -278,9 +279,8 @@ class CEAZAMet(Application):
     max_workers = Integer(16)
 
     def __init__(self, *args, **kwargs):
-        loader = import_module('traitlets.config.loader')
-        config = loader.PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
-        super().__init__(*args, config=config, **kwargs)
+        super().__init__(*args, **kwargs)
+        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
 
     def get_meta(self, stations=None, fields=True):
         """Query CEAZA webservice for a list of the stations (and all available meteorological variables for each field if ``field=True``) and return :class:`DataFrame(s)<pandas.DataFrame>` with the data.
@@ -294,7 +294,8 @@ class CEAZAMet(Application):
 
         """
         app = Meta(parent=self)
-        return app.start(stations, fields, interactive=True)
+        app.get_fields = fields
+        return app.start(stations)
 
     def get_data(self):
         """Collect data from CEAZAMet webservice, for one variable type but all stations.
@@ -311,7 +312,6 @@ class CEAZAMet(Application):
         return app.start()
 
 if __name__ == '__main__':
-    import sys
     app = CEAZAMet()
-    app.parse_command_line(sys.argv)
-    app.launch_instance()
+    app.initialize()
+    app.subapp.start()
