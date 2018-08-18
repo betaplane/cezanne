@@ -77,20 +77,21 @@ class Field(Application):
     raw_url = Unicode('').tag(config = True)
     user = Unicode('').tag(config = True)
     from_date = Instance(datetime, (2003, 1, 1))
-    var_name = Unicode('', help='Field to fetch, e.g. ta_c.').tag(config = True)
+    var_code = Unicode('', help='Field to fetch, e.g. ta_c.').tag(config = True)
     raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.')
     file_name = Unicode('').tag(config = True)
 
     aliases = Dict({'v': 'Field.var_name', 'f': 'Field.file_name'})
 
-    def start(self):
+    def start(self, fields_table=None):
         print(self.file_name)
         return None
         if self.raw and self.cli_config != {}:
             raise Exception('Raw saving not supported yet in command-line mode.')
-        var_table = pd.read_hdf(self.file_name, 'fields').xs(self.var_name, 0, 'field', False)
+        if fields_table is None:
+            fields_table = pd.read_hdf(self.file_name, 'fields').xs(self.var_code, 0, 'field', False)
         with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
-            self.parent.data = [exe.submit(self._get, c) for c in var_table.iterrows()]
+            self.parent.data = [exe.submit(self._get, c) for c in fields_table.iterrows()]
 
         data = dict([d.result() for d in as_completed(self.parent.data) if d.result() is not None])
         self.parent.data = data
@@ -100,7 +101,7 @@ class Field(Application):
         if self.cli_config != {}:
             with pd.HDFStore(self.file_name, 'a') as S:
                 S[self.var_name] = data
-            print('Field {} fetched and saved in file {}'.format(self.var_name, self.file_name))
+            print('Field {} fetched and saved in file {}'.format(self.var_code, self.file_name))
         else:
             return data
 
@@ -108,11 +109,8 @@ class Field(Application):
         raise Exception("Thought this was the same as 'get_field'. Look in the repo if needed.")
 
     def _get(self, f):
-        if 'last' in f[1]:
-            day = f[1]['last'].to_pydatetime()
-            day = day - timedelta(days = 1) if day == day else self.from_date
-        else:
-            day = self.from_date
+        # any more complex logic currently missing
+        day = self.from_date
 
         try:
             df = self.fetch_raw(f[0][2], day) if self.raw else self.fetch_aggr(f[0][2], day)
@@ -302,11 +300,11 @@ class CEAZAMet(Application):
         app.get_fields = fields
         return app.start(stations)
 
-    def get_data(self):
+    def get_data(self, var_code, fields_table=None, from_date=None, raw=False):
         """Collect data from CEAZAMet webservice, for one variable type but all stations.
 
-        :param var: variable code to be collected (e.g. 'ta_c')
-        :param var_table: pandas.DataFrame with field metadata as constructed by get_stations()
+        :param var_code: variable code to be collected (e.g. 'ta_c')
+        :param fields_table: pandas.DataFrame with field metadata as constructed by get_stations()
         :param from_date: initial date from which onward to request data
         :param raw: False (default) or True whether raw data should be collected
         :returns: data for one variable and all stations given by var_table
@@ -314,7 +312,10 @@ class CEAZAMet(Application):
 
         """
         app = Field(parent=self)
-        return app.start()
+        app.var_code = var_code
+        if from_date is not None: app.from_date = from_date
+        if raw is not None: app.raw = raw
+        return app.start(fields_table)
 
 if __name__ == '__main__':
     app = CEAZAMet()
