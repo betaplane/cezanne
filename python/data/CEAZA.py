@@ -5,8 +5,8 @@ CEAZAMet stations webservice
 
 This module can be imported and used as a standalone command-line app. The use as module is documented in the class :class:`CEAZAMet`.
 
-Interactive Use
-===============
+Command-line use
+================
 
 There are two subcommands, ``meta`` and ``data``, corresponding to the methods :meth:`get_meta` and :meth:`get_data`. They can be supplied with command-line arguments in the `IPython  <https://ipython.readthedocs.io/en/stable/config/index.html>`_ / `Jupyter <https://jupyter.readthedocs.io/en/latest/projects/config.html>`_ config style. This means that help is also available in the same style, e.g.::
 
@@ -26,7 +26,7 @@ To save it in a different file, pass the file name as an command-line argument::
 
 or with alias::
 
-    ./CEAZA.py meta --f=filename
+    ./CEAZA.py meta -f filename
 
 To fetch a particular field (e.g. 'ta_c') from all stations, do::
 
@@ -34,11 +34,33 @@ To fetch a particular field (e.g. 'ta_c') from all stations, do::
 
 or with the alias::
 
-    ./CEAZA.py data --v=ta_c
+    ./CEAZA.py data -v ta_c
 
 To change the file in which the results are save, pass the file name to :attr:`CEAZAMet.station_data`::
 
-    ./CEAZA.py data --v=ta_c --f=filename
+    ./CEAZA.py data -v ta_c -f filename
+
+
+Logging
+=======
+
+The built-in log handler for :mod:`traitlets.config` is :class:`logging.StreamHandler`. So to see logging info on the command line, do::
+
+    ./CEAZA.py meta ... --log_level=INFO 2>&1
+
+or to redirect to a file::
+
+    ./CEAZA.py meta ... --log_level=INFO 2>logfile
+
+.. NOTE::
+
+    One hyphen can only be used with one-letter flags. The following are equivalent::
+
+        ./CEAZA.py meta --Meta.filename=filename
+        ./CEAZA.py meta --f=filename
+        ./CEAZA.py meta -f filename
+
+    Note that in the one-hyphen case, the **equal** sign is not needed.
 
 .. TODO::
 
@@ -46,7 +68,7 @@ To change the file in which the results are save, pass the file name to :attr:`C
     * rework printed info (log?)
 
 """
-import requests, csv, os
+import requests, csv, os, sys
 from io import StringIO
 from datetime import datetime, timedelta
 import pandas as pd
@@ -79,6 +101,7 @@ class _Reader(StringIO):
             self.start = p + l.find(':') + 1
             p = self.tell()
         self.seek(self.start)
+
 
 class Field(Application):
     raw_url = Unicode('').tag(config = True)
@@ -195,7 +218,7 @@ class Meta(Application):
     file_name = Unicode('').tag(config = True)
     get_fields = Bool(True).tag(config = True)
 
-    aliases = Dict({'f': 'Meta.file_name'})
+    aliases = Dict({'f': 'Meta.file_name', 'log_level': 'Meta.log_level'})
     flags = Dict({'n': ({'Meta': {'get_fields': False}}, "do not fetch field metadata")})
 
     def start(self, stations=None, interactive=False):
@@ -205,6 +228,7 @@ class Meta(Application):
             req = requests.get(self.parent.url, params = params)
             if not req.ok:
                 continue
+            self.log.debug(req.text)
             with StringIO(req.text) as sio:
                 try:
                     self.parent.data = [(l[0], l[1: 7]) for l in csv.reader(sio) if l[0][0] != '#']
@@ -237,10 +261,11 @@ class Meta(Application):
                 params = {k: v[0] for k, v in self.field.items()}
                 params['e_cod'] = st[0]
                 for trial in range(self.parent.trials):
-                    print(st[1].full)
+                    self.log.info(st[1].full)
                     req = requests.get(self.parent.url, params = params)
                     if not req.ok:
                         continue
+                    self.log.debug(req.text)
                     with StringIO(req.text) as sio:
                         try:
                             return [(tuple(np.r_[st[:1], l[self.field_index]]), l[self.field_data])
@@ -291,10 +316,16 @@ class CEAZAMet(Application):
 
     trials = Integer(10)
     max_workers = Integer(16)
+    log_file_name = Unicode().tag(config = True) # see initialize()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+
+    def initialize(self):
+        self.parse_command_line()
+        if self.log_file_name != '':
+            pass # not yet implemented
 
     def get_meta(self, stations=None, fields=True):
         """Query CEAZA webservice for a list of the stations (and all available meteorological variables for each field if ``field=True``) and return :class:`DataFrame(s)<pandas.DataFrame>` with the data.
