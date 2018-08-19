@@ -76,6 +76,7 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from traitlets.config import Application
 from traitlets import Unicode, Instance, Dict, Integer, Bool
+from tqdm import tqdm
 
 
 class FetchError(Exception):
@@ -257,28 +258,32 @@ class Meta(Application):
         meta.sort_index(inplace=True)
 
         if self.get_fields:
-            def get(st):
-                params = {k: v[0] for k, v in self.field.items()}
-                params['e_cod'] = st[0]
-                for trial in range(self.parent.trials):
-                    self.log.info(st[1].full)
-                    req = requests.get(self.parent.url, params = params)
-                    if not req.ok:
-                        continue
-                    self.log.debug(req.text)
-                    with StringIO(req.text) as sio:
-                        try:
-                            return [(tuple(np.r_[st[:1], l[self.field_index]]), l[self.field_data])
-                                      for l in csv.reader(sio) if l[0][0] != '#']
-                        except:
-                            print('attempt #{}'.format(trial))
+            with tqdm(total = meta.shape[0]) as prog:
+                def get(st):
+                    params = {k: v[0] for k, v in self.field.items()}
+                    params['e_cod'] = st[0]
+                    for trial in range(self.parent.trials):
+                        self.log.info(st[1].full)
+                        req = requests.get(self.parent.url, params = params)
+                        if not req.ok:
+                            continue
+                        self.log.debug(req.text)
+                        with StringIO(req.text) as sio:
+                            try:
+                                out = [(tuple(np.r_[st[:1], l[self.field_index]]), l[self.field_data])
+                                          for l in csv.reader(sio) if l[0][0] != '#']
+                            except:
+                                print('attempt #{}'.format(trial))
+                            else:
+                                prog.update(1)
+                                return out
 
-                raise TrialsExhaustedError()
+                    raise TrialsExhaustedError()
 
-            with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
-                field_meta = [exe.submit(get, s) for s in meta.iterrows()]
+                with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
+                    field_meta = [exe.submit(get, s) for s in meta.iterrows()]
 
-            self.parent.data = [f for g in as_completed(field_meta) for f in g.result()]
+                self.parent.data = [f for g in as_completed(field_meta) for f in g.result()]
 
             cols = [v[1] for k, v in sorted(self.field.items(), key=lambda k: k[0]) if k[0]=='c']
             field_meta = pd.DataFrame.from_items(
