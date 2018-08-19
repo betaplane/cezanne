@@ -40,6 +40,11 @@ To change the file in which the results are save, pass the file name to :attr:`C
 
     ./CEAZA.py data --v=ta_c --f=filename
 
+.. TODO::
+
+    * catch if trials fail completely
+    * rework printed info (log?)
+
 """
 import requests, csv, os
 from io import StringIO
@@ -47,7 +52,6 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import Counter
 from traitlets.config import Application
 from traitlets import Unicode, Instance, Dict, Integer, Bool
 
@@ -56,6 +60,9 @@ class FetchError(Exception):
     pass
 
 class NoNewStationError(Exception):
+    pass
+
+class TrialsExhaustedError(Exception):
     pass
 
 class _Reader(StringIO):
@@ -109,11 +116,8 @@ class Field(Application):
         raise Exception("Thought this was the same as 'get_field'. Look in the repo if needed.")
 
     def _get(self, f):
-        # any more complex logic currently missing
-        day = self.from_date
-
         try:
-            df = self.fetch_raw(f[0][2], day) if self.raw else self.fetch_aggr(f[0][2], day)
+            df = self.fetch_raw(f[0][2]) if self.raw else self.fetch_aggr(f[0][2])
         except FetchError as fe:
             print(fe)
         else:
@@ -128,8 +132,7 @@ class Field(Application):
             print('fetched {} from {}'.format(f[0][2], f[0][0]))
             return f[0][2], df.sort_index(1)
 
-    def fetch_aggr(self, code, from_date=None):
-        from_date = self.from_date if from_date is None else from_date
+    def fetch_aggr(self, code):
         cols = ['ultima_lectura', 'min', 'prom', 'max', 'data_pc']
         params = {
             'fn': 'GetSerieSensor',
@@ -137,7 +140,7 @@ class Field(Application):
             'valor_nan': 'nan',
             'user': self.user,
             's_cod': code,
-            'fecha_inicio': from_date.strftime('%Y-%m-%d'),
+            'fecha_inicio': self.from_date.strftime('%Y-%m-%d'),
             'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
         }
         for trial in range(self.parent.trials):
@@ -146,17 +149,17 @@ class Field(Application):
                 continue
             reader = _Reader(r.text)
             try:
-                d = pd.read_csv(
-                    reader, index_col=0, parse_dates=True, usecols=cols)
+                d = pd.read_csv(reader, index_col=0, parse_dates=True, usecols=cols)
                 reader.close()
             except:
                 raise FetchError(r.url)
             else:
                 return d.astype(float) # important
 
-    def fetch_raw(self, code, from_date=None):
-        from_date = self.from_date if from_date is None else from_date
-        params = {'fi': from_date.strftime('%Y-%m-%d'),
+        raise TrialsExhaustedError()
+
+    def fetch_raw(self, code):
+        params = {'fi': self.from_date.strftime('%Y-%m-%d'),
                   'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
                   's_cod': code}
         for trial in range(self.parent.trials):
@@ -181,6 +184,8 @@ class Field(Application):
                 d.columns = cols
                 return d.astype(float) # important
 
+        raise TrialsExhaustedError()
+
 
 class Meta(Application):
     field = Dict().tag(config = True)
@@ -194,6 +199,7 @@ class Meta(Application):
     flags = Dict({'n': ({'Meta': {'get_fields': False}}, "do not fetch field metadata")})
 
     def start(self, stations=None, interactive=False):
+        self.parent.data = None
         params = {k: v[0] for k, v in self.station.items()}
         for trial in range(self.parent.trials):
             req = requests.get(self.parent.url, params = params)
@@ -206,6 +212,9 @@ class Meta(Application):
                     print('attempt #{}'.format(trial))
                 else:
                     break
+
+        if self.parent.data is None:
+            raise TrialsExhaustedError()
 
         # for update, although I'm not using this currently
         if stations is not None:
@@ -224,8 +233,8 @@ class Meta(Application):
         meta.sort_index(inplace=True)
 
         if self.get_fields:
-            params = {k: v[0] for k, v in self.field.items()}
             def get(st):
+                params = {k: v[0] for k, v in self.field.items()}
                 params['e_cod'] = st[0]
                 for trial in range(self.parent.trials):
                     print(st[1].full)
@@ -238,6 +247,8 @@ class Meta(Application):
                                       for l in csv.reader(sio) if l[0][0] != '#']
                         except:
                             print('attempt #{}'.format(trial))
+
+                raise TrialsExhaustedError()
 
             with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
                 field_meta = [exe.submit(get, s) for s in meta.iterrows()]
