@@ -40,6 +40,10 @@ Data
 .. automodule:: python.data
    :members:
 
+WRF
+===
+.. automodule:: python.WRF
+  
 Spatial Regression
 ===================
 

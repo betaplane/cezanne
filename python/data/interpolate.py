@@ -52,7 +52,7 @@ import unittest, os
 from pyproj import Proj
 from geo import proj_params
 from importlib import import_module
-from traitlets.config.configurable import Configurable
+from traitlets.config import Application
 from traitlets import List, Unicode
 
 
@@ -60,7 +60,7 @@ def g2d(v):
     m, n = v.shape[-2:]
     return np.array(v[:]).flatten()[-m * n:].reshape((m, n))
 
-class Interpolator(Configurable):
+class Interpolator(Application):
     """Base class for the interpolators in this module. The parameters common to all routines are described here.
 
     :param ds: netCDF Dataset from which to interpolate (and which contains projection parameters as attributes).
@@ -125,8 +125,8 @@ class GridInterpolator(Interpolator):
 
     Interpolation is carried out by calling the instantiated class as described for :class:`.BilinearInterpolator`.
     """
-    def __init__(self, ds, method='linear', **kwargs):
-        super().__init__(ds, **kwargs)
+    def __init__(self, ds, *args, method='linear', **kwargs):
+        super().__init__(ds, *args, **kwargs)
         from geo import affine
         self.intp = import_module('scipy.interpolate')
         self.method = method
@@ -167,9 +167,9 @@ class BilinearInterpolator(Interpolator):
     See :class:`InterpolatorBase` for a description of the parameters common to all interpolators.
     """
 
-    def __init__(self, ds, **kwargs):
+    def __init__(self, ds, *args, **kwargs):
         from geo import Squares
-        super().__init__(ds, **kwargs)
+        super().__init__(ds, *args, **kwargs)
         self.points = Squares.compute(self.x, self.y, *self.ij)
         K = np.ravel_multi_index(self.points.sel(var='indexes').astype(int).values,
                                  self.x.shape[:2]).reshape((4, -1))

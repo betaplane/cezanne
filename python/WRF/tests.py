@@ -23,7 +23,7 @@ import numpy as np
 import sys, os
 from importlib import import_module
 from importlib.util import find_spec
-from . import interpolate
+from data import interpolate
 from traitlets.config.loader import PyFileConfigLoader
 
 config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()

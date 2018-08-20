@@ -8,15 +8,6 @@
 .. automodule:: python.data.interpolate
     :members:
 
-.. automodule:: python.data.WRF_threaded
-    :members:
-
-.. automodule:: python.data.WRF_mpi
-    :members:
-
-.. automodule:: python.data.tests
-    :members:
-
 .. automodule:: python.data.IGRA
     :members:
 

@@ -7,7 +7,7 @@ Example Usage::
 
     from data import WRF
     w = WRF.Concatenator(domain='d03', interpolator='bilinear')
-    w.run('T2-PSFC', var=['T2', 'PSFC'], interpolate=True)
+    w.start('T2-PSFC', var=['T2', 'PSFC'], interpolate=True)
 
 .. NOTE::
 
@@ -28,113 +28,36 @@ Example Usage::
 
 """
 
-import re, unittest, os
-from glob import glob
-import os.path as pa
+import re, unittest
 import xarray as xr
-import pandas as pd
-import numpy as np
-from functools import partial
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
-from importlib import import_module
-from os.path import join, dirname
-from traitlets.config.loader import PyFileConfigLoader
-
-config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
-
-def align_stations(wrf, df):
-    """Align :class:`~pandas.DataFrame` with station data (as produced by :class:`.CEAZA.Downloader`) with a concatenated (and interpolated to station locations) netCDF file as produced by :class:`.Concatenator`. For now, works with a single field.
-
-    :param wrf: The DataArray or Dataset containing the concatenated and interpolated (to station locations) WRF simulations (only dimensions ``start`` and ``Time`` and coordinate ``XTIME`` are used).
-    :type wrf: :class:`~xarray.DataArray` or :class:`~xarray.Dataset`
-    :param df: The DataFrame containing the station data (of the shape returned by :meth:`.CEAZA.Downloader.get_field`).
-    :type df: :class:`~pandas.DataFrame`
-    :returns: DataArray with ``start`` and ``Time`` dimensions aligned with **wrf**.
-    :rtype: :class:`~xarray.DataArray`
-
-    """
-    # necessary because some timestamps seem to be slightly off-round hours
-    xt = wrf.XTIME.stack(t=('start', 'Time'))
-    xt = xr.DataArray(pd.Series(xt.values).dt.round('h'), coords=xt.coords).unstack('t')
-    idx = np.vstack(df.index.get_indexer(xt.sel(start=s)) for s in wrf.start)
-    cols = df.columns.get_level_values('station').intersection(wrf.station)
-    return xr.DataArray(np.stack([np.where(idx>=0, df[c].values[idx].squeeze(), np.nan) for c in cols], 2),
-                     coords = [wrf.coords['start'], wrf.coords['Time'], ('station', cols)])
-
-class Files(object):
-    """Class which mimics the way :class:`.Concatenator` retrieves the files to concatenate from the :data:`.config_file`, with the same keywords.
-
-    """
-    def __init__(self, paths=None, hour=None, from_date=None, pattern='c01_*', limit=None):
-        dirs = []
-        if paths is None:
-            assert len(config) > 0, "config file not read"
-            paths = [p for p in config['wrfout'].values() if pa.isdir(p)]
-        for p in paths:
-            for d in sorted(glob(pa.join(p, pattern))):
-                if (pa.isdir(d) and not pa.islink(d)):
-                    dirs.append(d)
-                    if limit is not None and len(dirs) == limit:
-                        break
-        dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
-        self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
-
-    @staticmethod
-    def _name(domain, lead_day, prefix, d):
-        ts = pd.Timestamp.strptime(pa.split(d)[1][-10:], '%Y%m%d%H')
-        if lead_day is None:
-            g = glob(pa.join(d, '{}_{}_*'.format(prefix, domain)))
-        else:
-            s = (ts + pd.Timedelta(lead_day, 'D')).strftime('%Y-%m-%d_%H:%M:%S')
-            g = [f for f in glob(pa.join(d, '{}_{}_{}'.format(prefix, domain, s))) if pa.isfile(f)]
-        return (g, len(g), ts.hour)
-
-    def files(self, domain=None, lead_day=None, prefix='wrfout'):
-        name = partial(self._name, domain, lead_day, prefix)
-        self.files, self.length, self.hour = zip(*[name(d) for d in self.dirs])
-
-    def by_sim_length(self, n):
-        return [f for d in np.array(self.files)[np.array(self.length) == n] for f in d]
-
-    @classmethod
-    def first(cls, domain, lead_day=None, hour=None, from_date=None, pattern='c01_*', prefix='wrfout', opened=True):
-        """Get the first netCDF file matching the given arguments (see :class:`Concatenator` for a description), based on the configuration values (section *wrfout*) in the global config file.
-
-        """
-        f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
-        name = partial(cls._name, domain, lead_day, prefix)
-        files, _, _ = name(f.dirs[0])
-        return xr.open_dataset(files[0]) if opened else files[0]
-
-    @staticmethod
-    def stations():
-        with pd.HDFStore(config['stations']['sta']) as S:
-            return S['stations']
+from . import *
 
 
-class Concatenator(object):
-    """WRFOUT file concatenator (xarray version), for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
+class Concatenator(WRFiles):
+    """WRFOUT file concatenator (xarray version), for a specifc forecast lead day or for all data arranged in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
     Class variable *max_workers* controls how many threads are used.
 
     :param domain: Domain specifier for which to search among WRFOUT-files.
-    :param paths: list of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs
-    :param hour: hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
-    :param from_date: From what date onwards to search (only simulation start dates), if a start date is desired.
     :type from_date: %Y%m%d :obj:`str`
     :param stations: DataFrame with station locations (as returned by a call to :meth:`.CEAZA.Downloader.get_stations`) to which the variable(s) is (are) to be interpolated, or expression which evaluates to ``True`` if the default station data is to be used (as saved in :data:`config_file`).
     :param interpolator: Which interpolator (if any) to use: ``scipy`` - use :class:`~.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~.interpolate.BilinearInterpolator`.
 
+    :Keyword arguments:
+        * **paths** - list of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs
+        * **hour** - hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
+        * **from_date** - From what date onwards to search (only simulation start dates), if a start date is desired.
+
     """
-    max_workers = 16
+    max_workers = Integer(16, help="number of threads to be used").tag(config=True)
     "number of threads to be used"
 
+    def __init__(self, domain, *args, stations=None, interpolator='scipy', dt=-4, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):
         self.dt = dt
-        self._glob_pattern = '{}_{}_*'.format(prefix, domain)
-        files = Files(paths, hour, from_date)
-        self.dirs = files.dirs
+        self._glob_pattern = '{}_{}_*'.format(self.wrfout_prefix, domain)
 
         assert len(self.dirs) > 0, "no directories added"
 
@@ -142,7 +65,7 @@ class Concatenator(object):
             self._stations = stations
 
         if interpolator is not None:
-            f = glob(pa.join(self.dirs[0], self._glob_pattern))
+            f = glob(os.path.join(self.dirs[0], self._glob_pattern))
             with xr.open_dataset(f[0]) as ds:
                 self.intp = getattr(import_module('data.interpolate'), {
                     'scipy': 'GridInterpolator',
@@ -151,21 +74,12 @@ class Concatenator(object):
 
         print('Concatenator initialized with {} directories, interpolator {}'.format(len(self.dirs), interpolator))
 
-    @property
-    def stations(self):
-        try:
-            return self._stations
-        except:
-            with pd.HDFStore(config['stations']['sta']) as sta:
-                self._stations = sta['stations']
-            return self._stations
-
     def remove_dirs(self, ds):
         t = ds.indexes['start'] - pd.Timedelta(self.dt, 'h')
         s = [d.strftime('%Y%m%d%H') for d in t]
         return [d for d in self.dirs if d[-10:] not in s]
 
-    def run(self, outfile, previous_file=None, **kwargs):
+    def start(self, outfile, previous_file=None, **kwargs):
         """Wrapper around the :meth:`.concat` call which writes out a netCDF file whenever an error occurs and restarts with all already processed directories removed from :attr:`.dirs`
 
         :param outfile: base name of the output netCDF file (no extension, numberings are added in case of restarts)
@@ -232,7 +146,7 @@ class Concatenator(object):
 
     @staticmethod
     def _extract(var, glob_pattern, lead_day, dt, interp, func, d):
-        with xr.open_mfdataset(pa.join(d, glob_pattern)) as ds:
+        with xr.open_mfdataset(os.path.join(d, glob_pattern)) as ds:
             print('using: {}'.format(ds.START_DATE))
             x = ds[np.array([var]).flatten()].sortby('XTIME') # this seems to be at the root of Dask warnings
             x['XTIME'] = x.XTIME + np.timedelta64(dt, 'h')
