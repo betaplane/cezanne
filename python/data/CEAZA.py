@@ -110,38 +110,50 @@ class Field(Application):
     from_date = Instance(datetime, (2003, 1, 1))
     var_code = Unicode('', help='Field to fetch, e.g. ta_c.').tag(config = True)
     raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.')
-    file_name = Unicode('').tag(config = True)
+    file_name = Unicode('', help='Data file name.').tag(config = True)
 
-    aliases = Dict({'v': 'Field.var_name', 'f': 'Field.file_name'})
+    aliases = Dict({'v': 'Field.var_code',
+                    'f': 'Field.file_name',
+                    'm': 'Meta.file_name',
+                    'log_level': 'Application.log_level'})
+    flags = Dict({'r': ({'Field': {'raw': True}}, "set raw=True")})
 
-    def start(self, fields_table=None):
-        print(self.file_name)
-        return None
+    def start(self, fields_table=None, from_date=None):
         if self.raw and self.cli_config != {}:
             raise Exception('Raw saving not supported yet in command-line mode.')
         if fields_table is None:
-            fields_table = pd.read_hdf(self.file_name, 'fields').xs(self.var_code, 0, 'field', False)
-        with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
-            self.parent.data = [exe.submit(self._get, c) for c in fields_table.iterrows()]
+            fields_table = pd.read_hdf(self.config.Meta.file_name, 'fields').xs(self.var_code, 0, 'field', False)
+        with tqdm(total = fields_table.shape[0]) as prog:
+            with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
+                self.parent.data = [exe.submit(self._get, c, prog, from_date) for c in fields_table.iterrows()]
 
-        data = dict([d.result() for d in as_completed(self.parent.data) if d.result() is not None])
-        self.parent.data = data
+            data = dict([d.result() for d in as_completed(self.parent.data) if d.result() is not None])
+            self.parent.data = data
 
         if not self.raw:
             data = pd.concat(data.values(), 1).sort_index(axis=1)
         if self.cli_config != {}:
             with pd.HDFStore(self.file_name, 'a') as S:
-                S[self.var_name] = data
-            print('Field {} fetched and saved in file {}'.format(self.var_code, self.file_name))
+                S[self.var_code] = data
+            self.log.log(0, 'Field %s fetched and saved in file %s', self.var_code, self.file_name)
         else:
             return data
 
-    def get_fields_by_station(self, station, var_table, from_date=None, raw=False):
-        raise Exception("Thought this was the same as 'get_field'. Look in the repo if needed.")
-
-    def _get(self, f):
+    def _get(self, f, prog, from_date):
+        k = f[0][2]
+        if k in from_date:
+            from_date = from_date[k]
+        for d in (from_date, )
         try:
-            df = self.fetch_raw(f[0][2]) if self.raw else self.fetch_aggr(f[0][2])
+            v = from_date.strftime('%Y-%m-%d')
+        except:
+            v = pd.Timestamp(f[1]['first']).strftime('%Y-%m-%d')
+
+        if v != v:
+            v = self.from_date.strftime('%Y-%m-%d') 
+
+        try:
+            df = self.fetch_raw(f[0][2], v) if self.raw else self.fetch_aggr(f[0][2], v)
         except FetchError as fe:
             print(fe)
         else:
@@ -153,10 +165,11 @@ class Field(Application):
                 ].reshape((-1, i)),
                 names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
             )
-            print('fetched {} from {}'.format(f[0][2], f[0][0]))
+            self.log.info('fetched {} from {}'.format(f[0][2], f[0][0]))
+            prog.update(1)
             return f[0][2], df.sort_index(1)
 
-    def fetch_aggr(self, code):
+    def fetch_aggr(self, code, from_date):
         cols = ['ultima_lectura', 'min', 'prom', 'max', 'data_pc']
         params = {
             'fn': 'GetSerieSensor',
@@ -164,13 +177,14 @@ class Field(Application):
             'valor_nan': 'nan',
             'user': self.user,
             's_cod': code,
-            'fecha_inicio': self.from_date.strftime('%Y-%m-%d'),
+            'fecha_inicio': from_date.strftime('%Y-%m-%d'),
             'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
         }
         for trial in range(self.parent.trials):
             r = requests.get(self.parent.url, params=params)
             if not r.ok:
                 continue
+            self.log.debug(r.text)
             reader = _Reader(r.text)
             try:
                 d = pd.read_csv(reader, index_col=0, parse_dates=True, usecols=cols)
@@ -182,14 +196,15 @@ class Field(Application):
 
         raise TrialsExhaustedError()
 
-    def fetch_raw(self, code):
-        params = {'fi': self.from_date.strftime('%Y-%m-%d'),
+    def fetch_raw(self, code, from_date):
+        params = {'fi': from_date.strftime('%Y-%m-%d'),
                   'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
                   's_cod': code}
         for trial in range(self.parent.trials):
             r = requests.get(self.raw_url, params=params)
             if not r.ok:
                 continue
+            self.debug(r.text)
             reader = _Reader(r.text)
             try:
                 d = pd.read_csv(
@@ -219,10 +234,10 @@ class Meta(Application):
     file_name = Unicode('').tag(config = True)
     get_fields = Bool(True).tag(config = True)
 
-    aliases = Dict({'f': 'Meta.file_name', 'log_level': 'Meta.log_level'})
+    aliases = Dict({'f': 'Meta.file_name', 'log_level': 'Application.log_level'})
     flags = Dict({'n': ({'Meta': {'get_fields': False}}, "do not fetch field metadata")})
 
-    def start(self, stations=None, interactive=False):
+    def start(self):
         self.parent.data = None
         params = {k: v[0] for k, v in self.station.items()}
         for trial in range(self.parent.trials):
@@ -240,13 +255,6 @@ class Meta(Application):
 
         if self.parent.data is None:
             raise TrialsExhaustedError()
-
-        # for update, although I'm not using this currently
-        if stations is not None:
-            self.parent.data = [(c, st) for c, st in self.parent.data if c not in stations.index]
-
-        if len(self.parent.data) == 0:
-            raise NoNewStationError
 
         cols = [v[1] for k, v in sorted(self.station.items(), key=lambda k: k[0]) if k[0]=='c']
         meta = pd.DataFrame.from_items(
@@ -309,6 +317,31 @@ class Meta(Application):
                 S['fields'] = field_meta
         print("CEAZAMet station metadata saved in file {}.".format(self.file_name))
 
+class Update(Application):
+    overlap = Instance(timedelta, kw={'days': 1}).tag(config = True)
+
+    aliases = Dict({'v': 'Field.var_code',
+                    'f': 'Field.file_name',
+                    'm': 'Meta.file_name',
+                    'log_level': 'Application.log_level'})
+    flags = Dict({'r': ({'Field': {'raw': True}}, "set raw=True")})
+
+    def start(self):
+        old_data  = pd.read_hdf(self.config.Field.file_name, self.config.Field.var_code)
+        old_codes = old_data.columns.get_level_values('sensor_code')
+        sta, flds = self.parent.get_meta()
+        fields_table = flds.xs(self.config.Field.var_code, 0, 'field', False)
+        new_codes = fields_table.index.get_level_values('sensor_code').symmetric_difference(old_codes)
+        from_date = {k[2]: v - self.overlap for k, v in
+                     old_data.apply(lambda c: c.dropna().index.max()).iteritems()}
+
+        data = self.parent.get_data(None, fields_table, from_date)
+        print(data.shape)
+
+        with pd.HDFStore(self.config.Meta.file_name) as S:
+            S['stations'] = sta
+            S['fields'] = flds
+
 class CEAZAMet(Application):
     """Class to download data from CEAZAMet webservice. Main reason for having a class is
     to be able to reference the data (CEAZAMet.data) in case something goes wrong at some point.
@@ -317,7 +350,8 @@ class CEAZAMet(Application):
     url = Unicode('').tag(config = True)
 
     subcommands = Dict({'meta': (Meta, 'get stations and field metadata'),
-                        'data': (Field, 'get one field from all stations')})
+                        'data': (Field, 'get one field from all stations'),
+                        'update': (Update, 'update existing field data')})
 
     trials = Integer(10)
     max_workers = Integer(16)
@@ -332,7 +366,7 @@ class CEAZAMet(Application):
         if self.log_file_name != '':
             pass # not yet implemented
 
-    def get_meta(self, stations=None, fields=True):
+    def get_meta(self, fields=True):
         """Query CEAZA webservice for a list of the stations (and all available meteorological variables for each field if ``field=True``) and return :class:`DataFrame(s)<pandas.DataFrame>` with the data.
 
         :param stations: existing 'stations' DataFrame to update
@@ -345,9 +379,9 @@ class CEAZAMet(Application):
         """
         app = Meta(parent=self)
         app.get_fields = fields
-        return app.start(stations)
+        return app.start()
 
-    def get_data(self, var_code, fields_table=None, from_date=None, raw=False):
+    def get_data(self, var_code=None, fields_table=None, from_date=None, raw=False):
         """Collect data from CEAZAMet webservice, for one variable type but all stations.
 
         :param var_code: variable code to be collected (e.g. 'ta_c')
@@ -359,10 +393,10 @@ class CEAZAMet(Application):
 
         """
         app = Field(parent=self)
-        app.var_code = var_code
-        if from_date is not None: app.from_date = from_date
+        if var_code is not None: app.var_code = var_code
         if raw is not None: app.raw = raw
-        return app.start(fields_table)
+        return app.start(fields_table, from_date)
+
 
 if __name__ == '__main__':
     app = CEAZAMet()
