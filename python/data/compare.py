@@ -4,6 +4,8 @@ CEAZAMet station data comparison tools
 """
 import pandas as pd
 import numpy as np
+from functools import reduce
+import matplotlib.pyplot as plt
 
 class Comp(object):
     """Comparator object to compare two CEAZA station data :class:`DataFrames<pandas.DataFrame>`.
@@ -39,3 +41,31 @@ class Comp(object):
         self.a[i[0]].plot(ax=pl.axes)
         dt = pd.Timedelta(delta)
         pl.axes.set_xlim(i[-1]-dt, i[-1]+dt)
+
+class Comp2(object):
+    def __init__(self, a, b):
+        # just checking that data_pc is all 0 or 100
+        assert(not any([(lambda c: np.any((c!=0) & (c!=100)))(c.xs('data_pc', 1, 'aggr')) for c in [a, b]]))
+
+        self.a, self.b = [c.drop('data_pc', 1, 'aggr') for c in [a, b]]
+        x = (lambda d: (d == d) & (d != 0))(self.a - self.b)
+        # locations where any of the non-data_pc aggr levels are not equal to old data
+        self.x = reduce(np.add, [x.xs(a, 1, 'aggr') for a in x.columns.get_level_values('aggr').unique()])
+
+        # stations where not only the last timestamp of old data differs from new data
+        z = self.x.apply(lambda c: c.index[c].max() - c.index[c].min(), 0)
+        self.s = z[(z == z) & (z > pd.Timedelta(0))]
+        print(self.s)
+
+    def plot(self, stations=None, dt=pd.Timedelta(1, 'D')):
+        sta = self.s.index if stations is None else self.s.index[stations]
+        fig, axs = plt.subplots(len(sta), 1)
+        for i, ax in zip(sta, axs):
+            x, y, z = [j.xs(i[2], 1, 'sensor_code') for j in [self.a, self.b, self.x]]
+            d = z.index[z.values.flatten()]
+            a, b = d.min() - dt, d.max() + dt
+            for idx, c in y.iteritems():
+                pl = ax.plot(c.loc[a: b], label=idx[-1])[0]
+                ax.plot(x.xs(idx[-1], 1, 'aggr').loc[d], 'x', color=pl.get_color())
+                ax.vlines(d, *ax.get_ylim(), color='r', label='_')
+        plt.legend()

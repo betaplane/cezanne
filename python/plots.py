@@ -143,9 +143,9 @@ class Coquimbo(Configurable):
         self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
 
         gshhs = import_module('data.GSHHS')
-        self.coast = self.clip(gshhs.GSHHS_Reader('GSHHS_shp/i/GSHHS_i_L1'))
-        self.border = self.clip(gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_border_i_L1'))
-        self.rivers = self.clip(gshhs.GSHHS_Reader('WDBII_shp/i/WDBII_river_i_L05'))
+        self.coast = self.clip(gshhs.GSHHS('GSHHS_shp/i/GSHHS_i_L1'))
+        self.border = self.clip(gshhs.GSHHS('WDBII_shp/i/WDBII_border_i_L1'))
+        self.rivers = self.clip(gshhs.GSHHS('WDBII_shp/i/WDBII_river_i_L05'))
 
     def __call__(self, ax, proj=crs.PlateCarree(), lines_only=False, colors=['k']):
         if lines_only:

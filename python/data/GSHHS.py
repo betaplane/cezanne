@@ -5,7 +5,7 @@ from traitlets import Unicode
 from traitlets.config.configurable import Configurable
 import os
 
-class GSHHS_Reader(Configurable, Reader):
+class GSHHS(Configurable, Reader):
     path = Unicode('').tag(config = True)
 
     def __init__(self, filename, *args, path=None, **kwargs):

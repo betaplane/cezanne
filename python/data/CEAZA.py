@@ -46,11 +46,11 @@ Logging
 
 The built-in log handler for :mod:`traitlets.config` is :class:`logging.StreamHandler`. So to see logging info on the command line, do::
 
-    ./CEAZA.py meta ... --log_level=INFO 2>&1
+    ./CEAZA.py [...] --log_level=INFO 2>&1
 
 or to redirect to a file::
 
-    ./CEAZA.py meta ... --log_level=INFO 2>logfile
+    ./CEAZA.py [...] --log_level=INFO 2>logfile
 
 .. NOTE::
 
@@ -64,8 +64,10 @@ or to redirect to a file::
 
 .. TODO::
 
-    * catch if trials fail completely
+    * save raw data (filename = field_code, tablename = station_code)
     * rework printed info (log?)
+    * update functionality:
+        * check for stations that don't have new data (last < today) <- or maybe not, seems less important
 
 """
 import requests, csv, os, sys
@@ -76,6 +78,7 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from traitlets.config import Application
 from traitlets import Unicode, Instance, Dict, Integer, Bool
+from importlib import import_module
 from tqdm import tqdm
 
 
@@ -105,8 +108,8 @@ class _Reader(StringIO):
 
 
 class Field(Application):
-    raw_url = Unicode('').tag(config = True)
-    user = Unicode('').tag(config = True)
+    raw_url = Unicode().tag(config = True)
+    user = Unicode().tag(config = True)
     from_date = Instance(datetime, (2003, 1, 1))
     var_code = Unicode('', help='Field to fetch, e.g. ta_c.').tag(config = True)
     raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.')
@@ -122,6 +125,7 @@ class Field(Application):
         if self.raw and self.cli_config != {}:
             raise Exception('Raw saving not supported yet in command-line mode.')
         if fields_table is None:
+            print('Using field table from file {}'.format(self.config.Meta.file_name))
             fields_table = pd.read_hdf(self.config.Meta.file_name, 'fields').xs(self.var_code, 0, 'field', False)
         with tqdm(total = fields_table.shape[0]) as prog:
             with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
@@ -135,22 +139,21 @@ class Field(Application):
         if self.cli_config != {}:
             with pd.HDFStore(self.file_name, 'a') as S:
                 S[self.var_code] = data
-            self.log.log(0, 'Field %s fetched and saved in file %s', self.var_code, self.file_name)
+            print('Field {} fetched and saved in file {}'.format(self.var_code, self.file_name))
         else:
             return data
 
     def _get(self, f, prog, from_date):
         k = f[0][2]
-        if k in from_date:
-            from_date = from_date[k]
-        for d in (from_date, )
+        try:
+            from_date = from_date[f[0][0]] # updating: field exists in old data
+        except: pass
+        if from_date != from_date: # if Nat
+            from_date = pd.Timestamp(f[1]['first']) # updating: earliest record from meta
         try:
             v = from_date.strftime('%Y-%m-%d')
         except:
-            v = pd.Timestamp(f[1]['first']).strftime('%Y-%m-%d')
-
-        if v != v:
-            v = self.from_date.strftime('%Y-%m-%d') 
+            v = self.from_date.strftime('%Y-%m-%d') # last resort: global Field.from_date
 
         try:
             df = self.fetch_raw(f[0][2], v) if self.raw else self.fetch_aggr(f[0][2], v)
@@ -177,7 +180,7 @@ class Field(Application):
             'valor_nan': 'nan',
             'user': self.user,
             's_cod': code,
-            'fecha_inicio': from_date.strftime('%Y-%m-%d'),
+            'fecha_inicio': from_date,
             'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
         }
         for trial in range(self.parent.trials):
@@ -197,7 +200,7 @@ class Field(Application):
         raise TrialsExhaustedError()
 
     def fetch_raw(self, code, from_date):
-        params = {'fi': from_date.strftime('%Y-%m-%d'),
+        params = {'fi': from_date,
                   'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
                   's_cod': code}
         for trial in range(self.parent.trials):
@@ -231,7 +234,7 @@ class Meta(Application):
     field_index = Instance(slice, (0, 2))
     field_data = Instance(slice, (2, 6))
     station = Dict().tag(config = True)
-    file_name = Unicode('').tag(config = True)
+    file_name = Unicode().tag(config = True)
     get_fields = Bool(True).tag(config = True)
 
     aliases = Dict({'f': 'Meta.file_name', 'log_level': 'Application.log_level'})
@@ -318,36 +321,59 @@ class Meta(Application):
         print("CEAZAMet station metadata saved in file {}.".format(self.file_name))
 
 class Update(Application):
-    overlap = Instance(timedelta, kw={'days': 1}).tag(config = True)
+    overlap = Instance(timedelta, kw={'days': 30}).tag(config = True)
+    file_name = Unicode().tag(config = True)
+    overwrite = Bool(True).tag(config = True)
 
     aliases = Dict({'v': 'Field.var_code',
                     'f': 'Field.file_name',
                     'm': 'Meta.file_name',
+                    'u': 'Update.file_name',
                     'log_level': 'Application.log_level'})
-    flags = Dict({'r': ({'Field': {'raw': True}}, "set raw=True")})
+    flags = Dict({'r': ({'Field': {'raw': True}}, "set raw=True"),
+                  'n': ({'Update': {'overwrite': False}}, "Always use Update.file_name to save updated data.")})
 
     def start(self):
-        old_data  = pd.read_hdf(self.config.Field.file_name, self.config.Field.var_code)
-        old_codes = old_data.columns.get_level_values('sensor_code')
         sta, flds = self.parent.get_meta()
         fields_table = flds.xs(self.config.Field.var_code, 0, 'field', False)
-        new_codes = fields_table.index.get_level_values('sensor_code').symmetric_difference(old_codes)
-        from_date = {k[2]: v - self.overlap for k, v in
-                     old_data.apply(lambda c: c.dropna().index.max()).iteritems()}
+        old_data  = pd.read_hdf(self.config.Field.file_name, self.config.Field.var_code)
+        latest = old_data.drop('data_pc', 1, 'aggr').apply(lambda c: c.dropna().index.max()).min(0, level='station')
+        # stopped = (sta['last'].astype('datetime64') - datetime.utcnow() + timedelta(hours=4) < - self.overlap)
+        from_date = {k: v - self.overlap for k, v in latest.iteritems()}
+        # new_codes = fields_table.index.get_level_values('sensor_code').symmetric_difference(old_codes)
+        # old_codes = old_data.columns.get_level_values('sensor_code')
 
         data = self.parent.get_data(None, fields_table, from_date)
-        print(data.shape)
+        data.update(old_data, overwrite = False)
 
         with pd.HDFStore(self.config.Meta.file_name) as S:
             S['stations'] = sta
             S['fields'] = flds
+            print('Meta data file {} updated.'.format(self.config.Meta.file_name))
+
+        ts = (datetime.utcnow() - timedelta(hours=4))
+        if data.shape[1] == old_data.shape[1]:
+            try:
+                c = Compare(old_data, data)
+            except AssertionError:
+                self.log.warn('%s: data_pc values between 1 and 99 encountered', ts)
+            if len(c.s) > 0:
+                self.log.warn('%s: CEAZA.Compare found differing data values', ts)
+            elif self.overwrite:
+                self.file_name = self.config.Field.file_name
+        else:
+            self.log.warn('%s: data shape mismatch old %s | new %s', ts, old_data.shape[1], data.shape[1])
+
+        with pd.HDFStore(self.file_name) as N:
+            N[self.config.Field.var_code] = data
+            print('Updated DataFrame {} saved in file {}.'.format(self.config.Field.var_code, self.file_name))
 
 class CEAZAMet(Application):
     """Class to download data from CEAZAMet webservice. Main reason for having a class is
     to be able to reference the data (CEAZAMet.data) in case something goes wrong at some point.
 
     """
-    url = Unicode('').tag(config = True)
+    url = Unicode().tag(config = True)
 
     subcommands = Dict({'meta': (Meta, 'get stations and field metadata'),
                         'data': (Field, 'get one field from all stations'),
@@ -397,6 +423,53 @@ class CEAZAMet(Application):
         if raw is not None: app.raw = raw
         return app.start(fields_table, from_date)
 
+class Compare(object):
+    """Compare two CEAZAMet station data DataFrames of one single field (e.g. ta_c).
+
+    :param a: older DataFrame
+    :type a: :class:`~pandas.DataFrame`
+    :param b: newer DataFrame
+    :type b: :class:`~pandas.DataFrame`
+
+    """
+    def __init__(self, a, b):
+        ft = import_module('functools')
+        # just checking that data_pc is all 0 or 100
+        assert(not any([(lambda c: np.any((c==c) & (c!=0) & (c!=100)))(c.xs('data_pc', 1, 'aggr')) for c in [a, b]]))
+
+        self.a, self.b = [c.drop('data_pc', 1, 'aggr') for c in [a, b]]
+        x = (lambda d: (d == d) & (d != 0))(self.a - self.b)
+        # locations where any of the non-data_pc aggr levels are not equal to old data
+        self.x = ft.reduce(np.add, [x.xs(a, 1, 'aggr') for a in x.columns.get_level_values('aggr').unique()])
+
+        # stations where not only the last timestamp of old data differs from new data
+        z = self.x.apply(lambda c: c.index[c].max() - c.index[c].min(), 0)
+        self.s = z[(z == z) & (z > pd.Timedelta(0))]
+        print('\nSizes: a {} | b {}\n'.format(a.shape, b.shape))
+        if len(self.s) > 0:
+            print(self.s)
+
+    def plot(self, stations=None, dt=pd.Timedelta(1, 'D')):
+        """Produce overview plot of the differences between the DataFrames.
+
+        :param stations: if too many stations have differences (self.s), plot only a slice
+        :type stations: :obj:`slice` or :obj:`None`
+        :param dt: timedelta to include on either side of the earliest and latest differing record
+        :type dt: :class:`pandas.Timedelta`
+
+        """
+        plt = import_module('matplotlib.pyplot')
+        sta = self.s.index if stations is None else self.s.index[stations]
+        fig, axs = plt.subplots(len(sta), 1)
+        for i, ax in zip(sta, axs):
+            x, y, z = [j.xs(i[2], 1, 'sensor_code') for j in [self.a, self.b, self.x]]
+            d = z.index[z.values.flatten()]
+            a, b = d.min() - dt, d.max() + dt
+            for idx, c in y.iteritems():
+                pl = ax.plot(c.loc[a: b], label=idx[-1])[0]
+                ax.plot(x.xs(idx[-1], 1, 'aggr').loc[d], 'x', color=pl.get_color())
+                ax.vlines(d, *ax.get_ylim(), color='r', label='_')
+        plt.legend()
 
 if __name__ == '__main__':
     app = CEAZAMet()
