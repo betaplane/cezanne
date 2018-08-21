@@ -66,8 +66,6 @@ or to redirect to a file::
 
     * save raw data (filename = field_code, tablename = station_code)
     * rework printed info (log?)
-    * update functionality:
-        * check for stations that don't have new data (last < today) <- or maybe not, seems less important
 
 """
 import requests, csv, os, sys

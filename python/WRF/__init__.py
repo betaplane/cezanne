@@ -1,4 +1,6 @@
 """
+.. _netCDF4: http://unidata.github.io/netcdf4-python/
+
 .. automodule:: python.WRF.WRF_threaded
     :members:
 
@@ -8,15 +10,13 @@
 .. automodule:: python.WRF.tests
     :members:
 
-.. _netCDF4: http://unidata.github.io/netcdf4-python/
-
 """
 import pandas as pd
 import numpy as np
 import os
 from glob import glob
 from traitlets.config import Application
-from traitlets import List, Integer, Unicode
+from traitlets import List, Integer, Unicode, Bool, Instance
 from functools import partial
 from importlib import import_module
 
@@ -69,6 +69,9 @@ class WRFiles(Application):
                         break
         dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
         self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+
+        assert len(self.dirs) > 0, "no directories added"
+        self.log.info("WRFiles initialized with %s directories.", len(self.dirs))
 
     @staticmethod
     def _name(domain, lead_day, prefix, d):
