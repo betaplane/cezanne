@@ -21,15 +21,11 @@ Tests in this module should work with both versions of the WRF-Concatenator.
     The multiple inheritance of :class:`WRFTests` might be a problem in the future. Currently it seems that unittest, when run with the idiom ``python -m unittest WRF.tests``, calls :meth:`WRFTests.__init__` with the test method name as argument. If :class:`traitlets.config.Application` command line switches can be used I'm not sure at this point.
 
 """
-import unittest, re, os
+import unittest, re
 import xarray as xr
-import numpy as np
-import sys, os
-from importlib import import_module
+import sys
 from importlib.util import find_spec
-from data import interpolate
-from traitlets.config import Application
-from traitlets import Unicode
+from . import *
 
 if find_spec('mpi4py'):
     MPI = import_module('mpi4py.MPI')
@@ -37,26 +33,21 @@ if find_spec('mpi4py'):
 else:
     WRF = import_module('.WRF_threaded', 'WRF')
 
-interpolator = 'scipy'
-"""which interpolator to use (see :mod:`.interpolate`)"""
-
-n_proc = 3
-"""Number of processors to use for the test"""
-
 
 # xarray.testing methods compare dimensions etc too, which we don't want here
 class WRFTests(Application, unittest.TestCase):
-    file_name = Unicode().tag(config=True)
+    test_dir = Unicode().tag(config=True)
+
+    interpolator = Unicode('scipy').tag(config=True)
+    """which interpolator to use (see :mod:`.interpolate`)"""
+
+    n_proc = Integer(3).tag(config=True)
+    """Number of processors to use for the test"""
+
     def __init__(self, *args, **kwargs):
-        Application.__init__(self)
+        Application.__init__(self, **{k: kwargs.pop(k, None) for k in ['parent', 'config']})
         unittest.TestCase.__init__(self, *args, **kwargs)
         self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
-
-    @classmethod
-    def setUpClass(cls):
-        if 'mpi4py.MPI' not in sys.modules:
-            cls.cc = WRF.Concatenator('d03', interpolator=interpolator)
-            cls.cc.dirs = [d for d in cls.cc.dirs if re.search('c01_2016120[1-3]', d)]
 
     @classmethod
     def tearDownClass(cls):
@@ -78,16 +69,22 @@ class WRFTests(Application, unittest.TestCase):
         comm.Disconnect()
 
     def setUp(self):
-        self.test = xr.open_dataset(self.file_name)
-        if not hasattr(self, 'cc'):
+        self.test = xr.open_dataset(
+            os.path.join(self.test_dir, 'WRF_201612_{}.nc'.format(self.__class__.__name__))
+        )
+        if 'mpi4py.MPI' not in sys.modules:
+            self.cc = WRF.Concatenator('d03', interpolator=self.interpolator)
+            self.cc.dirs = [d for d in self.cc.dirs if re.search('c01_2016120[1-3]', d)]
+        else:
             self.comm =  MPI.COMM_SELF.Spawn(sys.executable,
-                ['-c', 'from data import tests;tests.WRFTests.run_concat("{}")'.format(interpolator)],
+                ['-c', 'from data import tests;tests.WRFTests.run_concat("{}")'.format(self.interpolator)],
                                          maxprocs=n_proc)
 
     def tearDown(self):
         if hasattr(self, 'comm'):
             self.comm.Disconnect()
         self.data.close()
+        self.test.close()
 
     def run_util(self, **kwargs):
         if hasattr(self, 'comm'):
@@ -100,62 +97,51 @@ class WRFTests(Application, unittest.TestCase):
 
 class T2_all(WRFTests):
     def test_whole_domain(self):
-        tr = ('start', 'Time', 'south_north', 'west_east')
         self.run_util(variables='T2')
-        np.testing.assert_allclose(
-            self.data['T2'].transpose(*tr),
-            self.test['field'].transpose(*tr))
+        test_data = self.test['field']
+        np.testing.assert_allclose(self.data['T2'].transpose(*test_data.dims), test_data)
 
     def test_interpolated(self):
         self.run_util(variables='T2', interpolate=True)
-        np.testing.assert_allclose(
-            self.data['T2'].transpose('start', 'Time', 'station'),
-            self.test['interp'].transpose('start', 'Time', 'station'), rtol=1e-3)
+        test_data = self.test['interp']
+        data = self.data['T2'].transpose(*test_data.dims).sel(station=test_data.station)
+        np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
 class T2_lead1(WRFTests):
     def test_whole_domain(self):
-        tr = ('Time', 'south_north', 'west_east')
         self.run_util(variables='T2', lead_day=1)
-        np.testing.assert_allclose(
-            self.data['T2'].transpose(*tr),
-            self.test['field'].transpose(*tr))
+        test_data = self.test['field']
+        np.testing.assert_allclose(self.data['T2'].transpose(*test_data.dims), test_data)
 
     def test_interpolated(self):
-        tr = ('Time', 'station')
         self.run_util(variables='T2', lead_day=1, interpolate=True)
-        np.testing.assert_allclose(
-            self.data['T2'].transpose(*tr),
-            self.test['interp'].transpose(*tr), rtol=1e-4)
+        test_data = self.test['interp']
+        data = self.data['T2'].transpose(*test_data.dims).sel(station=test_data.station)
+        np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
 class T_all(WRFTests):
     def test_whole_domain(self):
-        tr = ('start', 'Time', 'bottom_top', 'south_north', 'west_east')
         self.run_util(variables='T')
-        np.testing.assert_allclose(
-            self.data['T'].transpose(*tr),
-            self.test['field'].transpose(*tr))
+        test_data = self.test['field']
+        np.testing.assert_allclose(self.data['T'].transpose(*test_data.dims), test_data)
 
     def test_interpolated(self):
-        tr = ('start', 'Time', 'bottom_top', 'station')
         self.run_util(variables='T', interpolate=True)
-        np.testing.assert_allclose(
-            self.data['T'].transpose(*tr),
-            self.test['interp'].transpose(*tr), rtol=1e-3)
+        test_data = self.test['interp']
+        data = self.data['T'].transpose(*test_data.dims).sel(station=test_data.station)
+        np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
 class T_lead1(WRFTests):
     def test_whole_domain(self):
-        tr = ('Time', 'bottom_top', 'south_north', 'west_east')
         self.run_util(variables='T', lead_day=1)
-        np.testing.assert_allclose(
-            self.data['T'].transpose(*tr),
-            self.test['field'].transpose(*tr))
+        test_data = self.test['field']
+        np.testing.assert_allclose(self.data['T'].transpose(*test_data.dims), test_data)
 
     def test_interpolated(self):
-        tr = ('Time', 'bottom_top', 'station')
         self.run_util(variables='T', lead_day=1, interpolate=True)
-        np.testing.assert_allclose(
-            self.data['T'].transpose(*tr),
-            self.test['interp'].transpose(*tr), rtol=1e-3)
+        test_data = self.test['interp']
+        data = self.data['T'].transpose(*test_data.dims).sel(station=test_data.station)
+        np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
 
 runner = unittest.TextTestRunner()
