@@ -15,7 +15,7 @@ Example Usage::
     * Data for the tests is in the same directory as this file
     * Test are run e.g. by::
 
-        python -m unittest data.WRF.Tests
+        python -m unittest WRF.tests
 
 .. warning::
 
@@ -28,7 +28,6 @@ Example Usage::
 
 """
 
-import re, unittest
 import xarray as xr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
@@ -116,7 +115,7 @@ class Concatenator(WRFiles):
     def concat(self, variables, interpolate=None, lead_day=None, func=None):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`. If ``lead_day`` is given, only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If ``lead_day`` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
-        :param var: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
+        :param variables: Name of variable to extract. Can be an iterable if several variables are to be extracted at the same time).
         :param interpolate: Whether or not to interpolate to station locations (see :class:`.Concatenator`).
         :type interpolated: :obj:`bool`
         :param lead_day: Lead day of the forecast for which to search, if only one particular lead day is desired.

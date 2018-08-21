@@ -328,7 +328,7 @@ class Update(Application):
     aliases = Dict({'v': 'Field.var_code',
                     'f': 'Field.file_name',
                     'm': 'Meta.file_name',
-                    'u': 'Update.file_name',
+                    'o': 'Update.file_name',
                     'log_level': 'Application.log_level'})
     flags = Dict({'r': ({'Field': {'raw': True}}, "set raw=True"),
                   'n': ({'Update': {'overwrite': False}}, "Always use Update.file_name to save updated data.")})

@@ -16,6 +16,10 @@ The module-level variable :data:`n_proc` can be changed (default is 3)  to test 
 
 Tests in this module should work with both versions of the WRF-Concatenator.
 
+.. NOTE::
+
+    The multiple inheritance of :class:`WRFTests` might be a problem in the future. Currently it seems that unittest, when run with the idiom ``python -m unittest WRF.tests``, calls :meth:`WRFTests.__init__` with the test method name as argument. If :class:`traitlets.config.Application` command line switches can be used I'm not sure at this point.
+
 """
 import unittest, re, os
 import xarray as xr
@@ -24,15 +28,14 @@ import sys, os
 from importlib import import_module
 from importlib.util import find_spec
 from data import interpolate
-from traitlets.config.loader import PyFileConfigLoader
-
-config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+from traitlets.config import Application
+from traitlets import Unicode
 
 if find_spec('mpi4py'):
     MPI = import_module('mpi4py.MPI')
-    WRF = import_module('.WRF_mpi', 'data')
+    WRF = import_module('.WRF_mpi', 'WRF')
 else:
-    WRF = import_module('.WRF_threaded', 'data')
+    WRF = import_module('.WRF_threaded', 'WRF')
 
 interpolator = 'scipy'
 """which interpolator to use (see :mod:`.interpolate`)"""
@@ -42,11 +45,17 @@ n_proc = 3
 
 
 # xarray.testing methods compare dimensions etc too, which we don't want here
-class WRFTests(unittest.TestCase):
+class WRFTests(Application, unittest.TestCase):
+    file_name = Unicode().tag(config=True)
+    def __init__(self, *args, **kwargs):
+        Application.__init__(self)
+        unittest.TestCase.__init__(self, *args, **kwargs)
+        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+
     @classmethod
     def setUpClass(cls):
         if 'mpi4py.MPI' not in sys.modules:
-            cls.cc = WRF.Concatenator('d03', interpolator=cls.interpolator)
+            cls.cc = WRF.Concatenator('d03', interpolator=interpolator)
             cls.cc.dirs = [d for d in cls.cc.dirs if re.search('c01_2016120[1-3]', d)]
 
     @classmethod
@@ -69,6 +78,7 @@ class WRFTests(unittest.TestCase):
         comm.Disconnect()
 
     def setUp(self):
+        self.test = xr.open_dataset(self.file_name)
         if not hasattr(self, 'cc'):
             self.comm =  MPI.COMM_SELF.Spawn(sys.executable,
                 ['-c', 'from data import tests;tests.WRFTests.run_concat("{}")'.format(interpolator)],
@@ -89,11 +99,6 @@ class WRFTests(unittest.TestCase):
             self.data = self.cc.data
 
 class T2_all(WRFTests):
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls.test = xr.open_dataset(config['tests']['T2_all'])
-
     def test_whole_domain(self):
         tr = ('start', 'Time', 'south_north', 'west_east')
         self.run_util(variables='T2')
@@ -108,11 +113,6 @@ class T2_all(WRFTests):
             self.test['interp'].transpose('start', 'Time', 'station'), rtol=1e-3)
 
 class T2_lead1(WRFTests):
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls.test = xr.open_dataset(config['tests']['T2_lead1'])
-
     def test_whole_domain(self):
         tr = ('Time', 'south_north', 'west_east')
         self.run_util(variables='T2', lead_day=1)
@@ -128,11 +128,6 @@ class T2_lead1(WRFTests):
             self.test['interp'].transpose(*tr), rtol=1e-4)
 
 class T_all(WRFTests):
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls.test = xr.open_dataset(config['tests']['T_all'])
-
     def test_whole_domain(self):
         tr = ('start', 'Time', 'bottom_top', 'south_north', 'west_east')
         self.run_util(variables='T')
@@ -148,11 +143,6 @@ class T_all(WRFTests):
             self.test['interp'].transpose(*tr), rtol=1e-3)
 
 class T_lead1(WRFTests):
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls.test = xr.open_dataset(config['tests']['T_lead1'])
-
     def test_whole_domain(self):
         tr = ('Time', 'bottom_top', 'south_north', 'west_east')
         self.run_util(variables='T', lead_day=1)
