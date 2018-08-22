@@ -111,7 +111,9 @@ class Field(Application):
     from_date = Instance(datetime, (2003, 1, 1))
     var_code = Unicode('', help='Field to fetch, e.g. ta_c.').tag(config = True)
     raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.')
+
     file_name = Unicode('', help='Data file name.').tag(config = True)
+    """DataFrame with station locations (as returned by a call to :meth:`.get_stations`)."""
 
     aliases = Dict({'v': 'Field.var_code',
                     'f': 'Field.file_name',

@@ -1,10 +1,10 @@
 """
 .. _netCDF4: http://unidata.github.io/netcdf4-python/
 
-.. automodule:: python.WRF.WRF_threaded
+.. automodule:: python.WRF.threads
     :members:
 
-.. automodule:: python.WRF.WRF_mpi
+.. automodule:: python.WRF.MPI
     :members:
 
 .. automodule:: python.WRF.tests
@@ -22,7 +22,7 @@ from importlib import import_module
 
 
 def align_stations(wrf, df):
-    """Align :class:`~pandas.DataFrame` with station data (as produced by :class:`.CEAZA.Downloader`) with a concatenated (and interpolated to station locations) netCDF file as produced by :class:`.Concatenator`. For now, works with a single field.
+    """Align :class:`~pandas.DataFrame` with station data (as produced by :class:`.CEAZA.CEAZAMet`) with a concatenated (and interpolated to station locations) netCDF file as produced by this packages concatenators (:class:`threads.Concatenator`, :class:`MPI.Concatenator`). For now, works with a single field.
 
     :param wrf: The DataArray or Dataset containing the concatenated and interpolated (to station locations) WRF simulations (only dimensions ``start`` and ``Time`` and coordinate ``XTIME`` are used).
     :type wrf: :class:`~xarray.DataArray` or :class:`~xarray.Dataset`
@@ -42,13 +42,27 @@ def align_stations(wrf, df):
                      coords = [wrf.coords['start'], wrf.coords['Time'], ('station', cols)])
 
 class WRFiles(Application):
-    """Class which mimics the way :class:`.Concatenator` retrieves the files to concatenate given the :class:`traitlets.config.Application` configuration.
+    """Base class for the WRF-file concatenators in this package (:mod:`.threads` and :mod:`.MPI`). It retrieves the original WRF output files and is configured/run via the :class:`traitlets.config.Application`  interface.
 
     """
 
     paths = List(help="list of paths where WRFOUT files can be found").tag(config = True)
+    """List of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs."""
+
     directory_pattern = Unicode('c01_*', help="").tag(config = True)
+    """Glob pattern for the directory names (e.g. ``c01_*``)"""
+
     wrfout_prefix = Unicode('wrfout').tag(config = True)
+    """Prefix of the WRF output files (e.g. ``wrfout``)."""
+
+    hour = Integer().tag(config = True)
+    """Hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired."""
+
+    from_date = Unicode().tag(config = True)
+    """From what date onwards to search (only simulation start dates), if a start date is desired (as %Y%m%d :obj:`str`)."""
+
+    domain = Unicode('d03').tag(config=True)
+    """Which of the WRF domains (e.g. ``d03``) to use."""
 
     aliases = {'m': 'Meta.file_name'}
 
@@ -110,3 +124,11 @@ class WRFiles(Application):
         except AttributeError:
             self._stations = pd.read_hdf(self.config.Meta.file_name, 'stations')
             return self._stations
+
+    @property
+    def file_glob(self):
+        try:
+            return self._file_glob
+        except AttributeError:
+            self._file_glob = '{}_{}_*'.format(self.wrfout_prefix, self.domain)
+            return self._file_glob

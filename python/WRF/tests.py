@@ -29,9 +29,9 @@ from . import *
 
 if find_spec('mpi4py'):
     MPI = import_module('mpi4py.MPI')
-    WRF = import_module('.WRF_mpi', 'WRF')
+    WRF = import_module('.MPI', 'WRF')
 else:
-    WRF = import_module('.WRF_threaded', 'WRF')
+    WRF = import_module('.threads', 'WRF')
 
 
 # xarray.testing methods compare dimensions etc too, which we don't want here
