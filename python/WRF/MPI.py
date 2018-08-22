@@ -14,20 +14,13 @@ Example Usage::
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
 
 """
-from glob import glob, os
-import pandas as pd
-import numpy as np
 from mpi4py import MPI
 from netCDF4 import Dataset, MFDataset, num2date, date2num
 from datetime import datetime, timedelta
-from functools import partial
-from importlib import import_module
-from traitlets.config.loader import PyFileConfigLoader
-
-config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+from WRF import *
 
 
-class Concatenator(object):
+class Concatenator(WRFiles):
     """WRFOUT file concatenator (MPI version), for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
 
     :param domain: Domain specifier for which to search among WRFOUT-files.
@@ -39,7 +32,7 @@ class Concatenator(object):
     :param interpolator: Which interpolator (if any) to use: ``scipy`` - use :class:`~.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~.interpolate.BilinearInterpolator`.
 
     """
-    time_units = 'minutes since 2015-01-01 00:00:00'
+    time_units = Unicode('minutes since 2015-01-01 00:00:00').tag(config=True)
     time_type = np.float64
 
     def __init__(self, domain, paths=None, hour=None, from_date=None, stations=None, interpolator='scipy', prefix='wrfout', dt=-4):

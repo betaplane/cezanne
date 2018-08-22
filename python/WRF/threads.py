@@ -3,11 +3,18 @@
 WRFOUT concatenation (xarray version)
 -------------------------------------
 
-Example Usage::
+Usage
+=====
+
+The following invocations are equivalent. From a python script / REPL::
 
     from data import WRF
-    w = WRF.Concatenator(domain='d03', interpolator='bilinear')
-    w.start('T2-PSFC', var=['T2', 'PSFC'], interpolate=True)
+    w = WRF.Concatenator(variables='T2', outfile='T2', domain='d03', interpolator='bilinear', interpolate=True)
+    w.start()
+
+From the command line::
+
+    ./threads.py -v T2 -o T2 -d 'd03' --Concatenator.interpolator='bilinear' -i
 
 `Help <https://traitlets.readthedocs.io/en/stable/config.html#subcommands>`_ can be obtained via::
 
@@ -78,7 +85,7 @@ class Concatenator(WRFiles):
     """Which interpolator (if any) to use: ``scipy`` - use :class:`~data.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~data.interpolate.BilinearInterpolator`."""
 
     outfile = Unicode('out.nc').tag(config=True)
-    """Base name of the output netCDF file (no extension, numberings are added in case of restarts, in the form '_part#' where # is the number). Defaults to the :attr:`outfile` trait which can be set by command line ('-o' flag) and config."""
+    """Base name of the output netCDF file (**no extension**, numberings are added in case of restarts, in the form '_part#' where # is the number). Defaults to the :attr:`outfile` trait which can be set by command line ('-o' flag) and config."""
 
     write_interval = Integer(73).tag(config=True) # 365 / 73 = 5
     """The number of input directories to process before triggering a write-out to file (only applicable if using :meth:`start` or :meth:`concat` with argument ``interval=True``)."""
@@ -100,8 +107,7 @@ class Concatenator(WRFiles):
 
     aliases = {'d': 'Concatenator.domain',
                'o': 'Concatenator.outfile',
-               'v': 'Concatenator.variables',
-               'p': 'Concatenator.prev_file'}
+               'v': 'Concatenator.variables'}
 
     flags = {'i': ({'Concatenator': {'interpolate': True}}, "interpolate to station locations")}
 
