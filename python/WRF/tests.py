@@ -21,6 +21,7 @@ Tests in this module should work with both versions of the WRF-Concatenator.
     The multiple inheritance of :class:`WRFTests` might be a problem in the future. Currently it seems that unittest, when run with the idiom ``python -m unittest WRF.tests``, calls :meth:`WRFTests.__init__` with the test method name as argument. If :class:`traitlets.config.Application` command line switches can be used I'm not sure at this point.
 
 """
+__package__ = 'WRF'
 import unittest, re
 import xarray as xr
 import sys
@@ -30,8 +31,10 @@ from . import *
 if find_spec('mpi4py'):
     MPI = import_module('mpi4py.MPI')
     WRF = import_module('.MPI', 'WRF')
+    rank = MPI.COMM_WORLD.Get_rank()
 else:
     WRF = import_module('.threads', 'WRF')
+    rank = -1
 
 
 # xarray.testing methods compare dimensions etc too, which we don't want here
@@ -44,10 +47,16 @@ class WRFTests(Application, unittest.TestCase):
     n_proc = Integer(3).tag(config=True)
     """Number of processors to use for the test"""
 
+    init_dict = {}
+
     def __init__(self, *args, **kwargs):
-        Application.__init__(self, **{k: kwargs.pop(k, None) for k in ['parent', 'config']})
+        Application.__init__(self, **{k: kwargs.pop(k, self.init_dict.get(k, None))
+                                      for k in ['parent', 'config']})
         unittest.TestCase.__init__(self, *args, **kwargs)
-        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+        if len(self.config) == 0:
+            try:
+                self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+            except: pass
 
     @classmethod
     def tearDownClass(cls):
@@ -61,7 +70,7 @@ class WRFTests(Application, unittest.TestCase):
         comm = MPI.Comm.Get_parent()
         kwargs = None
         kwargs = comm.bcast(kwargs, root=0)
-        cc = WRF.Concatenator('d03', interpolator=interpolator)
+        cc = WRF.Concatenator(domain='d03', interpolator=self.interpolator)
         if cc.rank == 0:
             cc.dirs = [d for d in cc.dirs if re.search('c01_2016120[1-3]', d)]
         cc.concat(**kwargs)
@@ -69,90 +78,103 @@ class WRFTests(Application, unittest.TestCase):
         comm.Disconnect()
 
     def setUp(self):
-        self.test = xr.open_dataset(
-            os.path.join(self.test_dir, 'WRF_201612_{}.nc'.format(self.__class__.__name__))
-        )
-        if 'mpi4py.MPI' not in sys.modules:
-            self.cc = WRF.Concatenator('d03', interpolator=self.interpolator)
-            self.cc.dirs = [d for d in self.cc.dirs if re.search('c01_2016120[1-3]', d)]
-        else:
-            self.comm =  MPI.COMM_SELF.Spawn(sys.executable,
-                ['-c', 'from data import tests;tests.WRFTests.run_concat("{}")'.format(self.interpolator)],
-                                         maxprocs=n_proc)
+        if rank < 1:
+            self.test = xr.open_dataset(
+                os.path.join(self.test_dir, 'WRF_201612_{}.nc'.format(self.__class__.__name__))
+            )
+        self.cc = WRF.Concatenator(domain='d03', outfile='out.nc', config=self.config)
+        print(self.cc.config)
+        self.cc.dirs = [d for d in self.cc.dirs if re.search('c01_2016120[1-3]', d)]
 
     def tearDown(self):
-        if hasattr(self, 'comm'):
-            self.comm.Disconnect()
         self.data.close()
         self.test.close()
 
     def run_util(self, **kwargs):
-        if hasattr(self, 'comm'):
-            self.comm.bcast(kwargs, root=MPI.ROOT)
-            self.comm.barrier()
-            self.data = xr.open_dataset('out.nc')
-        else:
-            self.cc.concat(**kwargs)
+        return None
+        for k, v in kwargs.items():
+            setattr(self.cc, k, v)
+        if rank == -1:
+            self.cc.concat()
             self.data = self.cc.data
+        else:
+            self.cc.start()
+            self.cc.comm.barrier()
+        if rank == 0:
+            self.data = xr.open_dataset('out.nc')
+
+    def start(self):
+        self.init_dict = {'config': self.config}
+        suite = unittest.defaultTestLoader.loadTestsFromName('WRF.tests')
+        runner = unittest.TextTestRunner(sys.stderr)
+        runner.run(suite)
 
 class T2_all(WRFTests):
     def test_whole_domain(self):
         self.run_util(variables='T2')
-        test_data = self.test['field']
-        np.testing.assert_allclose(self.data['T2'].transpose(*test_data.dims), test_data)
+        if rank == 0:
+            test_data = self.test['field']
+            np.testing.assert_allclose(self.data['T2'].transpose(*test_data.dims), test_data)
 
     def test_interpolated(self):
         self.run_util(variables='T2', interpolate=True)
-        test_data = self.test['interp']
-        data = self.data['T2'].transpose(*test_data.dims).sel(station=test_data.station)
-        np.testing.assert_allclose(data, test_data, rtol=1e-3)
+        if rank == 0:
+            test_data = self.test['interp']
+            data = self.data['T2'].transpose(*test_data.dims).sel(station=test_data.station)
+            np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
 class T2_lead1(WRFTests):
     def test_whole_domain(self):
         self.run_util(variables='T2', lead_day=1)
-        test_data = self.test['field']
-        np.testing.assert_allclose(self.data['T2'].transpose(*test_data.dims), test_data)
+        if rank == 0:
+            test_data = self.test['field']
+            np.testing.assert_allclose(self.data['T2'].transpose(*test_data.dims), test_data)
 
     def test_interpolated(self):
         self.run_util(variables='T2', lead_day=1, interpolate=True)
-        test_data = self.test['interp']
-        data = self.data['T2'].transpose(*test_data.dims).sel(station=test_data.station)
-        np.testing.assert_allclose(data, test_data, rtol=1e-3)
+        if rank == 0:
+            test_data = self.test['interp']
+            data = self.data['T2'].transpose(*test_data.dims).sel(station=test_data.station)
+            np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
 class T_all(WRFTests):
     def test_whole_domain(self):
         self.run_util(variables='T')
-        test_data = self.test['field']
-        np.testing.assert_allclose(self.data['T'].transpose(*test_data.dims), test_data)
+        if rank == 0:
+            test_data = self.test['field']
+            np.testing.assert_allclose(self.data['T'].transpose(*test_data.dims), test_data)
 
     def test_interpolated(self):
         self.run_util(variables='T', interpolate=True)
-        test_data = self.test['interp']
-        data = self.data['T'].transpose(*test_data.dims).sel(station=test_data.station)
-        np.testing.assert_allclose(data, test_data, rtol=1e-3)
+        if rank == 0:
+            test_data = self.test['interp']
+            data = self.data['T'].transpose(*test_data.dims).sel(station=test_data.station)
+            np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
 class T_lead1(WRFTests):
     def test_whole_domain(self):
         self.run_util(variables='T', lead_day=1)
-        test_data = self.test['field']
-        np.testing.assert_allclose(self.data['T'].transpose(*test_data.dims), test_data)
+        if rank == 0:
+            test_data = self.test['field']
+            np.testing.assert_allclose(self.data['T'].transpose(*test_data.dims), test_data)
 
     def test_interpolated(self):
         self.run_util(variables='T', lead_day=1, interpolate=True)
-        test_data = self.test['interp']
-        data = self.data['T'].transpose(*test_data.dims).sel(station=test_data.station)
-        np.testing.assert_allclose(data, test_data, rtol=1e-3)
+        if rank == 0:
+            test_data = self.test['interp']
+            data = self.data['T'].transpose(*test_data.dims).sel(station=test_data.station)
+            np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
 
-runner = unittest.TextTestRunner()
+# runner = unittest.TextTestRunner()
 
 # n_proc = 2
 # interpolator = 'bilinear'
 
-T2_suite = unittest.TestSuite()
-T2_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T2_all))
-T2_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T2_lead1))
+# T2_suite = unittest.TestSuite()
+# T2_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T2_all))
+# T2_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T2_lead1))
 
-T_suite = unittest.TestSuite()
-T_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T_all))
-T_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T_lead1))
+# T_suite = unittest.TestSuite()
+# T_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T_all))
+# T_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T_lead1))

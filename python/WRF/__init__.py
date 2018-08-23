@@ -55,7 +55,7 @@ class WRFiles(Application):
     wrfout_prefix = Unicode('wrfout').tag(config = True)
     """Prefix of the WRF output files (e.g. ``wrfout``)."""
 
-    hour = Integer().tag(config = True)
+    hour = Integer(-1).tag(config = True)
     """Hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired."""
 
     from_date = Unicode().tag(config = True)
@@ -66,23 +66,21 @@ class WRFiles(Application):
 
     aliases = {'m': 'Meta.file_name'}
 
-    def __init__(self, *args, paths=None, hour=None, from_date=None, pattern=None, limit=None, **kwargs):
+    def __init__(self, *args, limit=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
 
-        if paths is not None:
-            self.paths = [p for p in paths if os.path.isdir(p)]
+        self.paths = [p for p in self.paths if os.path.isdir(p)]
 
         dirs = []
         for p in self.paths:
-            if not os.path.isdir(p): continue
-            for d in sorted(glob(os.path.join(p, self.directory_pattern if pattern is None else pattern))):
+            for d in sorted(glob(os.path.join(p, self.directory_pattern))):
                 if (os.path.isdir(d) and not os.path.islink(d)):
                     dirs.append(d)
                     if limit is not None and len(dirs) == limit:
                         break
-        dirs = dirs if hour is None else [d for d in dirs if d[-2:] == '{:02}'.format(hour)]
-        self.dirs = dirs if from_date is None else [d for d in dirs if d[-10:-2] >= from_date]
+        dirs = dirs if self.hour == -1 else [d for d in dirs if d[-2:] == '{:02}'.format(self.hour)]
+        self.dirs = dirs if self.from_date == '' else [d for d in dirs if d[-10:-2] >= self.from_date]
 
         assert len(self.dirs) > 0, "no directories added"
         self.log.info("WRFiles initialized with %s directories.", len(self.dirs))
@@ -132,3 +130,10 @@ class WRFiles(Application):
         except AttributeError:
             self._file_glob = '{}_{}_*'.format(self.wrfout_prefix, self.domain)
             return self._file_glob
+
+    def remove_dirs(self, ds):
+        t = ds.indexes['start'] - self.utc_delta # subtraction because we're going in the reverse direction here
+        s = [d.strftime('%Y%m%d%H') for d in t]  # (from modified time in previous_file to original WRFOUT)
+        n = len(self.dirs)
+        self.dirs = [d for d in self.dirs if d[-10:] not in s]
+        self.log.info("%s directories removed.", n - len(self.dirs))

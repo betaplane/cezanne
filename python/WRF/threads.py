@@ -47,21 +47,23 @@ Test are run e.g. by::
 
 .. TODO::
 
-    * better file writing (regularly instead of in case of error) in :meth:`start`
+    * var_list needs to deal with several variables
     * add coordinate to Time?
 
 """
+__package__ = 'WRF' # this solves the relative import from '.' when run as script
 import re
 import xarray as xr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
-from datetime import timedelta
-from WRF import *
+from .concat import *
 
-class Concatenator(WRFiles):
+class Concatenator(CCBase):
     """WRFOUT file concatenator (xarray version), for a specifc forecast lead day or for all data arranged in two temporal dimensions, and with (optional) interpolation to station location.
 
-    If :attr:`lead_day` is given (see below), only the day's data with the given lead is taken from each daily simulation, resulting in a continuous temporal sequence. If :attr:`lead_day` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
+    If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`.
+
+    If :attr:`lead_day` is given (see below), only the day's data with the given lead is taken from each daily simulation, resultng in a continuous temporal sequence. If :attr:`lead_day` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
     An instance of this class is configured via the :class:`traitlets.config.Application` interface, inherited from the :class:`.WRFiles` class in this module. All traitlet-based class/instance attributes (they appear in code as class attributes, but will only have configured values upon instantiation) can be configured via a config file, command-line arguments (see also `CEAZAMet stations webservice`_), or keyword arguments to the ``__init__`` call. (From the command-line, help can be obtained via the flag ``--help`` or ``--help-all``.)
 
@@ -81,51 +83,8 @@ class Concatenator(WRFiles):
     max_workers = Integer(16, help="number of threads to be used").tag(config=True)
     "Maximum number of threads to use."
 
-    interpolator = Unicode('scipy').tag(config=True)
-    """Which interpolator (if any) to use: ``scipy`` - use :class:`~data.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~data.interpolate.BilinearInterpolator`."""
-
-    outfile = Unicode('out.nc').tag(config=True)
-    """Base name of the output netCDF file (**no extension**, numberings are added in case of restarts, in the form '_part#' where # is the number). Defaults to the :attr:`outfile` trait which can be set by command line ('-o' flag) and config."""
-
     write_interval = Integer(73).tag(config=True) # 365 / 73 = 5
     """The number of input directories to process before triggering a write-out to file (only applicable if using :meth:`start` or :meth:`concat` with argument ``interval=True``)."""
-
-    variables = Unicode().tag(config=True)
-    """Name of variable(s) to extract."""
-
-    interpolate = Bool(False).tag(config=True)
-    """Whether or not to interpolate to station locations (see :class:`.Concatenator`)."""
-
-    utc_delta = Instance(timedelta, kw={'hours': -4})
-    """The offset from UTC to be applied to the concatenated data (assuming the original files are in UTC)."""
-
-    lead_day = Integer(-1).tag(config=True)
-    """Lead day of the forecast for which to search, if only one particular lead day is desired. (``-1`` denotes no particular lead day.)"""
-
-    function = Unicode().tag(config=True)
-    """Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>')."""
-
-    aliases = {'d': 'Concatenator.domain',
-               'o': 'Concatenator.outfile',
-               'v': 'Concatenator.variables'}
-
-    flags = {'i': ({'Concatenator': {'interpolate': True}}, "interpolate to station locations")}
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._var_list = [self.variables]
-        self.data = None
-
-    def func(self, value):
-        try:
-            return self._func(value)
-        except AttributeError:
-            if self.function == '':
-                self._func = lambda x: x
-            else:
-                mod, f = os.path.splitext(self.function)
-                self._func = getattr(import_module(mod), f)
-            return self._func(value)
 
     def start(self):
         """Wrapper around the :meth:`.concat` call which writes out a netCDF file whenever an error occurs and restarts with all already processed directories removed from :attr:`.dirs`
@@ -168,13 +127,6 @@ class Concatenator(WRFiles):
         self.data = None
         self.fileno += 1
 
-    def remove_dirs(self, ds):
-        t = ds.indexes['start'] - self.utc_delta # subtraction because we're going in the reverse direction here
-        s = [d.strftime('%Y%m%d%H') for d in t]  # (from modified time in previous_file to original WRFOUT)
-        n = len(self.dirs)
-        self.dirs = [d for d in self.dirs if d[-10:] not in s]
-        self.log.info("%s directories removed.", n - len(self.dirs))
-
     def concat(self, interval=False):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are found from the HDF file specified as :attr:`CEAZA.Meta.file_name`.
 
@@ -207,7 +159,7 @@ class Concatenator(WRFiles):
         try:
             with xr.open_mfdataset(os.path.join(d, self.file_glob)) as ds:
                 print('using: {}'.format(ds.START_DATE))
-                x = ds[self._var_list].sortby('XTIME') # this seems to be at the root of Dask warnings
+                x = ds[self.var_list].sortby('XTIME') # this seems to be at the root of Dask warnings
                 x['XTIME'] = x.XTIME + pd.Timedelta(self.utc_delta)
                 if self.lead_day >= 0:
                     t = x.XTIME.to_index()
@@ -226,7 +178,7 @@ class Concatenator(WRFiles):
                 self.dirs.remove(d)
 
 if __name__ == '__main__':
-    app = Concatenator(variables='T2', outfile='/HPC/arno/data/T2_new')
-    # app = Concatenator()
+    # app = Concatenator(variables='T2', outfile='/HPC/arno/data/T2_new')
+    app = Concatenator()
     app.parse_command_line() # initialize() meant to be overridden
     app.start()
