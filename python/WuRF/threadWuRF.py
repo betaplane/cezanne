@@ -1,35 +1,35 @@
 #!/usr/bin/env python
 """
-WRFOUT concatenation (xarray version)
--------------------------------------
+WRFOUT concatenation (multithreaded xarray version)
+---------------------------------------------------
 
 Usage
 =====
 
 The following invocations are equivalent. From a python script / REPL::
 
-    from data import WRF
-    w = WRF.Concatenator(variables='T2', outfile='T2', domain='d03', interpolator='bilinear', interpolate=True)
+    import WuRF
+    w = WuRF.Concatenator(variables='T2', outfile='T2', domain='d03', interpolator='bilinear', interpolate=True)
     w.start()
 
 From the command line::
 
-    ./threads.py -v T2 -o T2 -d 'd03' --Concatenator.interpolator='bilinear' -i
+    WuRF/threads.py -v T2 -o T2 -d 'd03' --Concatenator.interpolator='bilinear' -i
 
 `Help <https://traitlets.readthedocs.io/en/stable/config.html#subcommands>`_ can be obtained via::
 
-    ./threads.py --help
+    WuRF/threads.py --help
 
 or ``--help-all``.
 
 Test are run e.g. by::
 
-    python -m unittest WRF.tests
+    python -m unittest WuRF.tests
 
 .. NOTE::
 
     * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * Data for the tests can be found in the directory specified by :attr:`tests.WRFTests.test_dir`.
+    * Data for the tests can be found in the directory specified by :attr:`tests.WuRFTests.test_dir`.
     * The :class:`Concatenator` class uses the following attributes and methods from its super:
         * dirs
         * stations / _stations
@@ -51,32 +51,32 @@ Test are run e.g. by::
     * add coordinate to Time?
 
 """
-__package__ = 'WRF' # this solves the relative import from '.' when run as script
+__package__ = 'WuRF' # this solves the relative import from '.' when run as script
 import re
 import xarray as xr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from timeit import default_timer as timer
-from .concat import *
+from .base import *
 
-class Concatenator(CCBase):
+class CC(CCBase):
     """WRFOUT file concatenator (xarray version), for a specifc forecast lead day or for all data arranged in two temporal dimensions, and with (optional) interpolation to station location.
 
     If ``interpolate=True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`.
 
     If :attr:`lead_day` is given (see below), only the day's data with the given lead is taken from each daily simulation, resultng in a continuous temporal sequence. If :attr:`lead_day` is not given, the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
 
-    An instance of this class is configured via the :class:`traitlets.config.Application` interface, inherited from the :class:`.WRFiles` class in this module. All traitlet-based class/instance attributes (they appear in code as class attributes, but will only have configured values upon instantiation) can be configured via a config file, command-line arguments (see also `CEAZAMet stations webservice`_), or keyword arguments to the ``__init__`` call. (From the command-line, help can be obtained via the flag ``--help`` or ``--help-all``.)
+    An instance of this class is configured via the :class:`traitlets.config.Application` interface, inherited from the :class:`.WuRFiles` class in this module. All traitlet-based class/instance attributes (they appear in code as class attributes, but will only have configured values upon instantiation) can be configured via a config file, command-line arguments (see also `CEAZAMet stations webservice`_), or keyword arguments to the ``__init__`` call. (From the command-line, help can be obtained via the flag ``--help`` or ``--help-all``.)
 
     :Keyword arguments:
         Are the same as the :class:`traits <traitlets.TraitType>` described for this class.
 
-    The following :class:`traits <traitlets.TraitType>` are defined on the :class:`.WRFiles` class:
-        * :attr:`~.WRFiles.paths`
-        * :attr:`~.WRFiles.domain`
-        * :attr:`~.WRFiles.hour`
-        * :attr:`~.WRFiles.from_date`
-        * :attr:`~.WRFiles.directory_pattern`
-        * :attr:`~.WRFiles.wrfout_prefix`
+    The following :class:`traits <traitlets.TraitType>` are defined on the :class:`.WuRFiles` class:
+        * :attr:`~.WuRFiles.paths`
+        * :attr:`~.WuRFiles.domain`
+        * :attr:`~.WuRFiles.hour`
+        * :attr:`~.WuRFiles.from_date`
+        * :attr:`~.WuRFiles.directory_pattern`
+        * :attr:`~.WuRFiles.wrfout_prefix`
         * :attr:`data.CEAZA.Meta.file_name`
 
     """
@@ -179,6 +179,6 @@ class Concatenator(CCBase):
 
 if __name__ == '__main__':
     # app = Concatenator(variables='T2', outfile='/HPC/arno/data/T2_new')
-    app = Concatenator()
-    app.parse_command_line() # initialize() meant to be overridden
+    app = CC()
+    app.parse_command_line()
     app.start()

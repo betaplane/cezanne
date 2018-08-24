@@ -1,20 +1,21 @@
+#!/usr/bin/env python
 """
-.. _netCDF4: http://unidata.github.io/netcdf4-python/
-
-.. automodule:: python.WRF.threads
+.. automodule:: python.WuRF.threads
     :members:
 
-.. automodule:: python.WRF.MPI
+.. automodule:: python.WuRF.MPI
     :members:
 
-.. automodule:: python.WRF.tests
+.. automodule:: python.WuRF.tests
     :members:
 
 """
+__package__ = 'WuRF'
 import pandas as pd
 import numpy as np
 import os
 from glob import glob
+from datetime import timedelta
 from traitlets.config import Application, Config
 from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import List, Integer, Unicode, Bool, Instance
@@ -23,7 +24,7 @@ from importlib import import_module
 
 
 def align_stations(wrf, df):
-    """Align :class:`~pandas.DataFrame` with station data (as produced by :class:`.CEAZA.CEAZAMet`) with a concatenated (and interpolated to station locations) netCDF file as produced by this packages concatenators (:class:`threads.Concatenator`, :class:`MPI.Concatenator`). For now, works with a single field.
+    """Align :class:`~pandas.DataFrame` with station data (as produced by :class:`.CEAZA.CEAZAMet`) with a concatenated (and interpolated to station locations) netCDF file as produced by this packages concatenators (:class:`threadWuRF.CC`, :class:`mpiWuRF.CC`). For now, works with a single field.
 
     :param wrf: The DataArray or Dataset containing the concatenated and interpolated (to station locations) WRF simulations (only dimensions ``start`` and ``Time`` and coordinate ``XTIME`` are used).
     :type wrf: :class:`~xarray.DataArray` or :class:`~xarray.Dataset`
@@ -42,7 +43,7 @@ def align_stations(wrf, df):
     return xr.DataArray(np.stack([np.where(idx>=0, df[c].values[idx].squeeze(), np.nan) for c in cols], 2),
                      coords = [wrf.coords['start'], wrf.coords['Time'], ('station', cols)])
 
-class WRFiles(Application):
+class WuRFiles(Application):
     """Base class for the WRF-file concatenators in this package (:mod:`.threads` and :mod:`.MPI`). It retrieves the original WRF output files and is configured/run via the :class:`traitlets.config.Application`  interface.
 
     """
@@ -89,7 +90,7 @@ class WRFiles(Application):
         self.dirs = dirs if self.from_date == '' else [d for d in dirs if d[-10:-2] >= self.from_date]
 
         assert len(self.dirs) > 0, "no directories added"
-        self.log.info("WRFiles initialized with %s directories.", len(self.dirs))
+        self.log.info("WuRFiles initialized with %s directories.", len(self.dirs))
 
     @staticmethod
     def _name(domain, lead_day, prefix, d):
@@ -110,7 +111,7 @@ class WRFiles(Application):
 
     @classmethod
     def first(cls, domain, lead_day=None, hour=None, from_date=None, pattern=None, prefix='wrfout', opened=True):
-        """Get the first netCDF file matching the given arguments (see :class:`Concatenator` for a description), based on the configuration values (section *wrfout*) in the global config file.
+        """Get the first netCDF file matching the given arguments (see :class:`CC` for a description), based on the configuration values (section *wrfout*) in the global config file.
 
         """
         f = cls(hour=hour, from_date=from_date, pattern=pattern, limit=1)
@@ -143,3 +144,52 @@ class WRFiles(Application):
         n = len(self.dirs)
         self.dirs = [d for d in self.dirs if d[-10:] not in s]
         self.log.info("%s directories removed.", n - len(self.dirs))
+
+
+class CCBase(WuRFiles):
+
+    outfile = Unicode('out.nc').tag(config=True)
+    """Base name of the output netCDF file (**no extension**, numberings are added in case of restarts, in the form '_part#' where # is the number). Defaults to the :attr:`outfile` trait which can be set by command line ('-o' flag) and config."""
+
+    interpolator = Unicode('scipy').tag(config=True)
+    """Which interpolator (if any) to use: ``scipy`` - use :class:`~data.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~data.interpolate.BilinearInterpolator`."""
+
+    variables = Unicode().tag(config=True)
+    """Name of variable(s) to extract."""
+
+    interpolate = Bool(False).tag(config=True)
+    """Whether or not to interpolate to station locations (see :class:`.CC`)."""
+
+    utc_delta = Instance(timedelta, kw={'hours': -4})
+    """The offset from UTC to be applied to the concatenated data (assuming the original files are in UTC)."""
+
+    lead_day = Integer(-1).tag(config=True)
+    """Lead day of the forecast for which to search, if only one particular lead day is desired. (``-1`` denotes no particular lead day.)"""
+
+    function = Unicode().tag(config=True)
+    """Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>')."""
+
+    aliases = {'d': 'WuRFiles.domain',
+               'o': 'CCBase.outfile',
+               'v': 'CCBase.variables'}
+
+    flags = {'i': ({'CCBase': {'interpolate': True}}, "interpolate to station locations")}
+
+    @property
+    def var_list(self):
+        return [self.variables]
+
+    def func(self, value):
+        try:
+            return self._func(value)
+        except AttributeError:
+            if self.function == '':
+                self._func = lambda x: x
+            else:
+                mod, f = os.path.splitext(self.function)
+                self._func = getattr(import_module(mod), f)
+            return self._func(value)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.data = None

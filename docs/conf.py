@@ -21,8 +21,6 @@ import os
 import sys
 sys.path.insert(0, os.path.abspath('../python'))
 sys.path.insert(0, os.path.abspath('../'))
-sys.path.insert(0, os.path.abspath('/sshfs/datos/sata1_ceazalabs/arno/HPC/uvHome/code/python/'))
-
 
 # -- General configuration ------------------------------------------------
 
@@ -205,5 +203,6 @@ intersphinx_mapping = {
     'mpi4py': ('https://mpi4py.readthedocs.io/en/stable/', None),
     'traitlets': ('https://traitlets.readthedocs.io/en/stable/', None),
     'cartopy': ('https://scitools.org.uk/cartopy/docs/latest/', None),
-    'ipython': ('https://ipython.readthedocs.io/en/stable/', None)
+    'ipython': ('https://ipython.readthedocs.io/en/stable/', None),
+    'condor': ('https://betaplane.github.io/condor/', None)
 }

@@ -3,26 +3,34 @@
 Tests
 -----
 
-To run tests with :mod:`mpi4py` (the import form is necessary because of the config values only accessibly via the parent package :mod:`python.data`)::
+Tests can be run in the :mod:`unittest` fashion **if** the config file contains all necessary data and the :mod:`.threadWuRF` submodule is targeted::
 
-    mpiexec -n 1 python -c "from data import tests; tests.runner.run(tests.scipy_suite_T2)"
-    # or
-    mpiexec -n python -m unittest data.tests.T2_all
+    python -m unittest WuRF.tests
 
-If using :mod:`condor`, the code files need to be downloaded for the tests to work correctly (because of relative imports in the :mod:`~python.data` package)::
+or for an individual test case::
 
-    mpiexec -n 1 python -c "import condor; condor.enable_sshfs_import(..., download=True); from data import tests; tests.runner.run(tests.scipy_suite_T2)"
+    python -m unittest WuRF.tests.<test_case>
 
-The module-level variable :data:`n_proc` can be changed (default is 3)  to test if the same results are obtained with a different number or processors; two different tests suites using the two different interpolators are already being provided at the end of the file (see :data:`interpolator`)
+For convenience, this module can also be run as a script, with the `traitlets  <https://traitlets.readthedocs.io/en/stable/config.html>`_-based command-line configuration system::
 
-Tests in this module should work with both versions of the WRF-Concatenator.
+    ./tests.py -f path/to/config --log_level=INFO -n WuRF.tests.T2_all 2>&1
+
+This form can also be run with mpirun/mpiexec (the tests should also pass even without invoking MPI, i.e. with one processor, **but don't use more than 3 processors**)::
+
+    mpirun -n 3 ./tests.py -f path/to/config --log_level=INFO -n WuRF.tests.T2_all 2>&1
+
+This demonstrates all available flags and redirection of the log output from stderr to stdout. To get help on the available configuration options, do ``./tests.py --help`` or ``--help-all``.
+
+The tests can also be run with the help of the :class:`condor.SSHFSRunner` script runner, in which case :class:`.WuRFTests` needs to be added to the :attr:`condor.SSHFSRunner.subcommands` in importable (dotted) form ('WuRF.tests.WuRFTests'), e.g.::
+
+    mpiexec -n 3 ./sshfs wrftest
 
 .. NOTE::
 
-    The multiple inheritance of :class:`WRFTests` might be a problem in the future. Currently it seems that unittest, when run with the idiom ``python -m unittest WRF.tests``, calls :meth:`WRFTests.__init__` with the test method name as argument. 
+    The multiple inheritance of :class:`WuRFTests` might be a problem in the future. Currently it seems that unittest, when run with the idiom ``python -m unittest WuRF.tests``, calls :meth:`WuRFTests.__init__` with the test method name as argument. 
 
 """
-__package__ = 'WRF'
+__package__ = 'WuRF'
 import unittest, re
 import xarray as xr
 import sys
@@ -31,15 +39,15 @@ from . import *
 
 if find_spec('mpi4py'):
     MPI = import_module('mpi4py.MPI')
-    WRF = import_module('.MPI', 'WRF')
+    WuRF = import_module('.mpiWuRF', 'WuRF')
     rank = MPI.COMM_WORLD.Get_rank()
 else:
-    WRF = import_module('.threads', 'WRF')
+    WuRF = import_module('.threadWuRF', 'WuRF')
     rank = -1
 
 
 # xarray.testing methods compare dimensions etc too, which we don't want here
-class WRFTests(Application, unittest.TestCase):
+class WuRFTests(Application, unittest.TestCase):
     test_dir = Unicode().tag(config=True)
     """directory where the comparison test data resides"""
 
@@ -49,10 +57,10 @@ class WRFTests(Application, unittest.TestCase):
     config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
     """path to file with (traitlets-type) config values for the tests"""
 
-    test_name = Unicode('WRF.tests').tag(config=True)
+    test_name = Unicode('WuRF.tests').tag(config=True)
     """dotted test name to be ingested by :meth:`unittest.TestLoader.loadTestsFromName`"""
 
-    aliases = {'f': 'WRFTests.config_file', 'n': 'WRFTests.test_name', 'log_level': 'Application.log_level'}
+    aliases = {'f': 'WuRFTests.config_file', 'n': 'WuRFTests.test_name', 'log_level': 'Application.log_level'}
 
     def __init__(self, *args, parent=None, config=None, **kwargs):
         Application.__init__(self, parent=parent)
@@ -65,24 +73,12 @@ class WRFTests(Application, unittest.TestCase):
             self.update_config(config)
         unittest.TestCase.__init__(self, *args, **kwargs)
 
-    @classmethod
-    def run_concat(cls, interpolator):
-        comm = MPI.Comm.Get_parent()
-        kwargs = None
-        kwargs = comm.bcast(kwargs, root=0)
-        cc = WRF.Concatenator(domain='d03', interpolator=self.interpolator)
-        if cc.rank == 0:
-            cc.dirs = [d for d in cc.dirs if re.search('c01_2016120[1-3]', d)]
-        cc.concat(**kwargs)
-        comm.barrier()
-        comm.Disconnect()
-
     def setUp(self):
         if rank < 1:
             self.test = xr.open_dataset(
                 os.path.join(self.test_dir, 'WRF_201612_{}.nc'.format(self.__class__.__name__))
             )
-        self.cc = WRF.Concatenator(domain='d03', outfile='out.nc', config=self.config)
+        self.cc = WuRF.CC(domain='d03', outfile='out.nc', config=self.config)
         self.cc.dirs = [d for d in self.cc.dirs if re.search('c01_2016120[1-3]', d)]
 
     def run_util(self, test_var, rtol=None, **kwargs):
@@ -119,28 +115,28 @@ class WRFTests(Application, unittest.TestCase):
         runner = unittest.TextTestRunner()
         runner.run(suite)
 
-class T2_all(WRFTests):
+class T2_all(WuRFTests):
     def test_whole_domain(self):
         self.run_util('field', variables='T2')
 
     def test_interpolated(self):
         self.run_util('interp', 1e-3, variables='T2', interpolate=True)
 
-class T2_lead1(WRFTests):
+class T2_lead1(WuRFTests):
     def test_whole_domain(self):
         self.run_util('field', variables='T2', lead_day=1)
 
     def test_interpolated(self):
         self.run_util('interp', 1e-3, variables='T2', lead_day=1, interpolate=True)
 
-class T_all(WRFTests):
+class T_all(WuRFTests):
     def test_whole_domain(self):
         self.run_util('field', variables='T')
 
     def test_interpolated(self):
         self.run_util('interp', 1e-3, variables='T', interpolate=True)
 
-class T_lead1(WRFTests):
+class T_lead1(WuRFTests):
     def test_whole_domain(self):
         self.run_util('field', variables='T', lead_day=1)
 
@@ -148,5 +144,5 @@ class T_lead1(WRFTests):
         self.run_util('interp', 1e-3, variables='T', lead_day=1, interpolate=True)
 
 if __name__ == '__main__':
-    app = WRFTests()
+    app = WuRFTests()
     app.start()

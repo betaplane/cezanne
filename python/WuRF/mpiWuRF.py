@@ -5,8 +5,8 @@ WRFOUT concatenation (MPI version)
 
 Example Usage::
 
-    from data import WRF
-    w = WRF.Concatenator(domain='d03', interpolator='bilinear')
+    import WuRF
+    w = WuRF.CC(domain='d03', interpolator='bilinear')
     w.concat(variables=['T2', 'PSFC'], out_name='T2-PSFC' , interpolate=True)
 
 .. NOTE::
@@ -20,12 +20,14 @@ Example Usage::
     * maybe data that needs to be shared can be loaded onto the class **before** initializing MPI????
 
 """
+__package__ = 'WuRF'
 from mpi4py import MPI
 from netCDF4 import Dataset, MFDataset, num2date, date2num
 from datetime import datetime, timedelta
-from .concat import *
+from .base import *
 
-class Concatenator(CCBase):
+
+class CC(CCBase):
     """WRFOUT file concatenator (MPI version), for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
 
     :param domain: Domain specifier for which to search among WRFOUT-files.
