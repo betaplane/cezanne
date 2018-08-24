@@ -44,13 +44,12 @@ class WRFTests(Application, unittest.TestCase):
     interpolator = Unicode('scipy').tag(config=True)
     """which interpolator to use (see :mod:`.interpolate`)"""
 
-    n_proc = Integer(3).tag(config=True)
-    """Number of processors to use for the test"""
+    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
 
     def __init__(self, *args, parent=None, config=None, **kwargs):
         Application.__init__(self, parent=parent)
         try:
-            self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+            self.load_config_file(os.path.expanduser(config_file))
         except ConfigFileNotFound:
             pass
         if config is not None:
@@ -168,16 +167,7 @@ class T_lead1(WRFTests):
             data = self.data['T'].transpose(*test_data.dims).sel(station=test_data.station)
             np.testing.assert_allclose(data, test_data, rtol=1e-3)
 
-
-# runner = unittest.TextTestRunner()
-
-# n_proc = 2
-# interpolator = 'bilinear'
-
-# T2_suite = unittest.TestSuite()
-# T2_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T2_all))
-# T2_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T2_lead1))
-
-# T_suite = unittest.TestSuite()
-# T_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T_all))
-# T_suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(T_lead1))
+if __name__ == '__main__':
+    app = WRFTests()
+    app.parse_command_line()
+    app.start()

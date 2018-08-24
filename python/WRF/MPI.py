@@ -93,7 +93,7 @@ class Concatenator(CCBase):
             return slice(None, sum(dim.dimlens))
 
     def _extract(self, d, parallel=True):
-        self.log.info('dir: %s (proc %s)'.format(d, self.rank))
+        self.log.info('dir: %s (proc %s)', d, self.rank)
 
         # somehow, it didn't seem possible to have a file open in parallel mode and perform the
         # scatter operation
