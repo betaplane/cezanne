@@ -15,7 +15,8 @@ import pandas as pd
 import numpy as np
 import os
 from glob import glob
-from traitlets.config import Application
+from traitlets.config import Application, Config
+from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import List, Integer, Unicode, Bool, Instance
 from functools import partial
 from importlib import import_module
@@ -66,9 +67,14 @@ class WRFiles(Application):
 
     aliases = {'m': 'Meta.file_name'}
 
-    def __init__(self, *args, limit=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+    def __init__(self, limit=None, **kwargs):
+        super().__init__(**kwargs)
+        try:
+            config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+            config.merge(self.config)
+            self.update_config(config)
+        except ConfigFileNotFound:
+            pass
 
         self.paths = [p for p in self.paths if os.path.isdir(p)]
 

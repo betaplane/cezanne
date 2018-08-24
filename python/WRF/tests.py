@@ -47,16 +47,15 @@ class WRFTests(Application, unittest.TestCase):
     n_proc = Integer(3).tag(config=True)
     """Number of processors to use for the test"""
 
-    init_dict = {}
-
-    def __init__(self, *args, **kwargs):
-        Application.__init__(self, **{k: kwargs.pop(k, self.init_dict.get(k, None))
-                                      for k in ['parent', 'config']})
+    def __init__(self, *args, parent=None, config=None, **kwargs):
+        Application.__init__(self, parent=parent)
+        try:
+            self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+        except ConfigFileNotFound:
+            pass
+        if config is not None:
+            self.update_config(config)
         unittest.TestCase.__init__(self, *args, **kwargs)
-        if len(self.config) == 0:
-            try:
-                self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
-            except: pass
 
     @classmethod
     def tearDownClass(cls):
@@ -83,7 +82,6 @@ class WRFTests(Application, unittest.TestCase):
                 os.path.join(self.test_dir, 'WRF_201612_{}.nc'.format(self.__class__.__name__))
             )
         self.cc = WRF.Concatenator(domain='d03', outfile='out.nc', config=self.config)
-        print(self.cc.config)
         self.cc.dirs = [d for d in self.cc.dirs if re.search('c01_2016120[1-3]', d)]
 
     def tearDown(self):
@@ -91,7 +89,6 @@ class WRFTests(Application, unittest.TestCase):
         self.test.close()
 
     def run_util(self, **kwargs):
-        return None
         for k, v in kwargs.items():
             setattr(self.cc, k, v)
         if rank == -1:
@@ -103,10 +100,16 @@ class WRFTests(Application, unittest.TestCase):
         if rank == 0:
             self.data = xr.open_dataset('out.nc')
 
+    def _iter_config(self, i):
+        try:
+            return [self._iter_config(t) for t in i]
+        except TypeError:
+            i.update_config(self.config)
+
     def start(self):
-        self.init_dict = {'config': self.config}
         suite = unittest.defaultTestLoader.loadTestsFromName('WRF.tests')
-        runner = unittest.TextTestRunner(sys.stderr)
+        self._iter_config(suite)
+        runner = unittest.TextTestRunner()
         runner.run(suite)
 
 class T2_all(WRFTests):

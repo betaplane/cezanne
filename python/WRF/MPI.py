@@ -59,7 +59,7 @@ class Concatenator(CCBase):
 
         self._create_outfile()
 
-        self.start = 0
+        self._start_dim = 0
         n_dirs = len(self.dirs) if self.rank == 0 else None
         n_dirs = self.comm.bcast(n_dirs, root=0)
         while n_dirs >= self.n_proc:
@@ -73,17 +73,17 @@ class Concatenator(CCBase):
             dirs = self.comm.scatter(dirs, root=0)
             n_dirs = n_dirs - self.n_proc
 
-            self._extract(self.outfile, dirs)
+            self._extract(dirs)
 
         if self.rank == 0:
             for i in range(n_dirs):
-                self._extract(self.outfile, self.dirs[i])
+                self._extract(self.dirs[i])
 
         self.log.info('Time taken: %s (proc %s)', MPI.Wtime() - start, self.rank)
 
     def _dimsize(self, ds, d):
         if d=='start':
-            return self.start + self.rank
+            return self._start_dim + self.rank
         if d=='station':
             return slice(None)
         dim = ds.dimensions[d]
@@ -105,13 +105,13 @@ class Concatenator(CCBase):
             for v in self.var_list:
                 out[v].set_collective(True)
 
-        with MFDataset(pa.join(d, self.file_glob)) as ds:
+        with MFDataset(os.path.join(d, self.file_glob)) as ds:
             xtime = ds['XTIME']
             xt = np.array(num2date(xtime[:], xtime.units), dtype='datetime64[m]') + pd.Timedelta(self.utc_delta)
-            t = date2num(xt.astype(datetime), units=self.time_units)
+            t = date2num(pd.DatetimeIndex(xt).to_pydatetime(), units=self.time_units)
             if self.lead_day == -1:
-                out['start'][self.start + self.rank] = t.min()
-                out['XTIME'][self.start + self.rank, :xt.size] = t
+                out['start'][self._start_dim + self.rank] = t.min()
+                out['XTIME'][self._start_dim + self.rank, :xt.size] = t
             else:
                 idx = (xt - xt.min()).astype('timedelta64[D]').astype(int) == self.lead_day
                 n = idx.astype(int).sum()
@@ -135,7 +135,7 @@ class Concatenator(CCBase):
                 out[v][D] = x
 
         out.close()
-        self.start = self.start + self.n_proc if parallel else self.start + 1
+        self._start_dim = self._start_dim + self.n_proc if parallel else self._start_dim + 1
 
     # all very WRF-specific
     # only called by rank 0
