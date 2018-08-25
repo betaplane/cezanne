@@ -35,7 +35,7 @@ import unittest, re
 import xarray as xr
 import sys
 from importlib.util import find_spec
-from . import *
+from .base import *
 
 if find_spec('mpi4py'):
     MPI = import_module('mpi4py.MPI')

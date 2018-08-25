@@ -1,25 +1,4 @@
 #!/usr/bin/env python
-"""
-WRFOUT concatenation (MPI version)
-----------------------------------
-
-Example Usage::
-
-    import WuRF
-    w = WuRF.CC(domain='d03', interpolator='bilinear')
-    w.concat(variables=['T2', 'PSFC'], out_name='T2-PSFC' , interpolate=True)
-
-.. NOTE::
-
-    * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
-    * I don't think application of a function is currently supported.
-
-.. TODO::
-    * custom logger with automatic parallel info (rank etc)
-    * implement func application
-    * maybe data that needs to be shared can be loaded onto the class **before** initializing MPI????
-
-"""
 __package__ = 'WuRF'
 from mpi4py import MPI
 from netCDF4 import Dataset, MFDataset, num2date, date2num
@@ -30,13 +9,30 @@ from .base import *
 class CC(CCBase):
     """WRFOUT file concatenator (MPI version), for a specifc forecast lead day or for all data arrange in two temporal dimensions, and with (optional) interpolation to station location (see :meth:`.concat` for details).
 
-    :param domain: Domain specifier for which to search among WRFOUT-files.
-    :param paths: list of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs
-    :param hour: hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
-    :param from_date: From what date onwards to search (only simulation start dates), if a start date is desired.
-    :type from_date: %Y%m%d :obj:`str`
-    :param stations: DataFrame with station locations (as returned by a call to :meth:`.CEAZA.Downloader.get_stations`) to which the variable(s) is (are) to be interpolated, or expression which evaluates to ``True`` if the default station data is to be used (as saved in :data:`config_file`).
-    :param interpolator: Which interpolator (if any) to use: ``scipy`` - use :class:`~.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~.interpolate.BilinearInterpolator`.
+    If :attr:`~.CCBase.interpolate` is ``True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`.
+
+    If :attr:`~.CCBase.lead_day` is given, only the day's data with the given lead is taken from each daily simulation, resultng in a continuous temporal sequence. If it is not given (i.e. has a value of ``-1``), the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
+
+    An instance of this class is configured via the :class:`traitlets.config.application.Application` interface, inherited from the :class:`.base.CCBase` class in this package. All traitlet-based class/instance attributes (they appear in code as class attributes, but will only have configured values upon instantiation) can be configured via a config file, command-line arguments (see also `CEAZAMet stations webservice`_), or keyword arguments to the ``__init__`` call. (From the command-line, help can be obtained via the flag ``--help`` or ``--help-all``.)
+
+    Common arguments to this class and :class:`.threadWuRF.CC` are described as keyword arguments below for convenience.
+
+    :Keyword arguments:
+        * :attr:`.max_workers`
+        * :attr:`.write_interval`
+        * **paths** - List of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs.
+        * **domain** - Which of the WRF domains (e.g. ``d03``) to use.
+        * **hour** - Hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
+        * **from_date** - From what date onwards to search (only simulation start dates), if a start date is desired (as %Y%m%d :obj:`str`).
+        * **directory_pattern** - Glob pattern for the directory names (e.g. ``c01_*``)
+        * **wrfout_prefix** - Prefix of the WRF output files (e.g. ``wrfout``).
+        * **outfile** - Base name of the output netCDF file (**no extension**, numberings are added in case of restarts, in the form '_part#' where # is the number). Defaults to the :attr:`outfile` trait which can be set by command line ('-o' flag) and config.
+        * **variables** - Name of variable(s) to extract.
+        * **interpolator** - Which interpolator (if any) to use: ``scipy`` - use :class:`~data.interpolate.GridInterpolator`; ``bilinear`` - use :class:`~data.interpolate.BilinearInterpolator`.
+        * **interpolate** - Whether or not to interpolate to station locations (see :class:`.CC`).
+        * **utc_delta** - The offset from UTC to be applied to the concatenated data (assuming the original files are in UTC).
+        * **lead_day** - Lead day of the forecast for which to search, if only one particular lead day is desired. (``-1`` denotes no particular lead day.)
+        * **function** - Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>'). (**Not implemented in :mod:`.mpiWuRF` yet**)
 
     """
     time_units = Unicode('minutes since 2015-01-01 00:00:00').tag(config=True)
@@ -237,3 +233,9 @@ class CC(CCBase):
                 ll = None
             self._lonlat = self.comm.bcast(ll, root=0)
             return self._lonlat
+
+
+if __name__ == '__main__':
+    app = CC()
+    app.parse_command_line()
+    app.start()

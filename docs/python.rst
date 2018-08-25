@@ -42,7 +42,7 @@ Data
 
 WRF
 ===
-.. automodule:: python.WRF
+.. automodule:: python.WuRF
    :members: 
   
 Spatial Regression

@@ -1,9 +1,90 @@
 #!/usr/bin/env python
 """
-.. automodule:: python.WuRF.threads
+WRF output processing
+---------------------
+
+There are two submodules with roughly identical APIs in this package, one using the :class:`concurrent.futures.ThreadPoolExecutor` interface, and one using :mod:`mpi4pi.MPI`. This file (/base.py/) contains shared code, in particular the classes :class:`.WuRFiles`, which centralizes dealing with WRF output files distributed over various storage elements and can be used to obtain these files directly, and :class:`.CCBase`, which is only the container for code share between the concatenator subclasses :class:`.threadWuRF.CC` and :class:`.mpiWuRF.CC`.
+
+Common interface options
+========================
+
+All options to the interfaces are specified using the `traitlets.config  <https://traitlets.readthedocs.io/en/stable/config.html>`_ system. The appear in code as class attributes (:class:`traits <traitlets.TraitType>`) which will be populated with values once the class is instantiated. They can be specified as arguments to the class instantiation call (as keyword arguments with the same name as the traits), in a :attr:`config file <WuRFiles.config_file>`, and as `command line arguments <https://traitlets.readthedocs.io/en/stable/config.html#command-line-arguments>`_ when running a file as script.
+
+The interface options common to both concatenators are in part those of the :class:`.WurFiles`:
+    * :attr:`~.WuRFiles.paths`
+    * :attr:`~.WuRFiles.domain`
+    * :attr:`~.WuRFiles.hour`
+    * :attr:`~.WuRFiles.from_date`
+    * :attr:`~.WuRFiles.directory_pattern`
+    * :attr:`~.WuRFiles.wrfout_prefix`
+
+Further common options are gathered in the :class:`.CCBase` class:
+    * :attr:`~.CCBase.outfile`
+    * :attr:`~.CCBase.variables`
+    * :attr:`~.CCBase.interpolator`
+    * :attr:`~.CCBase.interpolate`
+    * :attr:`~.CCBase.utc_delta`
+    * :attr:`~.CCBase.lead_day`
+    * :attr:`~.CCBase.function`
+
+The :class:`~pandas.DataFrame` with station locations (for :mod:`interpolation <data.interpolate>`) is currently specified as :attr:`data.CEAZA.Meta.file_name` of the :mod:`~data.CEAZA` module.
+
+Aliases for the command line options are defined by the various :class:`traitlets.config.application.Application` interfaces (:class:`.threadWuRF.CC`, :class:`.tests.WuRFTests`) and can be `queried for help  <https://traitlets.readthedocs.io/en/stable/config.html#subcommands>`_ by executing the respective file as a script with ``--help`` or ``--help-all`` as arguments.
+
+.. _WuRF-usage:
+
+Usage
+=====
+
+The following invocations are equivalent. From a python script / REPL::
+
+    import WuRF
+    w = WuRF.Concatenator(variables='T2', outfile='T2', domain='d03', interpolator='bilinear', interpolate=True)
+    w.start()
+
+From the command line::
+
+    WuRF/threads.py -v T2 -o T2 -d 'd03' --Concatenator.interpolator='bilinear' -i
+
+If :attr:`~.CCBase.interpolate` is ``True`` the data is interpolated to station locations; these are either given as argument instantiation of :class:`.Concatenator` or read in from the :class:`~pandas.HDFStore` specified in the :data:`.config`.
+
+If :attr:`~.CCBase.lead_day` is given (see below), only the day's data with the given lead is taken from each daily simulation, resultng in a continuous temporal sequence. If it is not given (i.e. has a value of ``-1``), the data is arranged with two temporal dimensions: **start** and **Time**. **Start** refers to the start time of each daily simulation, whereas **Time** is simply an integer index of each simulation's time steps.
+
+There is one difference between the two modules: :class:`.threadWuRF.CC` has two methods, :meth:`~.threadWuRF.CC.concat`, and :meth:`.threadWuRF.CC.start`, of which the former does not write out a file unless being called with the argument ``interval=True``, while the latter is a wrapper specifically to write out the data to file (periodically, with the interval specifiec by :attr:`~.threadWuRF.CC.write_interval` and in case of error). The MPI-based module continuously writes out a netCDF4_ in parallel ans has only a :meth:`.mpiWuRF.CC.start` method.
+
+.. NOTE::
+
+    * The :class:`.mpiWuRF.CC` doesn't implement the :attr:`.function` interface yet.
+    * The wrfout files contain a whole multi-day simulation in one file starting on March 7, 2018 (instead of one day per file as before).
+    * Data for the tests can be found in the directory specified by :attr:`tests.WuRFTests.test_dir`.
+    * The :class:`Concatenator` class uses the following attributes and methods from its super:
+        * dirs
+        * stations / _stations
+        * file_glob / _file_glob
+    * xr.concat works if Time dim has different lengths **if it has a coordinate** (right now it doesn't)
+    * **opening files as xr.open_dataarray throws away the metadata of the files**
+
+.. WARNING::
+
+    The current layout with ThreadPoolExecutor seems to work on the UV only if one sets::
+
+        export OMP_NUM_THREADS=1
+
+    (`a conflict between OpenMP and dask? <https://stackoverflow.com/questions/39422092/error-with-omp-num-threads-when-using-dask-distributed>`_)
+
+.. TODO::
+
+    * var_list needs to deal with several variables
+    * add coordinate to Time?
+    * custom logger with automatic parallel info (rank etc)
+    * implement func application (MPI)
+    * maybe data that needs to be shared can be loaded onto the class **before** initializing MPI????
+
+
+.. automodule:: python.WuRF.threadWuRF
     :members:
 
-.. automodule:: python.WuRF.MPI
+.. automodule:: python.WuRF.mpiWuRF
     :members:
 
 .. automodule:: python.WuRF.tests
@@ -44,7 +125,9 @@ def align_stations(wrf, df):
                      coords = [wrf.coords['start'], wrf.coords['Time'], ('station', cols)])
 
 class WuRFiles(Application):
-    """Base class for the WRF-file concatenators in this package (:mod:`.threads` and :mod:`.MPI`). It retrieves the original WRF output files and is configured/run via the :class:`traitlets.config.Application`  interface.
+    """Base class for the WRF-file concatenators in this package (:mod:`.threads` and :mod:`.MPI`). It retrieves the original WRF output files and is configured/run via the :class:`traitlets.config.Application` interface.
+
+    This class can be used by itself to retrieve WRF output files in exactly the same manner as the concatenators do.
 
     """
 
@@ -66,12 +149,15 @@ class WuRFiles(Application):
     domain = Unicode('d03').tag(config=True)
     """Which of the WRF domains (e.g. ``d03``) to use."""
 
+    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
+    """path to config file"""
+
     aliases = {'m': 'Meta.file_name'}
 
     def __init__(self, limit=None, **kwargs):
         super().__init__(**kwargs)
         try:
-            config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+            config = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
             config.merge(self.config)
             self.update_config(config)
         except ConfigFileNotFound:
@@ -158,7 +244,7 @@ class CCBase(WuRFiles):
     """Name of variable(s) to extract."""
 
     interpolate = Bool(False).tag(config=True)
-    """Whether or not to interpolate to station locations (see :class:`.CC`)."""
+    """Whether or not to interpolate to station locations (see :ref:`WuRF-usage`)."""
 
     utc_delta = Instance(timedelta, kw={'hours': -4})
     """The offset from UTC to be applied to the concatenated data (assuming the original files are in UTC)."""
@@ -167,7 +253,7 @@ class CCBase(WuRFiles):
     """Lead day of the forecast for which to search, if only one particular lead day is desired. (``-1`` denotes no particular lead day.)"""
 
     function = Unicode().tag(config=True)
-    """Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>')."""
+    """Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>'). (**Not implemented in :mod:`.mpiWuRF` yet**)"""
 
     aliases = {'d': 'WuRFiles.domain',
                'o': 'CCBase.outfile',
