@@ -8,7 +8,7 @@ This module can be imported and used as a standalone command-line app. The use a
 Command-line use
 ================
 
-There are two subcommands, ``meta`` and ``data``, corresponding to the methods :meth:`get_meta` and :meth:`get_data`. They can be supplied with command-line arguments in the `IPython  <https://ipython.readthedocs.io/en/stable/config/index.html>`_ / `Jupyter <https://jupyter.readthedocs.io/en/latest/projects/config.html>`_ config style. This means that help is also available in the same style, e.g.::
+There are three subcommands, ``meta``, ``data`` and ``update``, with the first two corresponding to the methods :meth:`get_meta` and :meth:`get_data`. They can be supplied with command-line arguments in the `IPython  <https://ipython.readthedocs.io/en/stable/config/index.html>`_ / `Jupyter <https://jupyter.readthedocs.io/en/latest/projects/config.html>`_ config style. This means that help is also available in the same style, e.g.::
 
     ./CEAZA.py data --help
 
@@ -40,6 +40,10 @@ To change the file in which the results are save, pass the file name to :attr:`C
 
     ./CEAZA.py data -v ta_c -f filename
 
+Updating
+========
+
+When the ``update`` subcommand to the command-line program is used, only 'new' data will be downloaded from the stations. 'New' is defined by extracting the table named :attr:`.Field.var_code` from the file given in :attr:`.Field.file_name` and taking the timestamp from the last record in this table. ``Update`` will download data that overlaps with the existing one by the amount of time specified as :attr:`.Update.overlap` and compare it to the existing data by using :class:`.Compare` (which prints a summary dataframe with differences if such are found). If :attr:`.Update.overwrite` is ``True`` **and** no differences are found, the existing data is replaced, otherwise it is written to the file specified as :attr:`.Update.file_name`.
 
 Logging
 =======
@@ -75,6 +79,7 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from traitlets.config import Application
+from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import Unicode, Instance, Dict, Integer, Bool
 from importlib import import_module
 from tqdm import tqdm
@@ -104,8 +109,17 @@ class _Reader(StringIO):
             p = self.tell()
         self.seek(self.start)
 
+class base_app(Application):
+    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
+    def __init__(self, *args, config={}, **kwargs):
+        try:
+            config = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
+            config.merge(config)
+        except ConfigFileNotFound: pass
+        super().__init__(config=config, **kwargs)
 
-class Field(Application):
+
+class Field(base_app):
     raw_url = Unicode().tag(config = True)
     user = Unicode().tag(config = True)
     from_date = Instance(datetime, (2003, 1, 1))
@@ -230,7 +244,7 @@ class Field(Application):
         raise TrialsExhaustedError()
 
 
-class Meta(Application):
+class Meta(base_app):
     field = Dict().tag(config = True)
     field_index = Instance(slice, (0, 2))
     field_data = Instance(slice, (2, 6))
@@ -321,7 +335,7 @@ class Meta(Application):
                 S['fields'] = field_meta
         print("CEAZAMet station metadata saved in file {}.".format(self.file_name))
 
-class Update(Application):
+class Update(base_app):
     overlap = Instance(timedelta, kw={'days': 30}).tag(config = True)
     file_name = Unicode().tag(config = True)
     overwrite = Bool(True).tag(config = True)
@@ -369,7 +383,7 @@ class Update(Application):
             N[self.config.Field.var_code] = data
             print('Updated DataFrame {} saved in file {}.'.format(self.config.Field.var_code, self.file_name))
 
-class CEAZAMet(Application):
+class CEAZAMet(base_app):
     """Class to download data from CEAZAMet webservice. Main reason for having a class is
     to be able to reference the data (CEAZAMet.data) in case something goes wrong at some point.
 
@@ -383,10 +397,6 @@ class CEAZAMet(Application):
     trials = Integer(10)
     max_workers = Integer(16)
     log_file_name = Unicode().tag(config = True) # see initialize()
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
 
     def initialize(self):
         self.parse_command_line()

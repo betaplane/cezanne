@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 from matplotlib import ticker, gridspec as gs
 from cartopy import crs
 from traitlets.config.configurable import Configurable
-from traitlets import List
+from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
+from traitlets import List, Unicode
 from importlib import import_module
 from helpers import stationize
 
@@ -138,9 +139,14 @@ class Coquimbo(Configurable):
     bbox = List([-72.2, -69.8, -32.5, -28.2])
     """configurable bounding box (minx, miny, maxx, maxy) of the region"""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
+
+    def __init__(self, *args, config={}, **kwargs):
+        try:
+            config = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
+            config.merge(config)
+        except ConfigFileNotFound: pass
+        super().__init__(config=config, **kwargs)
 
         gshhs = import_module('data.GSHHS')
         self.coast = self.clip(gshhs.GSHHS('GSHHS_shp/i/GSHHS_i_L1'))

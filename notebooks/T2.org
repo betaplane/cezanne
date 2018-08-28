@@ -39,6 +39,7 @@
    # sys.path.append('../../code/python')
    import numpy as np
    import pandas as pd
+   import xarray as xr
    import helpers as hh
    import matplotlib.pyplot as plt
    from matplotlib import ticker, gridspec
@@ -58,7 +59,7 @@
    plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
  #+end_src
  
-
+# old code
 #+begin_src ipython :results silent :session
   Map = hh.basemap()
 
@@ -93,8 +94,6 @@
                           cax=fig.add_axes([bb.x1 + 0.02, bb.y0, 0.02, bb.y1 - bb.y0]))
 #+end_src
 
-
-
 #+begin_src ipython :results silent :session
  D = pd.HDFStore('../../data/tables/station_data.h5')
 
@@ -123,6 +122,31 @@
  dz = (sta['elev'] - Z.T).T
 #+end_src
 
+# new code
+#+begin_src ipython :results silent :session
+  from glob import glob
+  def separate_start_hours(glob_pattern, var):
+      ds = [xr.open_dataset(f)[var] for f in glob(glob_pattern)]
+      n = min(len(d.Time) for d in ds)
+      # using .isel() is essential b/c .sel() *includes* the end of slice
+      x = xr.concat([d.isel(Time=slice(None, n)) for d in ds], 'start').sortby('start')
+      h = x.start.to_index().hour
+      a = x.sel(start = h==20)
+      b = x.sel(start = h==8)
+      return a, b
+#+end_src
+
+#+begin_src ipython :results silent :session
+  def lead_day(day, ds, T_sta):
+      x = ds.isel(Time=slice(day*24, (day+1)*24)).stack(idx=('Time','start'))
+      df = pd.DataFrame(x.values)
+      if x.dims.index('station') == 0:
+          df = df.T
+      df.index = x.XTIME
+      df.columns = x.station
+      return (df - T_sta).dropna(0, 'all')
+#+end_src
+
 ** data
 #+begin_src ipython :results silent :session
  # helper to get the correct elevation data for each model 'name'
@@ -135,17 +159,18 @@
 #+begin_src ipython :results silent :session
   LinearLinear = {'kiwi': '../../ceaza/data/LinearLinear.h5',
            'condor': '../../data/WRF/h5/LinearLinear.h5'}
-  sta = pd.read_hdf(hh.config.CEAZAMet.station_meta, 'stations')
-  T = hh.stationize(pd.read_hdf(hh.config.CEAZAMet.station_data, 'ta_c').drop('10', 1, 'elev')) + 273.15
+  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
+  T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, 'elev')) + 273.15
   Tm = hh.read_hdf(LinearLinear, 'T2')
   B = Tm.add( -T )
   Bm = B.mean(1)
   Z = hh.read_hdf(LinearLinear, 'z')[[dem(z) for z in B.items]]
   Z.columns = B.items
   dz = Z.add(-sta['elev'].astype(float), 0) # model - station
+  t0, t12 = separate_start_hours('/nfs/HPC/arno/data/T2_*_81*')
+  b0, b12 = [lead_day(0, 
 #+end_src
 
-** functions
 * Land-Sea mask :export:
 #+begin_src ipython :results raw :session :savefig "landmask.png" :exports none
   d = hh.read_hdf(LinearLinear, 'land_mask')
@@ -164,7 +189,7 @@
 * T2
 ** data
 #+begin_src ipython :results silent :session
-  reload(cplots)
+  # reload(cplots)
   coq = cplots.Coquimbo()
 #+end_src
 
@@ -184,14 +209,11 @@
   cplots.rowlabel(gs[2], "dTc")
 #+end_src
 
-#+RESULTS:
-[[file:./obipy-resources/T2/mean_bias_overview.png]]
-
 #+CAPTION: **top**: elevation bias (model DEM elevation interpolated to station location minus true station elevation)
 #+CAPTION: **middle**: 2m temperature bias (model - station)  
 #+CAPTION: **bottom**: temperature bias after correcting for a mean lapse rate of 6.5K / km
 #+RESULTS:
-
+[[file:./obipy-resources/T2/mean_bias_overview.png]]
 
 #+begin_src ipython :results raw :session :savefig "mean_bias_restricted.png"
   fig = plt.figure(figsize=(10, 12))
@@ -214,6 +236,19 @@
 #+CAPTION: **bottom**: temperature bias after correcting for a mean lapse rate of 6.5K / km
 #+RESULTS:
 [[file:./obipy-resources/T2/mean_bias_restricted.png]]
+
+#+begin_src ipython :results raw :session
+  fig = plt.figure(figsize=(10, 6))
+  # fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
+  x = ['d02', 'd03_orl', 'd03_0_00', 'd03_0_12']
+  gs = gridspec.GridSpec(2, 1)
+  plt.set_cmap('Spectral')
+  coq.plotrow(dz[x], subplot_spec=gs[0], vmin=-1100, vmax=1100, cbar_label='m')
+#+end_src
+
+
+
+
 
 #+begin_src ipython :results silent :session
  x = ['fnl', 'd01', 'd02', 'd03_orl', 'd03_0_00']
