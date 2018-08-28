@@ -18,7 +18,6 @@ class CC(CCBase):
     Common arguments to this class and :class:`.threadWuRF.CC` are described as keyword arguments below for convenience.
 
     :Keyword arguments:
-        * :attr:`.max_workers`
         * :attr:`.write_interval`
         * **paths** - List of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs.
         * **domain** - Which of the WRF domains (e.g. ``d03``) to use.
@@ -33,11 +32,9 @@ class CC(CCBase):
         * **utc_delta** - The offset from UTC to be applied to the concatenated data (assuming the original files are in UTC).
         * **lead_day** - Lead day of the forecast for which to search, if only one particular lead day is desired. (``-1`` denotes no particular lead day.)
         * **function** - Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>'). (**Not implemented in :mod:`.mpiWuRF` yet**)
+        * **max_workers** - Maximum number of threads to use.
 
     """
-    max_workers = Integer(16, help="number of threads to be used").tag(config=True)
-    "Maximum number of threads to use."
-
     write_interval = Integer(73).tag(config=True) # 365 / 73 = 5
     """The number of input directories to process before triggering a write-out to file (only applicable if using :meth:`start` or :meth:`concat` with argument ``interval=True``)."""
 

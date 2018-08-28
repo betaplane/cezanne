@@ -127,6 +127,7 @@ class Field(Application):
         if fields_table is None:
             print('Using field table from file {}'.format(self.config.Meta.file_name))
             fields_table = pd.read_hdf(self.config.Meta.file_name, 'fields').xs(self.var_code, 0, 'field', False)
+        # NOTE: I'm not sure if tqdm is thread-safe
         with tqdm(total = fields_table.shape[0]) as prog:
             with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
                 self.parent.data = [exe.submit(self._get, c, prog, from_date) for c in fields_table.iterrows()]

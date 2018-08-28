@@ -17,6 +17,7 @@ The interface options common to both concatenators are in part those of the :cla
     * :attr:`~.WuRFiles.from_date`
     * :attr:`~.WuRFiles.directory_pattern`
     * :attr:`~.WuRFiles.wrfout_prefix`
+    * :attr:`~.WuRFiles.max_workers`
 
 Further common options are gathered in the :class:`.CCBase` class:
     * :attr:`~.CCBase.outfile`
@@ -96,7 +97,7 @@ import pandas as pd
 import numpy as np
 import os
 from glob import glob
-from datetime import timedelta
+from datetime import datetime, timedelta
 from traitlets.config import Application, Config
 from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import List, Integer, Unicode, Bool, Instance
@@ -130,6 +131,8 @@ class WuRFiles(Application):
     This class can be used by itself to retrieve WRF output files in exactly the same manner as the concatenators do.
 
     """
+    max_workers = Integer(16, help="number of threads to be used").tag(config=True)
+    "Maximum number of threads to use."
 
     paths = List(help="list of paths where WRFOUT files can be found").tag(config = True)
     """List of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs."""
@@ -231,6 +234,31 @@ class WuRFiles(Application):
         self.dirs = [d for d in self.dirs if d[-10:] not in s]
         self.log.info("%s directories removed.", n - len(self.dirs))
 
+    def duration(self):
+        """Save a list of simulation lengths (in timesteps), per directory in :attr:`.dirs`. The list is saved in :attr:`.lengths`."""
+        # saved in /HPC/arno/data/wrf_dir_stats.h5 so it can be simply updated (runs a long time)
+        # current sim length is 145
+        xr = import_module('xarray')
+        tq = import_module('tqdm')
+        with tq.tqdm(total = len(self.dirs)) as prog:
+            self.lengths = []
+            for d in self.dirs:
+                try:
+                    self.lengths.append((d, len(xr.open_mfdataset(os.path.join(d, self.file_glob)).Time)))
+                    prog.update(1)
+                except OSError as err:
+                    print('{}: {}'.format(err, d))
+
+    def dates_from_dirs(self):
+        s = pd.Index(self.dirs).str.extract('_(\d+)$').to_series()
+        s = s.apply(lambda s: datetime.strptime(s, '%Y%m%d%H'))
+        s.index = pd.Index([os.path.split(d) for d in self.dirs])
+        return s
+
+    @staticmethod
+    def duration_blocks(df):
+        return [(l, (lambda i:(i.min(), i.max()))(df.index.str.extract('_(\d+)$')[df.length==l]))
+         for l in df.length.unique()]
 
 class CCBase(WuRFiles):
 
@@ -279,3 +307,22 @@ class CCBase(WuRFiles):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.data = None
+
+def piece_together(glob_pattern):
+    """Piece together individual files resulting from a WRF output concatenation procedure (due to different simulation lengths and random interruptions) into larger files.
+
+    """
+    xr = import_module('xarray')
+    D = {}
+    t = {133: 121, 169: 145}
+    for g in sorted(glob(glob_pattern)):
+        f = xr.open_dataset(g)
+        j = len(f.Time)
+        d = f.sel(Time=slice(0, t[j]))
+        i = len(d.Time)
+        try:
+            D[i] = xr.concat((D[i], d), 'start')
+        except KeyError:
+            D[i] = d
+    for f in D.items():
+        f.to_netcdf('{}_{}.nc'.format(glob_pattern[:-1], l))

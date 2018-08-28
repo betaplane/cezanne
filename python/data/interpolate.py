@@ -54,6 +54,7 @@ from geo import proj_params
 from importlib import import_module
 from traitlets.config import Application
 from traitlets import List, Unicode
+from timeit import default_timer as timer
 
 
 def g2d(v):
@@ -67,7 +68,7 @@ class Interpolator(Application):
     :type ds: :class:`xarray.Dataset` or `netCDF4`_ Dataset.
 
     :Keyword arguments:
-        * **stations** - DataFrame with station locations as returned by a call to :meth:`.CEAZA.Downloader.get_stations`.
+        * **stations** - DataFrame with station locations as returned by a call to :meth:`.CEAZA.CEAZAMet.get_stations`.
         * **lon** - :obj:`iterable` of longitudes
         * **lat** - :obj:`iterable` of latitudes
         * **names** - :obj:`iterable` of station names
@@ -81,11 +82,13 @@ class Interpolator(Application):
 
     spatial_vars = List([['XLONG', 'XLAT'], ['XLONG_M', 'XLAT_M']]).tag(config=True)
 
-    time_dim_var = List(['Time', 'XTIME'])
+    time_dim_coord = Unicode('XTIME').tag(config=True)
+
+    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
 
     def __init__(self, ds, *args, stations=None, lon=None, lat=None, names=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.load_config_file(os.path.expanduser('~/Dropbox/work/config.py'))
+        self.load_config_file(os.path.expanduser(self.config_file))
 
         proj = Proj(**proj_params(ds))
         for V in self.spatial_vars:
@@ -101,6 +104,8 @@ class Interpolator(Application):
                 stations = pd.read_hdf(self.config.Meta.file_name, 'stations')
             self.index = stations.index
             self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
+
+        self.start_time = timer()
 
     def netcdf_dims(self, var):
         dims = var.dimensions
@@ -145,21 +150,25 @@ class GridInterpolator(Interpolator):
             y = self._grid_interp(X.values)
             ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)])
             ds = ds.unstack('n') if len(dims) > 1 else ds.rename({'n': dims[0]})
-            if hasattr(x, self.time_dim_var[1]):
-                ds.coords[self.time_dim_var[1]] = (self.time_dim_var[0], x[self.time_dim_var[1]])
-            return ds
+            if hasattr(x, self.time_dim_coord):
+                xt = x[self.time_dim_coord]
+                ds.coords[self.time_dim_coord] = (xt.dims, xt)
         else:
             y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
-            return xr.DataArray(y, coords=[('station', self.index)])
+            ds = xr.DataArray(y, coords=[('station', self.index)])
+        print('Time taken: %s', timer() - self.start_time)
+        return ds
 
     def netcdf(self, x):
         if len(x.shape) > 2:
             x, s, r, other_dims = self.netcdf_dims(x)
             x = x.reshape(np.r_[s, [-1]])
-            return (np.moveaxis(np.array(self._grid_interp(x)).reshape(np.r_[r, [-1]]), -1, 0),
+            y = (np.moveaxis(np.array(self._grid_interp(x)).reshape(np.r_[r, [-1]]), -1, 0),
                 np.r_[['station'], other_dims])
         else:
-            return self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
+            y = self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
+        self.log.info('Time taken: %s', timer() - self.start_time)
+        return y
 
 class BilinearInterpolator(Interpolator):
     """Implements bilinear interpolation in two spatial dimensions by precomputing a weight matrix which can be used repeatedly to interpolate to the same spatial locations. The input :class:`xarray.Dataset` / `netCDF4`_ Dataset is reshaped into a two-dimensional matrix, with one dimension consisting of the stacked two spatial dimensions (longitude / latitude), and the other dimension consisting of all other dimensions stacked. Hence, interpolation to fixed locations in the horizontal (longitude / latitude) plane can be carried out by a simple matrix multiplication with the precomputed weights matrix. Different model levels, variables and other potential dimensions can be stacked without the need to write loops in python. The interpolation weights are computed in **projected** coordinates.
@@ -187,8 +196,10 @@ class BilinearInterpolator(Interpolator):
         else:
             X = x.stack(s=self.spatial_dims)
             y = xr.DataArray(self.W.dot(X), coords=[self.index])
+        print('Time taken: %s', timer() - self.start_time)
         return y
 
+    # this appears to be returning a tuple of data, dims
     def netcdf(self, x):
         if len(x.shape) <= 2:
             raise Exception('2- or lower-dimensional data unsupported')
