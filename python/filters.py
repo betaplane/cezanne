@@ -8,9 +8,9 @@ class Lanczos(object):
         W = Lanczos(df, '10D', 3)
         filtered = df.rolling(**W.roll).apply(W)
 
-    :param df: DataFrame to which the filtering is to be applied
+    :param df: DataFrame to which the filtering is to be applied (needs to have an index with :attr:`~pandas.DatetimeIndex.freq` - apply :meth:`~pandas.DataFrame.resample` first if that isn't the case).
     :type df: :class:`~pandas.DataFrame`
-    :param period: `pandas offset alias <https://pandas.pydata.org/pandas-docs/stable/timeseries.html#offset-aliases>`_ giving the cutoff period.
+    :param period: :class:`pandas.Timedelta` :obj:`str` giving the cutoff period.
     :type period: :obj:`str`
     :param a: integer 'order' of the filter (the higher, the more filter terms)
     :type a: :obj:`int`
@@ -34,3 +34,8 @@ class Lanczos(object):
             w = self.w
         self.i = (self.i + 1) % self.s
         return np.nansum(x * w) / w[np.isfinite(x)].sum()
+
+    @classmethod
+    def filter(cls, df, period, a=3):
+        fil = cls(df, period, a)
+        return df.rolling(**fil.roll).apply(fil)

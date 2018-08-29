@@ -55,7 +55,9 @@ def df2kml(df, name, body=None, lon='lon', lat='lat'):
     k = Kml()
     for _, s in df.iterrows():
         p = k.newpoint(name=name[0].format(*s[name[1]]), coords=[s[[lon, lat]]])
-        p.style.iconstyle.icon.href = "http://maps.google.com/mapfiles/kml/paddle/red-circle.png"
+        # http://kml4earth.appspot.com/icons.html
+        # p.style.iconstyle.icon.href = "http://maps.google.com/mapfiles/kml/paddle/red-circle.png"
+        p.style.iconstyle.icon.href = "http://maps.google.com/mapfiles/kml/pushpin/grn-pushpin.png"
         if body is not None:
             p.style.balloonstyle.text = body[0].format(*s[body[1]])
     return k

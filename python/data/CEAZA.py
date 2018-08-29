@@ -68,6 +68,7 @@ or to redirect to a file::
 
 .. TODO::
 
+    * DEM interpolation in :class:`.Update`
     * save raw data (filename = field_code, tablename = station_code)
     * rework printed info (log?)
 
@@ -83,7 +84,6 @@ from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import Unicode, Instance, Dict, Integer, Bool
 from importlib import import_module
 from tqdm import tqdm
-
 
 class FetchError(Exception):
     pass
@@ -117,7 +117,6 @@ class base_app(Application):
             config.merge(config)
         except ConfigFileNotFound: pass
         super().__init__(config=config, **kwargs)
-
 
 class Field(base_app):
     raw_url = Unicode().tag(config = True)
@@ -243,7 +242,6 @@ class Field(base_app):
 
         raise TrialsExhaustedError()
 
-
 class Meta(base_app):
     field = Dict().tag(config = True)
     field_index = Instance(slice, (0, 2))
@@ -334,6 +332,24 @@ class Meta(base_app):
             if self.get_fields:
                 S['fields'] = field_meta
         print("CEAZAMet station metadata saved in file {}.".format(self.file_name))
+
+    def model_elevation(self, meta, dem, var_name, column_name):
+        """Interpolate a gridded elevation dataset (e.g. the DEM used by WRF internally) to station locations and append the model elevations to the metadata DataFrame.
+
+        :param meta: the metadata DataFrame
+        :type meta: :class:`~pandas.DataFrame`
+        :param dem: the elevation dataset (needs to be the whole dataset for the interpolator to get the metadata)
+        :type dem: :class:`~xarray.Dataset`
+        :param var_name: name of the elevation variable in the ``dem`` Dataset
+        :param column_name: name the appended elevation column should be given
+        :returns: new metadata DataFrame with DEM elevation data appended
+        :rtype: :class:`~pandas.DataFrame`
+
+        """
+        ip = import_module('interpolate', 'data')
+        intp = ip.GridInterpolator(dem)
+        z = intp.xarray(dem[var_name]).squeeze()
+        return pd.concat((meta, pd.DataFrame(z, index=z.stations, columns=[column_name])), 1)
 
 class Update(base_app):
     overlap = Instance(timedelta, kw={'days': 30}).tag(config = True)

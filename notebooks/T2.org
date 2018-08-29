@@ -131,20 +131,16 @@
       # using .isel() is essential b/c .sel() *includes* the end of slice
       x = xr.concat([d.isel(Time=slice(None, n)) for d in ds], 'start').sortby('start')
       h = x.start.to_index().hour
-      a = x.sel(start = h==20)
-      b = x.sel(start = h==8)
-      return a, b
-#+end_src
+      return x.sel(start = h==20), x.sel(start = h==8)
 
-#+begin_src ipython :results silent :session
-  def lead_day(day, ds, T_sta):
+  def lead_day(day, T_sta, ds):
       x = ds.isel(Time=slice(day*24, (day+1)*24)).stack(idx=('Time','start'))
       df = pd.DataFrame(x.values)
       if x.dims.index('station') == 0:
           df = df.T
       df.index = x.XTIME
       df.columns = x.station
-      return (df - T_sta).dropna(0, 'all')
+      return (df - T_sta).dropna(0, 'all').resample('h').mean()
 #+end_src
 
 ** data
@@ -167,8 +163,6 @@
   Z = hh.read_hdf(LinearLinear, 'z')[[dem(z) for z in B.items]]
   Z.columns = B.items
   dz = Z.add(-sta['elev'].astype(float), 0) # model - station
-  t0, t12 = separate_start_hours('/nfs/HPC/arno/data/T2_*_81*')
-  b0, b12 = [lead_day(0, 
 #+end_src
 
 * Land-Sea mask :export:
@@ -205,7 +199,7 @@
   plt.set_cmap('Spectral_r')
   coq.plotrow(Bm[x], subplot_spec=gs[1], vmin=-13, vmax=13, cbar_label='$^{\circ}$C')
   cplots.rowlabel(gs[1], "dT")
-  coq.plotrow(Bm[x] - 0.0065 * dz[x], subplot_spec=gs[2], vmin=-13, vmax=13, cbar_label='$^{\circ}$C')
+  coq.plotrow(Bm[x] + 0.0065 * dz[x], subplot_spec=gs[2], vmin=-13, vmax=13, cbar_label='$^{\circ}$C')
   cplots.rowlabel(gs[2], "dTc")
 #+end_src
 
@@ -214,6 +208,7 @@
 #+CAPTION: **bottom**: temperature bias after correcting for a mean lapse rate of 6.5K / km
 #+RESULTS:
 [[file:./obipy-resources/T2/mean_bias_overview.png]]
+
 
 #+begin_src ipython :results raw :session :savefig "mean_bias_restricted.png"
   fig = plt.figure(figsize=(10, 12))
@@ -226,7 +221,7 @@
   plt.set_cmap('Spectral_r')
   coq.plotrow(Bm[x], subplot_spec=gs[1], vmin=-10, vmax=10, cbar_label='$^{\circ}$C')
   cplots.rowlabel(gs[1], "dT")
-  coq.plotrow(Bm[x] - 0.0065 * dz[x], subplot_spec=gs[2], vmin=-10, vmax=10, cbar_label='$^{\circ}$C')
+  coq.plotrow(Bm[x] + 0.0065 * dz[x], subplot_spec=gs[2], vmin=-10, vmax=10, cbar_label='$^{\circ}$C')
   cplots.rowlabel(gs[2], "dTc")
 #+end_src
 
@@ -237,14 +232,42 @@
 #+RESULTS:
 [[file:./obipy-resources/T2/mean_bias_restricted.png]]
 
-#+begin_src ipython :results raw :session
-  fig = plt.figure(figsize=(10, 6))
-  # fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
-  x = ['d02', 'd03_orl', 'd03_0_00', 'd03_0_12']
-  gs = gridspec.GridSpec(2, 1)
-  plt.set_cmap('Spectral')
-  coq.plotrow(dz[x], subplot_spec=gs[0], vmin=-1100, vmax=1100, cbar_label='m')
+#+begin_src ipython :results silent :session
+  dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
+  t0, t12 = separate_start_hours('/nfs/HPC/arno/data/T2_*_81*', 'T2')
+  b0, b12 = [lead_day(0, T, d) for d in [t0, t12]]
 #+end_src
+
+#+begin_src ipython :results raw :session :savefig "mean_bias_d03_h.png"
+  fig = plt.figure(figsize=(6, 7))
+  fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
+  gs = gridspec.GridSpec(2, 3)
+  plt.set_cmap('Spectral')
+  _, gl = coq.plotrow(dz, subplot_spec=gs[0, 0], vmin=-900, vmax=900, cbar='left', cbar_label='m', cbar_width=0.03)
+  gl[0].ylabels_left = False
+  plt.set_cmap('Spectral_r')
+  x = pd.concat((b0.mean(), b0.mean() + 0.0065 * dz['dz']), 1)
+  x.columns = ['dT', 'dTc']
+  _, gl = coq.plotrow(x, subplot_spec=gs[0, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
+  gl[0].ylabels_left = False
+  cplots.rowlabel(gs[0, :], "0h", labelpad=80)
+  x = pd.concat((b12.mean(), b12.mean() + 0.0065 * dz['dz']), 1)
+  x.columns = ['dT', 'dTc']
+  coq.plotrow(x, subplot_spec=gs[1, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
+  cplots.rowlabel(gs[1, :], "12h", labelpad=80)
+#+end_src
+
+#+CAPTION: Bias (WRF - observations) for operational domain 03 only, for the runs which were started at 0:00 UTC (**top**) and 12:00 UTC (**bottom**).
+#+CAPTION: Meaning of column titles: *dz* - hight differences WRF model grid minus station elevation; *dT* - straight T2 bias; *dTc* - T2 bias 'corrected' by adjusting it for standard lapse rate times elevation difference ('dz').
+#+RESULTS:
+[[file:./obipy-resources/T2/mean_bias_d03_h.png]]
+
+#+begin_src ipython :results silent :session
+from filters import Lanczos
+f0 = Lanczos.filter(b0, '30D')
+f12 = Lanczos.filter(b12, '30D')
+#+end_src
+
 
 
 

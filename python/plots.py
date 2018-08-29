@@ -189,9 +189,10 @@ class Coquimbo(Configurable):
         vmax = kwargs.get('vmax', np.nanmax(df))
         geom = subplot_spec.get_geometry()
         g = gs.GridSpecFromSubplotSpec(1, df.shape[1], subplot_spec=subplot_spec)
+        pl, gls  = [], []
         for i, (n, c) in enumerate(df.iteritems()):
             ax = plt.gcf().add_subplot(g[0, i], projection=crs.PlateCarree())
-            pl = ax.scatter(*lonlat, c=c, vmin=vmin, vmax=vmax, transform=crs.PlateCarree())
+            pl.append(ax.scatter(*lonlat, c=c, vmin=vmin, vmax=vmax, transform=crs.PlateCarree()))
             self(ax)
             ax.outline_patch.set_edgecolor('w')
             gl = ax.gridlines(linestyle='--', color='w', draw_labels=True)
@@ -199,11 +200,16 @@ class Coquimbo(Configurable):
             gl.ylocator = ticker.FixedLocator(range(-33, -27))
             gl.xlabels_top = False
             gl.ylabels_right = False
-            if geom[2] == 0:
+            if geom[3] < geom[1]:
                 ax.set_title(n)
-            if (geom[2] < geom[0] - 1):
+            if geom[3] < (geom[0] - 1) * geom[1]:
                 gl.xlabels_bottom = False
             if i > 0: gl.ylabels_left = False
+            gls.append(gl)
         cb = kwargs.get('cbar', 'right')
         if (cb is not None):
-            cbar(pl, loc=cb, space=.02, width=.02, label=kwargs.get('cbar_label', None))
+            cbar(pl[-1], loc=cb,
+                 space=kwargs.get('cbar_space', .02),
+                 width=kwargs.get('cbar_width', .02),
+                 label=kwargs.get('cbar_label', None))
+        return pl, gls
