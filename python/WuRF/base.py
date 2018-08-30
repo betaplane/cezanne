@@ -260,6 +260,41 @@ class WuRFiles(Application):
         return [(l, (lambda i:(i.min(), i.max()))(df.index.str.extract('_(\d+)$')[df.length==l]))
          for l in df.length.unique()]
 
+    def version(self):
+        """Extract 'TITLE' string (containing version info) from all directories"""
+        xr = import_module('xarray')
+        tq = import_module('tqdm')
+        with tq.tqdm(total = len(self.dirs)) as prog:
+            self.versions = []
+            for d in self.dirs:
+                try:
+                    self.versions.append((d, xr.open_mfdataset(os.path.join(d, self.file_glob)).TITLE))
+                    prog.update(1)
+                except OSError as err:
+                    print('{}: {}'.format(err, d))
+
+    def meta_changes(self):
+        xr = import_module('xarray')
+        tq = import_module('tqdm')
+        with tq.tqdm(total = len(self.dirs)) as prog:
+            self.attrs = []
+            for d in self.dirs:
+                try:
+                    ds = xr.open_dataset(glob(os.path.join(d, '*d03*'))[0])
+                    a = ds.attrs.copy()
+                    for k in ['START_DATE', 'SIMULATION_START_DATE', 'JULDAY']:
+                        a.pop(k)
+                    try:
+                        b = [(k, v) for k, v in a.items() if prev[k] != v]
+                        if len(b) > 0:
+                            self.attrs.append((d, b))
+                    except Exception as err:
+                        self.attrs.append((d, err))
+                    prev = a
+                except Exception as err:
+                    self.attrs.append((d, err))
+                prog.update(1)
+
 class CCBase(WuRFiles):
 
     outfile = Unicode('out.nc').tag(config=True)

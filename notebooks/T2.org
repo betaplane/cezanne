@@ -257,15 +257,90 @@
   cplots.rowlabel(gs[1, :], "12h", labelpad=80)
 #+end_src
 
-#+CAPTION: Bias (WRF - observations) for operational domain 03 only, for the runs which were started at 0:00 UTC (**top**) and 12:00 UTC (**bottom**).
-#+CAPTION: Meaning of column titles: *dz* - hight differences WRF model grid minus station elevation; *dT* - straight T2 bias; *dTc* - T2 bias 'corrected' by adjusting it for standard lapse rate times elevation difference ('dz').
 #+RESULTS:
 [[file:./obipy-resources/T2/mean_bias_d03_h.png]]
+#+CAPTION: Bias (WRF - observations) for operational domain 03 only, for the runs which were started at 0:00 UTC (**top**) and 12:00 UTC (**bottom**).
+#+CAPTION: Meaning of column titles: *dz* - hight differences WRF model grid minus station elevation; *dT* - straight T2 bias; *dTc* - T2 bias 'corrected' by adjusting it for standard lapse rate times elevation difference ('dz').
+
+#+begin_src ipython :results silent :session
+  # where the change in GFS occurs
+  t1 = t12.sel(start=slice(None, '2017-07-18'))
+  t2 = t12.sel(start=slice('2017-07-19', None))
+  b1, b2 = [lead_day(0, T, d) for d in [t1, t2]]
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "mean_bias_d03_12h_day0.png"
+  fig = plt.figure(figsize=(6, 7))
+  fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
+  gs = gridspec.GridSpec(2, 3)
+  plt.set_cmap('Spectral')
+  _, gl = coq.plotrow(dz, subplot_spec=gs[0, 0], vmin=-900, vmax=900, cbar='left', cbar_label='m', cbar_width=0.03)
+  gl[0].ylabels_left = False
+  plt.set_cmap('Spectral_r')
+  x = pd.concat((b1.mean(), b1.mean() + 0.0065 * dz['dz']), 1)
+  x.columns = ['dT', 'dTc']
+  _, gl = coq.plotrow(x, subplot_spec=gs[0, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
+  gl[0].ylabels_left = False
+  cplots.rowlabel(gs[0, :], "pre", labelpad=80)
+  x = pd.concat((b2.mean(), b2.mean() + 0.0065 * dz['dz']), 1)
+  x.columns = ['dT', 'dTc']
+  coq.plotrow(x, subplot_spec=gs[1, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
+  cplots.rowlabel(gs[1, :], "post", labelpad=80)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/mean_bias_d03_12h_day0.png]]
+#+CAPTION: Same as above, but for the runs starting at 12h only (from 2016-04 onward). The split is now before (**top**) and after (**bottom**) the change that occerred in the GFS at 2017-07-19.
+
+
+#+begin_src ipython :results silent :session
+  # where the change in GFS occurs
+  b1, b2 = [lead_day(1, T, d) for d in [t1, t2]]
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "mean_bias_d03_12h_day1.png"
+  fig = plt.figure(figsize=(6, 7))
+  fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
+  gs = gridspec.GridSpec(2, 3)
+  plt.set_cmap('Spectral')
+  _, gl = coq.plotrow(dz, subplot_spec=gs[0, 0], vmin=-900, vmax=900, cbar='left', cbar_label='m', cbar_width=0.03)
+  gl[0].ylabels_left = False
+  plt.set_cmap('Spectral_r')
+  x = pd.concat((b1.mean(), b1.mean() + 0.0065 * dz['dz']), 1)
+  x.columns = ['dT', 'dTc']
+  _, gl = coq.plotrow(x, subplot_spec=gs[0, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
+  gl[0].ylabels_left = False
+  cplots.rowlabel(gs[0, :], "pre", labelpad=80)
+  x = pd.concat((b2.mean(), b2.mean() + 0.0065 * dz['dz']), 1)
+  x.columns = ['dT', 'dTc']
+  coq.plotrow(x, subplot_spec=gs[1, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
+  cplots.rowlabel(gs[1, :], "post", labelpad=80)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/mean_bias_d03_12h_day1.png]]
+#+CAPTION: Same as above, but for lead day 1 instead of 0.
+
+
+#+begin_src ipython :results silent :session
+  ti = xr.open_dataarray('/nfs/HPC/arno/data/T2_glacio_intp.nc')
+  b_glacio = (pd.DataFrame(ti, index=ti.XTIME, columns=ti.station) - T).dropna(1, 'all').dropna(0, 'all')
+#+end_src
+
+
+#+begin_src ipython :results raw :session
+fig = plt.figure()
+coq.plotrow(b_glacio.mean().to_frame('dT'))
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/RORFPf.png]]
+
 
 #+begin_src ipython :results silent :session
 from filters import Lanczos
 f0 = Lanczos.filter(b0, '30D')
-f12 = Lanczos.filter(b12, '30D')
+f0 = Lanczos.filter(b0, '30D')
 #+end_src
 
 

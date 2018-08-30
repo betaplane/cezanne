@@ -2,7 +2,9 @@
 import numpy as np
 from xarray import DataArray, open_dataset, concat
 from functools import singledispatch, partial
+from importlib import import_module
 
+# I think this was the old routine that generated the cell boxes
 def kml(name, lon, lat, code=None, nc=None):
     from simplekml import Kml, Style
     from shapely import Polygon, Point
@@ -51,8 +53,8 @@ def df2kml(df, name, body=None, lon='lon', lat='lat'):
     :rtype: :obj:`~simplekml.Kml` object
 
     """
-    from simplekml import Kml, Style
-    k = Kml()
+    kml = import_module('simplekml')
+    k = kml.Kml()
     for _, s in df.iterrows():
         p = k.newpoint(name=name[0].format(*s[name[1]]), coords=[s[[lon, lat]]])
         # http://kml4earth.appspot.com/icons.html
@@ -62,7 +64,20 @@ def df2kml(df, name, body=None, lon='lon', lat='lat'):
             p.style.balloonstyle.text = body[0].format(*s[body[1]])
     return k
 
+def domain_kml(directory):
+    """Produce a kml file with WRF domain boundaries as lines. Input argument is the name of a directory containine all of the relevant 'geo_em...' files for the various domains.
 
+    """
+    os = import_module('os')
+    glob = import_module('glob')
+    kml = import_module('simplekml')
+    k = kml.Kml()
+    for f in sorted(glob.glob(os.path.join(directory, 'geo_em*'))):
+        with open_dataset(f) as ds:
+            coords = list(zip(ds.corner_lons[-4:], ds.corner_lats[-4:]))
+            coords.append(coords[0])
+            k.newlinestring(coords = coords)
+    return k
 
 def cells(grid_lon, grid_lat, lon, lat, mask=None):
     """Get grid indexes corresponding to lat/lon points, using shapely polygons.
