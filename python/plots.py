@@ -191,6 +191,7 @@ class Coquimbo(Configurable):
         g = gs.GridSpecFromSubplotSpec(1, df.shape[1], subplot_spec=subplot_spec)
         pl, gls  = [], []
         for i, (n, c) in enumerate(df.iteritems()):
+            if c.isnull().all(): continue
             ax = plt.gcf().add_subplot(g[0, i], projection=crs.PlateCarree())
             pl.append(ax.scatter(*lonlat, c=c, vmin=vmin, vmax=vmax, transform=crs.PlateCarree()))
             self(ax)

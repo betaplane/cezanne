@@ -323,19 +323,141 @@
 
 
 #+begin_src ipython :results silent :session
-  ti = xr.open_dataarray('/nfs/HPC/arno/data/T2_glacio_intp.nc')
-  b_glacio = (pd.DataFrame(ti, index=ti.XTIME, columns=ti.station) - T).dropna(1, 'all').dropna(0, 'all')
+  def time(ds):
+      ds.coords['Time'] = ('Time', ds.XTIME)
+      return ds
+
+  def xr2pd(ds):
+      x = ds.values if ds.dims.index('Time') == 0 else ds.values.T
+      return pd.DataFrame(x, index=ds.Time, columns=ds.station)
 #+end_src
 
+#+begin_src ipython :results silent :session
+  T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, 'elev')) + 273.15
+  g02 = xr.open_dataarray('/nfs/HPC/arno/data/T2_glacio_d02_intp.nc')
+  g03 = xr.open_dataarray('/nfs/HPC/arno/data/T2_glacio_d03_intp.nc')
+  b = xr.concat((g02, g03), 'domain')
+  b.coords['Time'] = ('Time', b.XTIME)
+  b = (b - xr.DataArray(T).rename({'ultima_lectura': 'Time'})).mean('Time')
+  if b.dims.index('domain') == 0:
+      b_glacio = pd.DataFrame(b.values, index=b.domain, columns=b.station).T
+  else:
+      b_glacio = pd.DataFrame(b.values, columns=b.domain, index=b.station)
+  b_glacio.columns = ['d02', 'd03']
+#+end_src
 
-#+begin_src ipython :results raw :session
-fig = plt.figure()
-coq.plotrow(b_glacio.mean().to_frame('dT'))
+#+begin_src ipython :results raw :session :savefig "bias_glacio.png"
+fig = plt.figure(figsize=(7, 4))
+fig.subplots_adjust(left=0.1, right=0.9, wspace=0.06)
+plt.set_cmap('Spectral')
+gs = gridspec.GridSpec(1, 3)
+_, gl = coq.plotrow(dz, subplot_spec=gs[0], vmin=-900, vmax=900, cbar='left', cbar_label='m', cbar_width=0.03)
+gl[0].ylabels_left = False
+plt.set_cmap('Spectral_r')
+_, gl = coq.plotrow(b_glacio, subplot_spec=gs[1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
+gl[0].ylabels_left = False
 #+end_src
 
 #+RESULTS:
-[[file:./obipy-resources/T2/RORFPf.png]]
+[[file:./obipy-resources/T2/bias_glacio.png]]
+#+CAPTION: T2 bias as above (and height difference to the left, **dz**) for the domains **d02** and **d03** of the 'glacio' simulation (2013-03-21 - 2016-03-31).
 
+#+begin_src ipython :results silent :session
+  Tx = xr.DataArray(T).rename({'ultima_lectura': 'Time'}).mean('Time')
+  x = pd.concat((
+      b1.resample('QS-MAR').mean(),
+      b2.resample('QS-MAR').mean(),
+      xr2pd((time(g02) - Tx).resample('QS-MAR', 'Time')),
+      xr2pd((time(g03) - Tx).resample('QS-MAR', 'Time'))
+  ), keys=['pre', 'post', 'd02', 'd03'])
+  idx = x.index.get_level_values(1)
+  x.index = pd.MultiIndex.from_arrays((idx.month, idx.year, x.index.get_level_values(0)))
+  x = x.sort_index().unstack(0)
+#+end_src
+
+
+#+begin_src ipython :results raw :session :savefig "bias_seasonal_2013.png"
+  fig = plt.figure(figsize=(8, 7))
+  fig.subplots_adjust(wspace=0.04, hspace=0.04)
+  gs = gridspec.GridSpec(2, 1)
+  for i, (n, r) in enumerate(x.loc[2013].iterrows()):
+      df = r.unstack()
+      df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
+      coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
+      cplots.rowlabel(gs[i, 0], n)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/bias_seasonal_2013.png]]
+
+#+begin_src ipython :results raw :session :savefig "bias_seasonal_2014.png"
+  fig = plt.figure(figsize=(8, 7))
+  fig.subplots_adjust(wspace=0.04, hspace=0.04)
+  gs = gridspec.GridSpec(2, 1)
+  for i, (n, r) in enumerate(x.loc[2014].iterrows()):
+      df = r.unstack()
+      df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
+      coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
+      cplots.rowlabel(gs[i, 0], n)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/bias_seasonal_2014.png]]
+
+#+begin_src ipython :results raw :session :savefig "bias_seasonal_2015.png"
+  fig = plt.figure(figsize=(8, 7))
+  fig.subplots_adjust(wspace=0.04, hspace=0.04)
+  gs = gridspec.GridSpec(2, 1)
+  for i, (n, r) in enumerate(x.loc[2015].iterrows()):
+      df = r.unstack()
+      df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
+      coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
+      cplots.rowlabel(gs[i, 0], n)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/bias_seasonal_2015.png]]
+
+#+begin_src ipython :results raw :session :savefig "bias_seasonal_2016.png"
+  fig = plt.figure(figsize=(8, 10))
+  fig.subplots_adjust(wspace=0.04, hspace=0.04)
+  gs = gridspec.GridSpec(3, 1)
+  for i, (n, r) in enumerate(x.loc[2016].iterrows()):
+      df = r.unstack()
+      df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
+      coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
+      cplots.rowlabel(gs[i, 0], n)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/bias_seasonal_2016.png]]
+
+#+begin_src ipython :results raw :session :savefig "bias_seasonal_2017.png"
+  fig = plt.figure(figsize=(8, 7))
+  fig.subplots_adjust(wspace=0.04, hspace=0.04)
+  gs = gridspec.GridSpec(2, 1)
+  for i, (n, r) in enumerate(x.loc[2017].sort_index(ascending=False).iterrows()):
+      df = r.unstack()
+      df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
+      coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
+      cplots.rowlabel(gs[i, 0], n)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/bias_seasonal_2017.png]]
+
+#+begin_src ipython :results raw :session :savefig "bias_seasonal_2018.png"
+  fig = plt.figure(figsize=(8, 4))
+  fig.subplots_adjust(wspace=0.04, hspace=0.04)
+  gs = gridspec.GridSpec(1, 1)
+  df = x.loc[2018].stack().T
+  df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns.droplevel(0)]
+  coq.plotrow(df, subplot_spec=gs[0], vmin=-10, vmax=10)
+  cplots.rowlabel(gs[0], 'post')
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/bias_seasonal_2018.png]]
 
 #+begin_src ipython :results silent :session
 from filters import Lanczos
