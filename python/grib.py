@@ -37,3 +37,6 @@ def ungrib(path):
 def align(x1,x2,t1,t2):
 	s = set(t1).intersection(t2)
 	return x1[[np.where(t1==x)[0][0] for x in s],:,:,:], x2[[np.where(t2==x)[0][0] for x in s],:,:,:]
+
+
+if __name__ == '__main__':

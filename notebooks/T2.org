@@ -32,17 +32,21 @@
  - T
    - T_p_d02_raw_log.pdf
    - daily_diff_p_d02.pdf
-
+** July 2017 GFS issue
+*** SST (static scalar value, from wrf_operational c01 simulations)
+| pre 2017-07-19 | 275.092438 |
+| post           | 274.656891 |
+** rutas
+*** /sata1_boletin/pable/WRF_V3.8.... -> met_ files
 * imports
  #+begin_src ipython :results silent :session
-   # import sys
-   # sys.path.append('../../code/python')
    import numpy as np
    import pandas as pd
    import xarray as xr
    import helpers as hh
    import matplotlib.pyplot as plt
    from matplotlib import ticker, gridspec
+   from glob import glob
    from cartopy import crs
    import plots as cplots
    # import interpolation as ip
@@ -57,9 +61,10 @@
    # # rc('text', usetex=True)
    # plt.rcParams.update({'text.usetex': False, 'mathtext.fontset': 'stixsans'})
    plt.style.use('~/Dropbox/spacemacs/private/nandu/stylelib/nandu_dark.mplstyle')
+   coq = cplots.Coquimbo()
  #+end_src
  
-# old code
+** old data code
 #+begin_src ipython :results silent :session
   Map = hh.basemap()
 
@@ -122,49 +127,6 @@
  dz = (sta['elev'] - Z.T).T
 #+end_src
 
-# new code
-#+begin_src ipython :results silent :session
-  from glob import glob
-  def separate_start_hours(glob_pattern, var):
-      ds = [xr.open_dataset(f)[var] for f in glob(glob_pattern)]
-      n = min(len(d.Time) for d in ds)
-      # using .isel() is essential b/c .sel() *includes* the end of slice
-      x = xr.concat([d.isel(Time=slice(None, n)) for d in ds], 'start').sortby('start')
-      h = x.start.to_index().hour
-      return x.sel(start = h==20), x.sel(start = h==8)
-
-  def lead_day(day, T_sta, ds):
-      x = ds.isel(Time=slice(day*24, (day+1)*24)).stack(idx=('Time','start'))
-      df = pd.DataFrame(x.values)
-      if x.dims.index('station') == 0:
-          df = df.T
-      df.index = x.XTIME
-      df.columns = x.station
-      return (df - T_sta).dropna(0, 'all').resample('h').mean()
-#+end_src
-
-** data
-#+begin_src ipython :results silent :session
- # helper to get the correct elevation data for each model 'name'
- def dem(s):
-     if s=='d03_orl': return s
-     elif s[:3]=='d03': return 'd03_op'
-     else: return s[:3]
-#+end_src
-
-#+begin_src ipython :results silent :session
-  LinearLinear = {'kiwi': '../../ceaza/data/LinearLinear.h5',
-           'condor': '../../data/WRF/h5/LinearLinear.h5'}
-  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
-  T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, 'elev')) + 273.15
-  Tm = hh.read_hdf(LinearLinear, 'T2')
-  B = Tm.add( -T )
-  Bm = B.mean(1)
-  Z = hh.read_hdf(LinearLinear, 'z')[[dem(z) for z in B.items]]
-  Z.columns = B.items
-  dz = Z.add(-sta['elev'].astype(float), 0) # model - station
-#+end_src
-
 * Land-Sea mask :export:
 #+begin_src ipython :results raw :session :savefig "landmask.png" :exports none
   d = hh.read_hdf(LinearLinear, 'land_mask')
@@ -181,13 +143,27 @@
 #+RESULTS:
 
 * T2
-** data
-#+begin_src ipython :results silent :session
-  # reload(cplots)
-  coq = cplots.Coquimbo()
-#+end_src
-
 ** Mean bias
+*** old data (up to 2016-12)
+**** data
+#+begin_src ipython :results silent :session
+  # helper to get the correct elevation data for each model 'name'
+  def dem(s):
+      if s=='d03_orl': return s
+      elif s[:3]=='d03': return 'd03_op'
+      else: return s[:3]
+  LinearLinear = {'kiwi': '../../ceaza/data/LinearLinear.h5',
+                  'condor': '../../data/WRF/h5/LinearLinear.h5'}
+  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
+  T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, 'elev')) + 273.15
+  Tm = hh.read_hdf(LinearLinear, 'T2')
+  B = Tm.add( -T )
+  Bm = B.mean(1)
+  Z = hh.read_hdf(LinearLinear, 'z')[[dem(z) for z in B.items]]
+  Z.columns = B.items
+  dz = Z.add(-sta['elev'].astype(float), 0) # model - station
+#+end_src
+**** plots
 #+begin_src ipython :results raw :session :savefig "mean_bias_overview.png"
   fig = plt.figure(figsize=(14, 11))
   fig.subplots_adjust(left=0.12, right=0.86, wspace=0.06, hspace=0.06)
@@ -208,7 +184,6 @@
 #+CAPTION: **bottom**: temperature bias after correcting for a mean lapse rate of 6.5K / km
 #+RESULTS:
 [[file:./obipy-resources/T2/mean_bias_overview.png]]
-
 
 #+begin_src ipython :results raw :session :savefig "mean_bias_restricted.png"
   fig = plt.figure(figsize=(10, 12))
@@ -232,12 +207,38 @@
 #+RESULTS:
 [[file:./obipy-resources/T2/mean_bias_restricted.png]]
 
+*** updated data (up to 2017-07, the GFS change)
+**** data
 #+begin_src ipython :results silent :session
+  def separate_start_hours(glob_pattern, var):
+      ds = [xr.open_dataset(f)[var] for f in glob(glob_pattern)]
+      n = min(len(d.Time) for d in ds)
+      # using .isel() is essential b/c .sel() *includes* the end of slice
+      x = xr.concat([d.isel(Time=slice(None, n)) for d in ds], 'start').sortby('start')
+      h = x.start.to_index().hour
+      return x.sel(start = h==20), x.sel(start = h==8)
+
+  def lead_day(day, T_sta, ds):
+      x = ds.isel(Time=slice(day*24, (day+1)*24)).stack(idx=('Time','start'))
+      df = pd.DataFrame(x.values)
+      if x.dims.index('station') == 0:
+          df = df.T
+      df.index = x.XTIME
+      df.columns = x.station
+      return (df - T_sta).dropna(0, 'all').resample('h').mean()
+
+  T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, 'elev')) + 273.15
+  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
   dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
-  t0, t12 = separate_start_hours('/nfs/HPC/arno/data/T2_*_81*', 'T2')
-  b0, b12 = [lead_day(0, T, d) for d in [t0, t12]]
+  T2_0h, T2_12h = separate_start_hours('/nfs/HPC/arno/data/T2_*_81*', 'T2')
+  # where the change in GFS occurs
+  T2_12h_preJul17 = T2_12h.sel(start=slice(None, '2017-07-18'))
+  T2_12h_postJul17 = T2_12h.sel(start=slice('2017-07-19', None))
+  bias_0h, bias_12h = [lead_day(0, T, d) for d in [T2_0h, T2_12h]]
+  bias_12h_preJul17, bias_12h_postJul17 = [lead_day(0, T, d) for d in [T2_12h_preJul17, T2_12h_postJul17]]
 #+end_src
 
+**** 0h run vs 12h runs prior to Jul 2017 (lead day 0)
 #+begin_src ipython :results raw :session :savefig "mean_bias_d03_h.png"
   fig = plt.figure(figsize=(6, 7))
   fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
@@ -246,12 +247,12 @@
   _, gl = coq.plotrow(dz, subplot_spec=gs[0, 0], vmin=-900, vmax=900, cbar='left', cbar_label='m', cbar_width=0.03)
   gl[0].ylabels_left = False
   plt.set_cmap('Spectral_r')
-  x = pd.concat((b0.mean(), b0.mean() + 0.0065 * dz['dz']), 1)
+  x = pd.concat((bias_0h.mean(), bias_0h.mean() + 0.0065 * dz['dz']), 1)
   x.columns = ['dT', 'dTc']
   _, gl = coq.plotrow(x, subplot_spec=gs[0, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
   gl[0].ylabels_left = False
   cplots.rowlabel(gs[0, :], "0h", labelpad=80)
-  x = pd.concat((b12.mean(), b12.mean() + 0.0065 * dz['dz']), 1)
+  x = pd.concat((bias_12h_preJul17.mean(), bias_12h_preJul17.mean() + 0.0065 * dz['dz']), 1)
   x.columns = ['dT', 'dTc']
   coq.plotrow(x, subplot_spec=gs[1, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
   cplots.rowlabel(gs[1, :], "12h", labelpad=80)
@@ -262,13 +263,8 @@
 #+CAPTION: Bias (WRF - observations) for operational domain 03 only, for the runs which were started at 0:00 UTC (**top**) and 12:00 UTC (**bottom**).
 #+CAPTION: Meaning of column titles: *dz* - hight differences WRF model grid minus station elevation; *dT* - straight T2 bias; *dTc* - T2 bias 'corrected' by adjusting it for standard lapse rate times elevation difference ('dz').
 
-#+begin_src ipython :results silent :session
-  # where the change in GFS occurs
-  t1 = t12.sel(start=slice(None, '2017-07-18'))
-  t2 = t12.sel(start=slice('2017-07-19', None))
-  b1, b2 = [lead_day(0, T, d) for d in [t1, t2]]
-#+end_src
-
+**** The July 2017 issue
+***** lead day 0
 #+begin_src ipython :results raw :session :savefig "mean_bias_d03_12h_day0.png"
   fig = plt.figure(figsize=(6, 7))
   fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
@@ -277,12 +273,12 @@
   _, gl = coq.plotrow(dz, subplot_spec=gs[0, 0], vmin=-900, vmax=900, cbar='left', cbar_label='m', cbar_width=0.03)
   gl[0].ylabels_left = False
   plt.set_cmap('Spectral_r')
-  x = pd.concat((b1.mean(), b1.mean() + 0.0065 * dz['dz']), 1)
+  x = pd.concat((bias_12h_preJul17.mean(), bias_12h_preJul17.mean() + 0.0065 * dz['dz']), 1)
   x.columns = ['dT', 'dTc']
   _, gl = coq.plotrow(x, subplot_spec=gs[0, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
   gl[0].ylabels_left = False
   cplots.rowlabel(gs[0, :], "pre", labelpad=80)
-  x = pd.concat((b2.mean(), b2.mean() + 0.0065 * dz['dz']), 1)
+  x = pd.concat((bias_12h_postJul17.mean(), bias_12h_postJul17.mean() + 0.0065 * dz['dz']), 1)
   x.columns = ['dT', 'dTc']
   coq.plotrow(x, subplot_spec=gs[1, 1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
   cplots.rowlabel(gs[1, :], "post", labelpad=80)
@@ -292,13 +288,9 @@
 [[file:./obipy-resources/T2/mean_bias_d03_12h_day0.png]]
 #+CAPTION: Same as above, but for the runs starting at 12h only (from 2016-04 onward). The split is now before (**top**) and after (**bottom**) the change that occerred in the GFS at 2017-07-19.
 
-
-#+begin_src ipython :results silent :session
-  # where the change in GFS occurs
-  b1, b2 = [lead_day(1, T, d) for d in [t1, t2]]
-#+end_src
-
+***** lead day 1
 #+begin_src ipython :results raw :session :savefig "mean_bias_d03_12h_day1.png"
+  b1, b2 = [lead_day(1, T, d) for d in [T2_12h_preJul17, T2_12h_postJul17]]
   fig = plt.figure(figsize=(6, 7))
   fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
   gs = gridspec.GridSpec(2, 3)
@@ -321,31 +313,25 @@
 [[file:./obipy-resources/T2/mean_bias_d03_12h_day1.png]]
 #+CAPTION: Same as above, but for lead day 1 instead of 0.
 
-
+*** glacio simulation 
+**** data
 #+begin_src ipython :results silent :session
   def time(ds):
       ds.coords['Time'] = ('Time', ds.XTIME)
       return ds
 
-  def xr2pd(ds):
-      x = ds.values if ds.dims.index('Time') == 0 else ds.values.T
-      return pd.DataFrame(x, index=ds.Time, columns=ds.station)
-#+end_src
-
-#+begin_src ipython :results silent :session
   T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, 'elev')) + 273.15
-  g02 = xr.open_dataarray('/nfs/HPC/arno/data/T2_glacio_d02_intp.nc')
-  g03 = xr.open_dataarray('/nfs/HPC/arno/data/T2_glacio_d03_intp.nc')
-  b = xr.concat((g02, g03), 'domain')
-  b.coords['Time'] = ('Time', b.XTIME)
-  b = (b - xr.DataArray(T).rename({'ultima_lectura': 'Time'})).mean('Time')
+  glacio_d02 = xr.open_dataarray('/nfs/HPC/arno/data/T2_glacio_d02_intp.nc')
+  glacio_d03 = xr.open_dataarray('/nfs/HPC/arno/data/T2_glacio_d03_intp.nc')
+  glacio = time(xr.concat((glacio_d02, glacio_d03), pd.Index(['d02', 'd03'], name='domain')))
+  b = (glacio - xr.DataArray(T).rename({'ultima_lectura': 'Time'})).mean('Time')
   if b.dims.index('domain') == 0:
-      b_glacio = pd.DataFrame(b.values, index=b.domain, columns=b.station).T
+      bias_glacio = pd.DataFrame(b.values, index=b.domain, columns=b.station).T
   else:
-      b_glacio = pd.DataFrame(b.values, columns=b.domain, index=b.station)
-  b_glacio.columns = ['d02', 'd03']
+      bias_glacio = pd.DataFrame(b.values, columns=b.domain, index=b.station)
+  bias_glacio.columns = ['d02', 'd03']
 #+end_src
-
+**** plots
 #+begin_src ipython :results raw :session :savefig "bias_glacio.png"
 fig = plt.figure(figsize=(7, 4))
 fig.subplots_adjust(left=0.1, right=0.9, wspace=0.06)
@@ -354,7 +340,7 @@ gs = gridspec.GridSpec(1, 3)
 _, gl = coq.plotrow(dz, subplot_spec=gs[0], vmin=-900, vmax=900, cbar='left', cbar_label='m', cbar_width=0.03)
 gl[0].ylabels_left = False
 plt.set_cmap('Spectral_r')
-_, gl = coq.plotrow(b_glacio, subplot_spec=gs[1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
+_, gl = coq.plotrow(bias_glacio, subplot_spec=gs[1:], vmin=-10, vmax=10, cbar_label='$^{\circ}$C', cbar_width=0.03)
 gl[0].ylabels_left = False
 #+end_src
 
@@ -362,25 +348,31 @@ gl[0].ylabels_left = False
 [[file:./obipy-resources/T2/bias_glacio.png]]
 #+CAPTION: T2 bias as above (and height difference to the left, **dz**) for the domains **d02** and **d03** of the 'glacio' simulation (2013-03-21 - 2016-03-31).
 
+*** seasonal biases
 #+begin_src ipython :results silent :session
-  Tx = xr.DataArray(T).rename({'ultima_lectura': 'Time'}).mean('Time')
-  x = pd.concat((
-      b1.resample('QS-MAR').mean(),
-      b2.resample('QS-MAR').mean(),
-      xr2pd((time(g02) - Tx).resample('QS-MAR', 'Time')),
-      xr2pd((time(g03) - Tx).resample('QS-MAR', 'Time'))
-  ), keys=['pre', 'post', 'd02', 'd03'])
-  idx = x.index.get_level_values(1)
-  x.index = pd.MultiIndex.from_arrays((idx.month, idx.year, x.index.get_level_values(0)))
-  x = x.sort_index().unstack(0)
+  def xr2pd(ds):
+      x = ds.values if ds.dims.index('Time') == 0 else ds.values.T
+      return pd.DataFrame(x, index=ds.Time, columns=ds.station)
+
+  Tx = xr.DataArray(T).rename({'ultima_lectura': 'Time'})
+  bias_seas = (glacio - Tx).resample('QS-MAR', 'Time', how='mean')
+  bias_seas = pd.concat((
+      bias_0h.resample('QS-MAR').mean(),
+      bias_12h_preJul17.resample('QS-MAR').mean(),
+      bias_12h_postJul17.resample('QS-MAR').mean(),
+      xr2pd(bias_seas.sel(domain='d02')),
+      xr2pd(bias_seas.sel(domain='d03'))
+  ), keys=['0h', 'pre', 'post', 'd02', 'd03'])
+  idx = bias_seas.index.get_level_values(1)
+  bias_seas.index = pd.MultiIndex.from_arrays((idx.month, idx.year, bias_seas.index.get_level_values(0)))
+  bias_seas = bias_seas.sort_index().unstack(0)
 #+end_src
-
-
+**** 2013
 #+begin_src ipython :results raw :session :savefig "bias_seasonal_2013.png"
   fig = plt.figure(figsize=(8, 7))
   fig.subplots_adjust(wspace=0.04, hspace=0.04)
   gs = gridspec.GridSpec(2, 1)
-  for i, (n, r) in enumerate(x.loc[2013].iterrows()):
+  for i, (n, r) in enumerate(bias_seas.loc[2013].iterrows()):
       df = r.unstack()
       df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
       coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
@@ -389,12 +381,14 @@ gl[0].ylabels_left = False
 
 #+RESULTS:
 [[file:./obipy-resources/T2/bias_seasonal_2013.png]]
+#+CAPTION: Mean bias of T2 temperatures (model T2 minus station ta_c) for each season of 2013 (season *start* is counted within the year, so DJF 2013 contains January and February of 2014). The simulations are the wrf_glacio ones.
 
+**** 2014
 #+begin_src ipython :results raw :session :savefig "bias_seasonal_2014.png"
   fig = plt.figure(figsize=(8, 7))
   fig.subplots_adjust(wspace=0.04, hspace=0.04)
   gs = gridspec.GridSpec(2, 1)
-  for i, (n, r) in enumerate(x.loc[2014].iterrows()):
+  for i, (n, r) in enumerate(bias_seas.loc[2014].iterrows()):
       df = r.unstack()
       df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
       coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
@@ -403,12 +397,14 @@ gl[0].ylabels_left = False
 
 #+RESULTS:
 [[file:./obipy-resources/T2/bias_seasonal_2014.png]]
+#+CAPTION: Same as above, 2014.
 
+**** 2015
 #+begin_src ipython :results raw :session :savefig "bias_seasonal_2015.png"
-  fig = plt.figure(figsize=(8, 7))
+  fig = plt.figure(figsize=(8, 10))
   fig.subplots_adjust(wspace=0.04, hspace=0.04)
-  gs = gridspec.GridSpec(2, 1)
-  for i, (n, r) in enumerate(x.loc[2015].iterrows()):
+  gs = gridspec.GridSpec(3, 1)
+  for i, (n, r) in enumerate(bias_seas.loc[2015].loc[['d02', 'd03', '0h']].iterrows()):
       df = r.unstack()
       df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
       coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
@@ -417,107 +413,182 @@ gl[0].ylabels_left = False
 
 #+RESULTS:
 [[file:./obipy-resources/T2/bias_seasonal_2015.png]]
+#+CAPTION: Same as above, 2015.
 
+**** 2016
 #+begin_src ipython :results raw :session :savefig "bias_seasonal_2016.png"
-  fig = plt.figure(figsize=(8, 10))
+  fig = plt.figure(figsize=(7, 12))
+  plt.set_cmap('Spectral_r')
   fig.subplots_adjust(wspace=0.04, hspace=0.04)
-  gs = gridspec.GridSpec(3, 1)
-  for i, (n, r) in enumerate(x.loc[2016].iterrows()):
+  gs = gridspec.GridSpec(4, 1)
+  for i, (n, r) in enumerate(bias_seas.loc[2016].loc[['d02', 'd03', '0h', 'pre']].iterrows()):
       df = r.unstack()
       df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
-      coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
+      coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10, cbar=None if i<3 else 'right')
       cplots.rowlabel(gs[i, 0], n)
 #+end_src
 
 #+RESULTS:
 [[file:./obipy-resources/T2/bias_seasonal_2016.png]]
+#+CAPTION: The top two rows are from the wrf_glacio simulation (**d02** and **d03**, MAM only), the bottom two rows are from the wrf_operacional simulations (0:00 UTC start simulations, until April 2016, **0h**) and pre-July 2017 (GFS changes) 12:00 UTC simulations (**pre**).
 
-#+begin_src ipython :results raw :session :savefig "bias_seasonal_2017.png"
-  fig = plt.figure(figsize=(8, 7))
+**** 2017-18
+#+begin_src ipython :results raw :session :savefig "bias_seasonal_2017-18.png"
+  fig = plt.figure(figsize=(8, 10))
   fig.subplots_adjust(wspace=0.04, hspace=0.04)
-  gs = gridspec.GridSpec(2, 1)
-  for i, (n, r) in enumerate(x.loc[2017].sort_index(ascending=False).iterrows()):
+  gs = gridspec.GridSpec(3, 1)
+  for i, (n, r) in enumerate(bias_seas.loc[[(2017, 'pre'), (2017, 'post'), (2018, 'post')]].iterrows()):
       df = r.unstack()
       df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns]
       coq.plotrow(df, subplot_spec=gs[i, 0], vmin=-10, vmax=10)
-      cplots.rowlabel(gs[i, 0], n)
+      cplots.rowlabel(gs[i, 0], n[0], labelpad=50)
 #+end_src
 
 #+RESULTS:
-[[file:./obipy-resources/T2/bias_seasonal_2017.png]]
+[[file:./obipy-resources/T2/bias_seasonal_2017-18.png]]
+#+CAPTION: WRF operacional simulations, **top**: pre-July 2017 12:00 UTC simulations; **bottom**: post-July 2017. 2018 is only contained in the 'post' and contains errors from the undiscovered ground flux masking error.
 
-#+begin_src ipython :results raw :session :savefig "bias_seasonal_2018.png"
-  fig = plt.figure(figsize=(8, 4))
+*** The July 2017 issue
+#+begin_src ipython :results raw :session :savefig "fnl_st_2017-07.png"
+import pygrib
+d = []
+for g in sorted(glob('/nfs/sata1_modelosglobales/FNLs/2017_grib2/fnl_201707*')):
+    f = pygrib.open(g)
+    t = f[250]
+    x, _, _ = t.data()
+    d.append((t.validDate, x.mean()))
+    f.close()
+
+fig = plt.figure(figsize=(7, 3))
+plt.plot(*zip(*d))
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/fnl_st_2017-07.png]]
+#+CAPTION: global mean soil temperature around the change in GFS at 2017-07-19, in FNL data.
+
+#+begin_src ipython :results raw :session :savefig "wrf_fnl_2017-05.png"
+  import pygrib
+  with pygrib.open('/nfs/sata1_modelosglobales/FNLs/2017_grib2/fnl_20170718_12_00.grib2') as f:
+      st1, _, _ = f[250].data()
+  with pygrib.open('/nfs/sata1_modelosglobales/FNLs/2017_grib2/fnl_20170720_12_00.grib2') as f:
+      st2, lat, lon = f[250].data()
+
+  d1 = xr.open_dataset('/nfs/sata2_glacio/wrf_glacio/c01_2017071812/wrfout_d03_2017-07-18_12:00:00')
+  d2 = xr.open_dataset('/nfs/sata2_glacio/wrf_glacio/c01_2017072012/wrfout_d03_2017-07-20_12:00:00')
+
+  fig, axs = plt.subplots(2, 2, subplot_kw={'projection': crs.PlateCarree()}, figsize=(7, 8))
   fig.subplots_adjust(wspace=0.04, hspace=0.04)
-  gs = gridspec.GridSpec(1, 1)
-  df = x.loc[2018].stack().T
-  df.columns = [{3: 'MAM', 6: 'JJA', 9: 'SON', 12: 'DJF'}[k] for k in df.columns.droplevel(0)]
-  coq.plotrow(df, subplot_spec=gs[0], vmin=-10, vmax=10)
-  cplots.rowlabel(gs[0], 'post')
+  plt.set_cmap('cividis')
+  plt.sca(axs[0, 0])
+  plt.pcolormesh(d1.XLONG[0,:,:], d1.XLAT[0,:,:], d1['TSK'].mean('Time'), vmin=245, vmax=290)
+  coq(plt.gca(), lines_only=True)
+  plt.gca().gridlines(xlocs=range(-73, -68), ylocs=range(-33, -27))
+  plt.sca(axs[0, 1])
+  plt.pcolormesh(d2.XLONG[0,:,:], d2.XLAT[0,:,:],d2['TSK'].mean('Time'), vmin=245, vmax=290)
+  coq(plt.gca(), lines_only=True)
+  plt.gca().gridlines(xlocs=range(-73, -68), ylocs=range(-33, -27))
+  plt.sca(axs[1, 0])
+  plt.pcolormesh(lon-.5, lat+.5, st1, transform=crs.PlateCarree(), vmin=245, vmax=290)
+  coq(plt.gca(), lines_only=True)
+  plt.gca().gridlines(xlocs=range(-73, -68), ylocs=range(-33, -27))
+  plt.gca().set_extent(axs[0, 0].get_extent(), crs=crs.PlateCarree())
+  plt.sca(axs[1, 1])
+  plt.pcolormesh(lon-.5, lat+.5, st2, transform=crs.PlateCarree(), vmin=245, vmax=290)
+  coq(plt.gca(), lines_only=True)
+  plt.gca().gridlines(xlocs=range(-73, -68), ylocs=range(-33, -27))
+  plt.gca().set_extent(axs[0, 1].get_extent(), crs=crs.PlateCarree())
 #+end_src
 
 #+RESULTS:
-[[file:./obipy-resources/T2/bias_seasonal_2018.png]]
+[[file:./obipy-resources/T2/wrf_fnl_2017-05.png]]
+#+CAPTION: Two days before (**left column**) and after (**right**) the July-2017 break, in the wrf_operacional simluations (**top**) and FNL (**bottom**). The gridlines are full degrees lon/lat; the FNL plot squares are lined up **assuming that full degrees in FNL correspond to cell centers** (I don't know if that's correct). Variables shown are **TSK** (top / WRF) and soil temperature (**ts**, bottom / FNL).
 
-#+begin_src ipython :results silent :session
-from filters import Lanczos
-f0 = Lanczos.filter(b0, '30D')
-f0 = Lanczos.filter(b0, '30D')
+** daily min/max
+*** old data (up to 2016-12)
+#+begin_src ipython :results raw :session :savefig "daily_min_bias_overview.png"
+  x = ['fnl', 'd01', 'd02', 'd03_orl', 'd03_0_00']
+
+  fig = plt.figure(figsize=(11, 11))
+  fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
+  plt.set_cmap('Spectral_r')
+  gs = gridspec.GridSpec(3, 1)
+
+  dt = T.groupby(T.index.date).min()
+  day = lambda x: x.groupby(x.major_axis.date).min()
+  coq.plotrow(day(Tm[x]).add(-dt).mean(1), subplot_spec=gs[0], vmin=-10, vmax=10)
+  coq.plotrow(day(Tm[x].add(0.0065 * dz[x], 1)).add(-dt).mean(1), subplot_spec=gs[1], vmin=-10, vmax=10)
+  coq.plotrow(day(Tm[x].add(-Bm[x], 1)).add(-dt).mean(1), subplot_spec=gs[2], vmin=-10, vmax=10)
 #+end_src
 
-
-
-
-
-
-#+begin_src ipython :results silent :session
- x = ['fnl', 'd01', 'd02', 'd03_orl', 'd03_0_00']
-
- fig = plt.figure(
-     figsize=(15, 12),
-     subplotpars=SubplotParams(left=0.08, right=0.86, wspace=0.06, hspace=0.06))
- plt.set_cmap('coolwarm')
-
- day = lambda x: x.groupby(lambda y: y.date).min()
- dt = day(T) # daily min of station data
- P = pd.Panel({
-     0: day(Tm).add(-dt).mean(1), # daily min of model data minus daily min of station data
-     1: day( Tm.add( -0.0065 * dz, 1) ).add(-dt).mean(1), # model data corrected by standard lapse rate
-     2: day( Tm.add(-Bm, 1) ).add(-dt).mean(1) # model data with mean bias removed
- })
-
- plot(P, cols=x, clims=[10, 10, 10])
-#+end_src
-
+#+RESULTS:
+[[file:./obipy-resources/T2/daily_min_bias_overview.png]]
 #+CAPTION: **top**: mean bias of daily **minimum** temperatures (model minus station)  
 #+CAPTION: **middle**: mean bias after correction for mean lapse rate of 6.5K / km  
 #+CAPTION: **bottom**: mean bias of daily minimum after removing mean bias (over all records)
 
 
-#+begin_src ipython :results silent :session
- x = ['fnl', 'd01', 'd02', 'd03_orl', 'd03_0_00']
+#+begin_src ipython :results raw :session :savefig "daily_max_bias_overview.png"
+  x = ['fnl', 'd01', 'd02', 'd03_orl', 'd03_0_00']
 
- fig = plt.figure(
-     figsize=(15, 12),
-     subplotpars=SubplotParams(left=0.08, right=0.86, wspace=0.06, hspace=0.06))
- plt.set_cmap('coolwarm')
+  fig = plt.figure(figsize=(11, 11))
+  fig.subplots_adjust(left=0.08, right=0.86, wspace=0.06, hspace=0.06)
+  plt.set_cmap('Spectral_r')
+  gs = gridspec.GridSpec(3, 1)
 
- day = lambda x: x.groupby(lambda y: y.date).max()
- dt = day(T) # daily min of station data
- P = pd.Panel(
-     {
-         0: day(Tm).add(-dt).mean(1), # daily min of model data minus daily min of station data
-         1: day( Tm.add( -0.0065 * dz, 1) ).add(-dt).mean(1), # model data corrected by standard lapse rate
-         2: day( Tm.add(-Bm, 1) ).add(-dt).mean(1) # model data with mean bias removed
-     }
- )
-
- plot(P, cols=x, clims=[10, 10, 10])
+  dt = T.groupby(T.index.date).max()
+  day = lambda x: x.groupby(x.major_axis.date).max()
+  coq.plotrow(day(Tm[x]).add(-dt).mean(1), subplot_spec=gs[0], vmin=-10, vmax=10)
+  coq.plotrow(day(Tm[x].add(0.0065 * dz[x], 1)).add(-dt).mean(1), subplot_spec=gs[1], vmin=-10, vmax=10)
+  coq.plotrow(day(Tm[x].add(-Bm[x], 1)).add(-dt).mean(1), subplot_spec=gs[2], vmin=-10, vmax=10)
 #+end_src
 
+#+RESULTS:
+[[file:./obipy-resources/T2/daily_max_bias_overview.png]]
 #+CAPTION: **top**: mean bias of daily **maximum** temperatures (model minus station)  
 #+CAPTION: **middle**: mean bias after correction for mean lapse rate of 6.5K / km  
 #+CAPTION: **bottom**: mean bias of daily maximum after removing mean bias (over all records)
+
+*** updated data (seasonal)
+#+begin_src ipython :results silent :session
+  def day(ds, op):
+      x = ds.copy()
+      x.coords['day'] = ('Time', pd.DatetimeIndex(x.indexes['Time'].date))
+      return getattr(x.groupby('day'), op)('Time')
+
+  def separate_start_hours(glob_pattern, var):
+      ds = [xr.open_dataset(f)[var] for f in glob(glob_pattern)]
+      n = min(len(d.Time) for d in ds)
+      # using .isel() is essential b/c .sel() *includes* the end of slice
+      x = xr.concat([d.isel(Time=slice(None, n)) for d in ds], 'start').sortby('start')
+      h = x.start.to_index().hour
+      return x.sel(start = h==20), x.sel(start = h==8).sel(start=slice(None, '2017-07-18'))
+
+  def lead_day(day, T_sta, ds):
+      x = ds.isel(Time=slice(day*24, (day+1)*24)).stack(idx=('Time','start'))
+      df = pd.DataFrame(x.values)
+      if x.dims.index('station') == 0:
+          df = df.T
+      df.index = x.XTIME
+      df.columns = x.station
+      return (df - T_sta).dropna(0, 'all').resample('h').mean()
+
+
+  T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, 'elev')) + 273.15
+  Tx = xr.DataArray(T).rename({'ultima_lectura': 'Time'})
+  bias_seas = (day(glacio, 'min') - day(Tx, 'min')).resample('QS-MAR', 'day', how='mean')
+  bias_seas = pd.concat((
+      bias_0h.resample('QS-MAR').mean(),
+      bias_12h_preJul17.resample('QS-MAR').mean(),
+      bias_12h_postJul17.resample('QS-MAR').mean(),
+      xr2pd(bias_seas.sel(domain='d02')),
+      xr2pd(bias_seas.sel(domain='d03'))
+  ), keys=['0h', 'pre', 'post', 'd02', 'd03'])
+  idx = bias_seas.index.get_level_values(1)
+  bias_seas.index = pd.MultiIndex.from_arrays((idx.month, idx.year, bias_seas.index.get_level_values(0)))
+  bias_seas = bias_seas.sort_index().unstack(0)
+#+end_src
+
 
 ** Mean absolute error (MAE)
    

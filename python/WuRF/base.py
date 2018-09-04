@@ -361,3 +361,23 @@ def piece_together(glob_pattern):
             D[i] = d
     for f in D.items():
         f.to_netcdf('{}_{}.nc'.format(glob_pattern[:-1], l))
+
+
+def tease_apart(glob_pattern, var):
+    """Separate a number of files containing concatenated WRF output and given by a glob pattern according to known breaks in our operational WRF simulations.
+
+    Currently known breaks are:
+
+        * Change from 0:00 UTC simulation start time to 12:00 UTC (April 2016). This change is nearly concurrent with a version upgrade of WRF from 3.7 to 3.8
+        * Change in GFS in July 2017, which requires a new version of WPS to be used (3.9.0.1) - this was initially not implemented immediately, and hence the simulations with configuration "c01" after this date should be discarded. Configuration "c05" should not be affected and is used in newer operational runs.
+
+    :returns: Tuple of :class:`xarray.Dataset` separated at the relevant time points.
+    :rtype: :obj:`tuple`
+
+    """
+    ds = [xr.open_dataset(f)[var] for f in glob(glob_pattern)]
+    n = min(len(d.Time) for d in ds)
+    # using .isel() is essential b/c .sel() *includes* the end of slice
+    x = xr.concat([d.isel(Time=slice(None, n)) for d in ds], 'start').sortby('start')
+    h = x.start.to_index().hour
+    return x.sel(start = h==20), x.sel(start = h==8).sel(start=slice(None, '2017-07-18'))
