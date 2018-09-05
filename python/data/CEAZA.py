@@ -123,20 +123,18 @@ class Field(base_app):
     user = Unicode().tag(config = True)
     from_date = Instance(datetime, (2003, 1, 1))
     var_code = Unicode('', help='Field to fetch, e.g. ta_c.').tag(config = True)
-    raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.')
+    raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.').tag(config=True)
 
     file_name = Unicode('', help='Data file name.').tag(config = True)
     """DataFrame with station locations (as returned by a call to :meth:`.get_stations`)."""
 
-    aliases = Dict({'v': 'Field.var_code',
-                    'f': 'Field.file_name',
-                    'm': 'Meta.file_name',
-                    'log_level': 'Application.log_level'})
-    flags = Dict({'r': ({'Field': {'raw': True}}, "set raw=True")})
+    aliases = {'v': 'Field.var_code',
+               'f': 'Field.file_name',
+               'm': 'Meta.file_name',
+               'log_level': 'Application.log_level'}
+    flags = {'r': ({'Field': {'raw': True}}, "set raw=True")}
 
     def start(self, fields_table=None, from_date=None):
-        if self.raw and self.cli_config != {}:
-            raise Exception('Raw saving not supported yet in command-line mode.')
         if fields_table is None:
             print('Using field table from file {}'.format(self.config.Meta.file_name))
             fields_table = pd.read_hdf(self.config.Meta.file_name, 'fields').xs(self.var_code, 0, 'field', False)
@@ -150,19 +148,29 @@ class Field(base_app):
 
         if not self.raw:
             data = pd.concat(data.values(), 1).sort_index(axis=1)
+
+        # this tests whether the class is called as a command-line app, in which case the data is saved to file
+        # EXCEPT if the command line app is "Update"
         if self.cli_config != {}:
             with pd.HDFStore(self.file_name, 'a') as S:
-                S[self.var_code] = data
+                if self.raw:
+                    for k, v in data.items():
+                        st = fields_table.xs(k, 0, 'sensor_code').index.item()[0]
+                        try:
+                            S[st] = v.update(S[st])
+                        except:
+                            S[st] = v
+                else:
+                    S[self.var_code] = data
             print('Field {} fetched and saved in file {}'.format(self.var_code, self.file_name))
         else:
             return data
 
-    def _get(self, f, prog, from_date):
-        k = f[0][2]
+    def _get(self, f, prog=None, from_date=None):
         try:
             from_date = from_date[f[0][0]] # updating: field exists in old data
         except: pass
-        if from_date != from_date: # if Nat
+        if from_date is None or from_date != from_date: # if Nat
             from_date = pd.Timestamp(f[1]['first']) # updating: earliest record from meta
         try:
             v = from_date.strftime('%Y-%m-%d')
@@ -183,7 +191,8 @@ class Field(base_app):
                 names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
             )
             self.log.info('fetched {} from {}'.format(f[0][2], f[0][0]))
-            prog.update(1)
+            if prog is not None:
+                prog.update(1)
             return f[0][2], df.sort_index(1)
 
     def fetch_aggr(self, code, from_date):
@@ -221,7 +230,7 @@ class Field(base_app):
             r = requests.get(self.raw_url, params=params)
             if not r.ok:
                 continue
-            self.debug(r.text)
+            self.log.debug(r.text)
             reader = _Reader(r.text)
             try:
                 d = pd.read_csv(

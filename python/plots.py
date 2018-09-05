@@ -9,6 +9,7 @@ from traitlets.config.configurable import Configurable
 from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import List, Unicode
 from importlib import import_module
+from functools import singledispatch
 from helpers import stationize
 
 
@@ -84,12 +85,30 @@ def title(fig, title, height=.94):
     ax.set_title(title)
     fig.draw_artist(ax)
 
-def rowlabel(subplot_spec, label, rotation=0, size=12, labelpad=40, **kwargs):
+def add_axes(subplot_spec):
     ax = plt.gcf().add_subplot(subplot_spec)
     ax.set_frame_on(False)
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_ylabel(label, rotation=rotation, size=size, labelpad=labelpad, **kwargs)
+    return ax
+
+@singledispatch
+def bottom_label(obj, label, size=12, **kwargs):
+    obj.set_xlabel(label, size=size, **kwargs)
+    return obj
+
+@bottom_label.register(gs.SubplotSpec)
+def _(obj, *args, **kwargs):
+    return bottom_label(add_axes(obj), *args, **kwargs)
+
+@singledispatch
+def row_label(obj, label, rotation=0, size=12, labelpad=40, **kwargs):
+    obj.set_ylabel(label, rotation=rotation, size=size, labelpad=labelpad, **kwargs)
+    return obj
+
+@row_label.register(gs.SubplotSpec)
+def _(obj, *args, **kwargs):
+    return row_label(add_axes(obj), *args, **kwargs)
 
 def cbar(plot, loc='right', center=False, width=.01, space=.01, label=None):
     """Wrapper to attach colorbar on either side of a :class:`~matplotlib.axes.Axes.plot` and to add coastlines and grids.
@@ -168,7 +187,7 @@ class Coquimbo(Configurable):
         f = lambda b: np.all(np.r_[b[:2], self.bbox[:2]] <= np.r_[self.bbox[2:], b[2:]])
         return [g for g in reader.geometries() if f(np.array(g.envelope.bounds))]
 
-    def plotrow(self, df, subplot_spec=gs.GridSpec(1, 1)[0], **kwargs):
+    def plotrow(self, df, subplot_spec=gs.GridSpec(1, 1)[0], subplot_kw={}, **kwargs):
         """Plot the columns of :class:`~pandas.DataFrame` ``df`` as a raw of Coquimbo-area plots.
 
         :Keyword Arguments:
@@ -178,6 +197,10 @@ class Coquimbo(Configurable):
             * **vmax** - see :func:`matplotlib.pyplot.scatter`
             * **cbar** - Colorbar location (see :func:`matplotlib.pyplot.colorbar`) or ``None`` if none is desired (default 'right').
             * **cbar_label** - Unit string with which to label the colorbar (see :func:`cbar`)
+            * **title** - (``True``/``False``) plot titles (taken from column names of input DataFrame).
+            * **xlabels** - (``True``/``False``) plot xlabels
+            * **ylabels** - (``True``/``False``) plot ylabels
+            * **subplot_kw** - keywords for the constructor of :class:`~matplotlib.gridspec.GridSpecFromSubplotSpec`
 
         """
         try:
@@ -188,7 +211,7 @@ class Coquimbo(Configurable):
         vmin = kwargs.get('vmin', np.nanmin(df))
         vmax = kwargs.get('vmax', np.nanmax(df))
         geom = subplot_spec.get_geometry()
-        g = gs.GridSpecFromSubplotSpec(1, df.shape[1], subplot_spec=subplot_spec)
+        g = gs.GridSpecFromSubplotSpec(1, df.shape[1], subplot_spec=subplot_spec, **subplot_kw)
         pl, gls  = [], []
         for i, (n, c) in enumerate(df.iteritems()):
             if c.isnull().all(): continue
@@ -201,11 +224,12 @@ class Coquimbo(Configurable):
             gl.ylocator = ticker.FixedLocator(range(-33, -27))
             gl.xlabels_top = False
             gl.ylabels_right = False
-            if geom[3] < geom[1]:
+            if (geom[3] < geom[1]) and kwargs.get('title', True):
                 ax.set_title(n)
-            if geom[3] < (geom[0] - 1) * geom[1]:
+            if (geom[3] < (geom[0] - 1) * geom[1]) or not kwargs.get('xlabels', True):
                 gl.xlabels_bottom = False
-            if i > 0: gl.ylabels_left = False
+            if (i > 0) or not kwargs.get('ylabels', True):
+                gl.ylabels_left = False
             gls.append(gl)
         cb = kwargs.get('cbar', 'right')
         if (cb is not None):

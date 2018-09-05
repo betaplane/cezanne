@@ -123,7 +123,7 @@ def aggregate(df, t, c, start_minute, freq, label):
 
     # for min and max, use the binning interval with the largest overlap with the record interval
     ts[v > c/2] = ts[v > c/2] + freq
-    b = df.drop('avg', 1, 'aggr')
+    b = df.drop('avg', 1, level='aggr')
     b.columns = b.columns.tolist() # avoid warning due to joining MultiIndex to single index
     g = b.join(pd.DataFrame(ts, index=df.index, columns=['ts'])).groupby('ts')
     D = pd.concat((col(g.min(), 'min'), ave, col(g.max(), 'max')), 1)

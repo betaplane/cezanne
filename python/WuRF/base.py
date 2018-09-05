@@ -75,7 +75,6 @@ There is one difference between the two modules: :class:`.threadWuRF.CC` has two
 
 .. TODO::
 
-    * var_list needs to deal with several variables
     * add coordinate to Time?
     * custom logger with automatic parallel info (rank etc)
     * implement func application (MPI)
@@ -326,7 +325,7 @@ class CCBase(WuRFiles):
 
     @property
     def var_list(self):
-        return [self.variables]
+        return [s.strip() for s in self.variables.split(',')]
 
     def func(self, value):
         try:
@@ -336,7 +335,7 @@ class CCBase(WuRFiles):
                 self._func = lambda x: x
             else:
                 mod, f = os.path.splitext(self.function)
-                self._func = getattr(import_module(mod), f)
+                self._func = getattr(import_module(mod), f.strip('.'))
             return self._func(value)
 
     def __init__(self, *args, **kwargs):
@@ -375,6 +374,7 @@ def tease_apart(glob_pattern, var):
     :rtype: :obj:`tuple`
 
     """
+    xr = import_module('xarray')
     ds = [xr.open_dataset(f)[var] for f in glob(glob_pattern)]
     n = min(len(d.Time) for d in ds)
     # using .isel() is essential b/c .sel() *includes* the end of slice
