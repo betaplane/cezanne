@@ -33,6 +33,7 @@ class CC(CCBase):
         * **utc_delta** - The offset from UTC to be applied to the concatenated data (assuming the original files are in UTC).
         * **lead_day** - Lead day of the forecast for which to search, if only one particular lead day is desired. (``-1`` denotes no particular lead day.)
         * **function** - Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>'). (**Not implemented in :mod:`.mpiWuRF` yet**)
+        * **initfile** - File containing projection information (for interpolation) and/or spatial coordinates (for netCDF4_ based concatenator).
 
     """
     time_units = Unicode('minutes since 2015-01-01 00:00:00').tag(config=True)
@@ -40,7 +41,8 @@ class CC(CCBase):
 
     def start(self):
         # so that the first file is indeed the first, for consistency with the date2num units
-        self._first = min(glob(os.path.join(self.dirs[0], self.file_glob)))
+        if self.initfile == '':
+            self.initfile = min(glob(os.path.join(self.dirs[0], self.file_glob)))
 
         self.comm = MPI.COMM_WORLD
         self.rank = self.comm.Get_rank()
@@ -49,7 +51,7 @@ class CC(CCBase):
 
         if self.interpolate:
             if not hasattr(self, '_interpolator'):
-                with Dataset(self._first) as ds:
+                with Dataset(self.initfile) as ds:
                     self._interpolator = getattr(import_module('data.interpolate'), {
                         'bilinear': 'BilinearInterpolator',
                         'scipy': 'GridInterpolator'}[self.interpolator])(ds, **self.lonlat)
@@ -170,7 +172,7 @@ class CC(CCBase):
     def _create_outfile(self):
         # I think there's a file formate issue - I can open the WRF files only in single-proc mode
         if self.rank == 0:
-            ds = Dataset(self._first)
+            ds = Dataset(self.initfile)
             dcv = self._dims_and_coords(ds)
         else:
             dcv = None

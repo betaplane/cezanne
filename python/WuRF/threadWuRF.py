@@ -33,7 +33,7 @@ class CC(CCBase):
         * **lead_day** - Lead day of the forecast for which to search, if only one particular lead day is desired. (``-1`` denotes no particular lead day.)
         * **function** - Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>'). (**Not implemented in :mod:`.mpiWuRF` yet**)
         * **max_workers** - Maximum number of threads to use.
-        * **interp_initfile** - File to hand to the constructor method of the interpolator, in case the files to be concatenated do not contain spatial coordinates and/or projection information.
+        * **initfile** - File containing projection information (for interpolation) and/or spatial coordinates (for netCDF4_ based concatenator).
 
     """
     write_interval = Integer(73).tag(config=True) # 365 / 73 = 5
@@ -85,9 +85,9 @@ class CC(CCBase):
         """
         if self.interpolate:
             if not hasattr(self, '_interpolator'):
-                if self.interp_initfile == '':
-                    self.interp_initfile = glob(os.path.join(self.dirs[0], self.file_glob))[0]
-                with xr.open_dataset(self.interp_initfile) as ds:
+                if self.initfile == '':
+                    self.initfile = glob(os.path.join(self.dirs[0], self.file_glob))[0]
+                with xr.open_dataset(self.initfile) as ds:
                     self._interpolator = getattr(import_module('data.interpolate'), {
                         'scipy': 'GridInterpolator',
                         'bilinear': 'BilinearInterpolator'

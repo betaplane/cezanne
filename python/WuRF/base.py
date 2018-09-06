@@ -27,7 +27,7 @@ Further common options are gathered in the :class:`.CCBase` class:
     * :attr:`~.CCBase.utc_delta`
     * :attr:`~.CCBase.lead_day`
     * :attr:`~.CCBase.function`
-    * :attr:`~.CCBase.interp_initfile`
+    * :attr:`~.CCBase.initfile`
 
 The :class:`~pandas.DataFrame` with station locations (for :mod:`interpolation <data.interpolate>`) is currently specified as :attr:`data.CEAZA.Meta.file_name` of the :mod:`~data.CEAZA` module.
 
@@ -322,8 +322,8 @@ class CCBase(WuRFiles):
     function = Unicode().tag(config=True)
     """Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>'). (**Not implemented in :mod:`.mpiWuRF` yet**)"""
 
-    interp_initfile = Unicode().tag(config=True)
-    """File to hand to the constructor method of the interpolator, in case the files to be concatenated do not contain spatial coordinates and/or projection information."""
+    initfile = Unicode().tag(config=True)
+    """ File containing projection information (for interpolation) and/or spatial coordinates (for netCDF4_ based concatenator). """
 
     aliases = {'d': 'WuRFiles.domain',
                'o': 'CCBase.outfile',
