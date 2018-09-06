@@ -33,6 +33,7 @@ class CC(CCBase):
         * **lead_day** - Lead day of the forecast for which to search, if only one particular lead day is desired. (``-1`` denotes no particular lead day.)
         * **function** - Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>'). (**Not implemented in :mod:`.mpiWuRF` yet**)
         * **max_workers** - Maximum number of threads to use.
+        * **interp_initfile** - File to hand to the constructor method of the interpolator, in case the files to be concatenated do not contain spatial coordinates and/or projection information.
 
     """
     write_interval = Integer(73).tag(config=True) # 365 / 73 = 5
@@ -73,9 +74,6 @@ class CC(CCBase):
         self.sort_data()
         self.data.to_netcdf(fn)
         self.remove_dirs(self.data)
-        with open('timing.txt', 'a') as f:
-            f.write('{} dirs in {} seconds, file {}\n'.format(
-                len(self.data.start), timer() - start, fn))
         self.data = None
         self.fileno += 1
 
@@ -87,8 +85,9 @@ class CC(CCBase):
         """
         if self.interpolate:
             if not hasattr(self, '_interpolator'):
-                f = glob(os.path.join(self.dirs[0], self.file_glob))
-                with xr.open_dataset(f[0]) as ds:
+                if self.interp_initfile == '':
+                    self.interp_initfile = glob(os.path.join(self.dirs[0], self.file_glob))[0]
+                with xr.open_dataset(self.interp_initfile) as ds:
                     self._interpolator = getattr(import_module('data.interpolate'), {
                         'scipy': 'GridInterpolator',
                         'bilinear': 'BilinearInterpolator'
@@ -97,15 +96,15 @@ class CC(CCBase):
 
         start = timer()
         while self.data is None:
-            self.data = self._extract(self.dirs[0])
+            self.data = self._extract2(self.dirs[0])
         if len(self.dirs) > 1:
             with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self.dirs)-1)) as exe:
-                for i, f in enumerate(exe.map(self._extract, self.dirs[1:])):
+                for i, f in enumerate(exe.map(self._extract2, self.dirs[1:])):
                     self.data = xr.concat((self.data, f), 'start')
                     if interval and ((i + 1) % self.write_interval == 0):
                         self.write('reg', i+1, start)
             self.sort_data()
-        print('Time taken: {:.2f}'.format(timer() - start))
+        self.log.info('Time taken: {:.2f}'.format(timer() - start))
 
     def _extract(self, d):
         try:
@@ -116,6 +115,32 @@ class CC(CCBase):
                 if self.lead_day >= 0:
                     t = x.XTIME.to_index()
                     x = x.isel(Time = (t - t.min()).days == self.lead_day)
+                if self.interpolate:
+                    x = x.apply(self._interpolator.xarray)
+                x = self.func(x)
+                x.load()
+                for v in x.data_vars:
+                    x[v] = x[v].expand_dims('start')
+                x['start'] = ('start', pd.DatetimeIndex([x.XTIME.min().item()]))
+                return x
+        except IOError as ioe:
+            if ioe.args[0] == 'no files to open':
+                self.log.critical('Dir %s: %s', d, ioe)
+                self.dirs.remove(d)
+
+    # alternative, for the 'wrfxtrm' files which don't have 'XTIME'
+    def _extract2(self, d):
+        try:
+            with xr.open_mfdataset(os.path.join(d, self.file_glob)) as ds:
+                print('using: {}'.format(ds.START_DATE))
+                t = ds['Times'].load()
+                i = np.argsort(t)
+                x = ds[self.var_list].isel(Time=i)
+                x.coords['XTIME'] = ('Time', pd.DatetimeIndex(
+                    [datetime.strptime(d.item(), '%Y-%m-%d_%H:%M:%S') for d in t.isel(Time=i).astype(str)]
+                    ) + pd.Timedelta(self.utc_delta))
+                if self.lead_day >= 0:
+                    raise Exception('lead day extraction not implemented by this method')
                 if self.interpolate:
                     x = x.apply(self._interpolator.xarray)
                 x = self.func(x)

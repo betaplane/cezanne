@@ -27,6 +27,7 @@ Further common options are gathered in the :class:`.CCBase` class:
     * :attr:`~.CCBase.utc_delta`
     * :attr:`~.CCBase.lead_day`
     * :attr:`~.CCBase.function`
+    * :attr:`~.CCBase.interp_initfile`
 
 The :class:`~pandas.DataFrame` with station locations (for :mod:`interpolation <data.interpolate>`) is currently specified as :attr:`data.CEAZA.Meta.file_name` of the :mod:`~data.CEAZA` module.
 
@@ -169,13 +170,17 @@ class WuRFiles(Application):
 
         dirs = []
         for p in self.paths:
-            for d in sorted(glob(os.path.join(p, self.directory_pattern))):
-                if (os.path.isdir(d) and not os.path.islink(d)):
+            for d in glob(os.path.join(p, self.directory_pattern)):
+                if (os.path.isdir(d) and not os.path.islink(d)) \
+                and len(glob(os.path.join(d, self.file_glob))) > 0:
                     dirs.append(d)
                     if limit is not None and len(dirs) == limit:
                         break
-        dirs = dirs if self.hour == -1 else [d for d in dirs if d[-2:] == '{:02}'.format(self.hour)]
-        self.dirs = dirs if self.from_date == '' else [d for d in dirs if d[-10:-2] >= self.from_date]
+        if self.hour != -1:
+            dirs = [d for d in dirs if d[-2:] == '{:02}'.format(self.hour)]
+        if self.from_date != '':
+            dirs = [d for d in dirs if d[-10:-2] >= self.from_date]
+        self.dirs = sorted(dirs, key=lambda s:s[-10:])
 
         assert len(self.dirs) > 0, "no directories added"
         self.log.info("WuRFiles initialized with %s directories.", len(self.dirs))
@@ -316,6 +321,9 @@ class CCBase(WuRFiles):
 
     function = Unicode().tag(config=True)
     """Callable to be applied to the data before concatenation (after interpolation), in dotted from ('<module>.<function>'). (**Not implemented in :mod:`.mpiWuRF` yet**)"""
+
+    interp_initfile = Unicode().tag(config=True)
+    """File to hand to the constructor method of the interpolator, in case the files to be concatenated do not contain spatial coordinates and/or projection information."""
 
     aliases = {'d': 'WuRFiles.domain',
                'o': 'CCBase.outfile',

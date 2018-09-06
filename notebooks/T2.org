@@ -785,13 +785,221 @@ corr = xr.DataArray(dz).squeeze() * lapse_rate
 
 #+begin_src ipython :results raw :session
 d = T2_0h - corr
-err_0h = d - align_stations(d, T)
+corr_0h = d - align_stations(d, T)
 fig = plt.figure()
 plt.plot(err_0h.mean(('start', 'station')))
+plt.plot(corr_0h.mean(('start', 'station')))
 #+end_src
 
 #+RESULTS:
-[[file:./obipy-resources/T2/45DPRU.png]]
+[[file:./obipy-resources/T2/XIU0WG.png]]
+
+#+begin_src ipython :results silent :session
+  import runpy
+  from WuRF.base import tease_apart, align_stations
+
+  table = runpy.run_path('/home/arno/Dropbox/spacemacs/private/nandu/pandas2org.py')['table']
+
+  def daily_err(sl, ds, T_sta):
+      x = ds.isel(Time=sl)
+      return (x - align_stations(x, T_sta)).dropna('station', 'all')
+
+  def d(name, a, b):
+      x = abs(a - b).mean('Time')
+      return pd.DataFrame(x.values, index=x.station, columns=[name])
+
+  def shift(ds, h):
+      return ds.isel(Time=np.r_[range(h, 24), range(h)])
+#+end_src
+
+#+begin_src ipython :results raw :session
+  x = pd.concat((d('t1',
+                   daily_err(slice(28, 52), T2_0h, T).mean('start'),
+                   daily_err(slice(16, 40), T2_12h, T).mean('start')),
+                 d('t2',
+                   daily_err(slice(4, 28), T2_0h, T).mean('start'),
+                   daily_err(slice(16, 40), T2_12h, T).mean('start')),
+                 d('t3',
+                   daily_err(slice(28, 52), T2_0h, T).mean('start'),
+                   daily_err(slice(40, 64), T2_12h, T).mean('start')),
+                 d('s1',
+                   shift(daily_err(slice(0, 24), T2_0h, T).mean('start'), 4),
+                   shift(daily_err(slice(0, 24), T2_12h, T).mean('start'), 16)),
+                 d('s2',
+                   shift(daily_err(slice(24, 48), T2_0h, T).mean('start'), 4),
+                   shift(daily_err(slice(24, 48), T2_12h, T).mean('start'), 16)),
+                 d('s3',
+                   shift(daily_err(slice(48, 72), T2_0h, T).mean('start'), 4),
+                   shift(daily_err(slice(48, 72), T2_12h, T).mean('start'), 16))), 1)
+
+  table(x.mean().to_frame('mean'))
+#+end_src
+
+#+RESULTS:
+|    |          mean |
+|----+---------------|
+| t1 | 1.91327879208 |
+| t2 | 2.27730736175 |
+| t3 | 2.10255406442 |
+| s1 | 2.20754349586 |
+| s2 | 2.01088312773 |
+| s3 | 1.96309657704 |
+
+#+begin_src ipython :results raw :session :savefig "daily_err_0vs12h.png"
+fig = plt.figure(figsize=(11, 3))
+plt.set_cmap('cividis')
+coq.plotrow(x, vmin=0, vmax=5, subplot_kw={'wspace': .04})
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/daily_err_0vs12h.png]]
+#+CAPTION: Different ways of comparing the 0:00 and 12:00 UTC starting runs w.r.t daily cycles of errors: since the simulations are shifted by 12 hours, comparing daily cycles directly requires some form of shifting of the resulting outputs. All procedures select 24 hours per simulation ('start' date). The plots labelled 't...' use different simulation timesteps which correspond to the same daily times (starting at 0:00); the plots labelled 's...' use the same simulation timesteps, but shift the resulting 24-hour blocks so that they align to cycles starting at 0:00.
+
+#+begin_src ipython :results silent :session
+T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, level='elev')) + 273.15
+T2_0h, T2_12h = tease_apart('/nfs/HPC/arno/data/T2_*_81*', 'T2')
+
+err_0h = daily_err(slice(28, 52), T2_0h, T).mean('start')
+err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
+#+end_src
+
+#+begin_src ipython :results raw :session
+  fig, axs = plt.subplots(2, 1)
+  axs[0].plot(err_0h.values.T)
+  axs[1].plot(err_12h.values.T)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/Es71rX.png]]
+#+begin_src ipython :results raw :session :savefig "daily_err_cycle_2clusters.png"
+  from sklearn import cluster
+  from matplotlib.colors import Normalize
+  from matplotlib.cm import ScalarMappable
+
+  n_clusters = 2
+  fig = plt.figure(figsize=(9, 7))
+  gs = gridspec.GridSpec(2, n_clusters+1, wspace=0.06, hspace=0.06)
+  sm = ScalarMappable(norm=Normalize(0, 9), cmap='tab10')
+
+  km = cluster.KMeans(n_clusters=n_clusters)
+  km_0h, km_12h = [km.fit_predict((d - d.mean('Time')).values) for d in [err_0h, err_12h]] 
+
+  for i in range(n_clusters):
+      share = {} if i==0 else {'sharey': ax}
+      ax = plt.subplot(gs[0, i], **share)
+      ax.plot(err_0h.sel(station=km_0h==i).values.T)
+      ax.set_xticks([0, 12])
+      ax.set_xticklabels([])
+      if i>0:
+          plt.setp(ax.get_yticklabels(), visible=False) # workaround for shared axes
+# see  https://stackoverflow.com/questions/4209467/matplotlib-share-x-axis-but-dont-show-x-axis-tick-labels-for-both-just-one
+  coq.plotrow(pd.DataFrame(km_0h, index=err_0h.station), gs[0, n_clusters], title=False, xlabels=False, ylabels=False, cbar=None, norm=sm)
+  cplots.add_axes(gs[0, n_clusters]).legend(
+      [ax.scatter([], [], s=70, facecolors=sm.to_rgba(i)) for i in range(n_clusters)],
+      range(n_clusters), loc=2, bbox_to_anchor=(1, 1)
+  )
+
+  for i in range(n_clusters):
+      ax = plt.subplot(gs[1, i], sharey=ax)
+      ax.plot(err_12h.sel(station=km_12h==i).values.T)
+      ax.set_xticks([0, 12])
+      if i>0:
+          plt.setp(ax.get_yticklabels(), visible=False)
+  coq.plotrow(pd.DataFrame(km_12h, index=err_12h.station), gs[1, n_clusters], title=False, xlabels=False, ylabels=False, cbar=None, norm=sm)
+  cplots.add_axes(gs[1, n_clusters]).legend(
+      [ax.scatter([], [], s=70, facecolors=sm.to_rgba(i)) for i in range(n_clusters)],
+      range(n_clusters), loc=2, bbox_to_anchor=(1, 1)
+  )
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/daily_err_cycle_2clusters.png]]
+#+CAPTION: Daily cycle of errors, by station, clustered with KMeans into 2 classes. Maps show the clusters in the same integer order in which they appear as line plots on the left. X-axes are the hours of the day, local time. **Top** - the 0:00 UTC simulations (prior to 2016-04); **bottom** - the 12:00 UTC simulations (after 2016-04).
+
+#+begin_src ipython :results raw :session :savefig "daily_err_cycle_3clusters.png"
+  n_clusters = 3
+  fig = plt.figure(figsize=(9, 5))
+  gs = gridspec.GridSpec(2, n_clusters+1, wspace=0.06, hspace=0.06)
+  sm = ScalarMappable(norm=Normalize(0, 9), cmap='tab10')
+
+  km = cluster.KMeans(n_clusters=n_clusters)
+  km_0h, km_12h = [km.fit_predict((d - d.mean('Time')).values) for d in [err_0h, err_12h]] 
+
+  for i in range(n_clusters):
+      share = {} if i==0 else {'sharey': ax}
+      ax = plt.subplot(gs[0, i], **share)
+      ax.plot(err_0h.sel(station=km_0h==i).values.T)
+      ax.set_xticks([0, 12])
+      ax.set_xticklabels([])
+      if i>0:
+          plt.setp(ax.get_yticklabels(), visible=False)
+  coq.plotrow(pd.DataFrame(km_0h, index=err_0h.station), gs[0, n_clusters], title=False, xlabels=False, ylabels=False, cbar=None, norm=sm)
+  cplots.add_axes(gs[0, n_clusters]).legend(
+      [ax.scatter([], [], s=70, facecolors=sm.to_rgba(i)) for i in range(n_clusters)],
+      range(n_clusters), loc=2, bbox_to_anchor=(1, 1)
+  )
+
+  for i in range(n_clusters):
+      ax = plt.subplot(gs[1, i], sharey=ax)
+      ax.plot(err_12h.sel(station=km_12h==i).values.T)
+      ax.set_xticks([0, 12])
+      if i>0:
+          plt.setp(ax.get_yticklabels(), visible=False)
+  coq.plotrow(pd.DataFrame(km_12h, index=err_12h.station), gs[1, n_clusters], title=False, xlabels=False, ylabels=False, cbar=None, norm=sm)
+  cplots.add_axes(gs[1, n_clusters]).legend(
+      [ax.scatter([], [], s=70, facecolors=sm.to_rgba(i)) for i in range(n_clusters)],
+      range(n_clusters), loc=2, bbox_to_anchor=(1, 1)
+  )
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/daily_err_cycle_3clusters.png]]
+#+CAPTION: Same as above, for 3 clusters.
+
+#+begin_src ipython :results raw :session :savefig "daily_err_cycle_raw_2clusters.png"
+  T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned.h5'}, 'ta_c').drop('10', 1, level='elev'), 'avg') + 273.15
+
+  err_0h = daily_err(slice(28, 52), T2_0h, T_raw).mean('start')
+  err_12h = daily_err(slice(16, 40), T2_12h, T_raw).mean('start')
+  km = cluster.KMeans(n_clusters=n_clusters)
+  km_0h, km_12h = [km.fit_predict((d - d.mean('Time')).values) for d in [err_0h, err_12h]] 
+
+  n_clusters = 2
+  fig = plt.figure(figsize=(9, 7))
+  gs = gridspec.GridSpec(2, n_clusters+1, wspace=0.06, hspace=0.06)
+  sm = ScalarMappable(norm=Normalize(0, 9), cmap='tab10')
+
+
+  for i in range(n_clusters):
+      share = {} if i==0 else {'sharey': ax}
+      ax = plt.subplot(gs[0, i], **share)
+      ax.plot(err_0h.sel(station=km_0h==i).values.T)
+      ax.set_xticks([0, 12])
+      ax.set_xticklabels([])
+      if i>0:
+          plt.setp(ax.get_yticklabels(), visible=False)
+  coq.plotrow(pd.DataFrame(km_0h, index=err_0h.station), gs[0, n_clusters], title=False, xlabels=False, ylabels=False, cbar=None, norm=sm)
+  cplots.add_axes(gs[0, n_clusters]).legend(
+      [ax.scatter([], [], s=70, facecolors=sm.to_rgba(i)) for i in range(n_clusters)],
+      range(n_clusters), loc=2, bbox_to_anchor=(1, 1)
+  )
+
+  for i in range(n_clusters):
+      ax = plt.subplot(gs[1, i], sharey=ax)
+      ax.plot(err_12h.sel(station=km_12h==i).values.T)
+      ax.set_xticks([0, 12])
+      if i>0:
+          plt.setp(ax.get_yticklabels(), visible=False)
+  coq.plotrow(pd.DataFrame(km_12h, index=err_12h.station), gs[1, n_clusters], title=False, xlabels=False, ylabels=False, cbar=None, norm=sm)
+  cplots.add_axes(gs[1, n_clusters]).legend(
+      [ax.scatter([], [], s=70, facecolors=sm.to_rgba(i)) for i in range(n_clusters)],
+      range(n_clusters), loc=2, bbox_to_anchor=(1, 1)
+  )
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/daily_err_cycle_raw_2clusters.png]]
+#+CAPTION: Same as above, for 2 clusters, but with raw-binned station data.
 
 ** Skewness & kurtosis
    

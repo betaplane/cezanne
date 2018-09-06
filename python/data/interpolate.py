@@ -96,6 +96,7 @@ class Interpolator(Application):
                 self.x, self.y = proj(*[g2d(ds[v]) for v in V])
                 break
             except: pass
+        assert hasattr(self, 'x'), "No horizontal coordinates found."
         if lon is not None:
             self.index = names
             self.ij = proj(lon, lat)
@@ -149,14 +150,19 @@ class GridInterpolator(Interpolator):
             X = x.stack(n = dims).transpose(*self.spatial_dims, 'n')
             y = self._grid_interp(X.values)
             ds = xr.DataArray(y, coords=[('n', X.indexes['n']), ('station', self.index)])
-            ds = ds.unstack('n') if len(dims) > 1 else ds.rename({'n': dims[0]})
+            if len(dims) > 1:
+                ds = ds.unstack('n')
+            else:
+                # this hack is necessary because I use 'stack' above even if there is only 1 'dims'
+                ds.coords['n'] = ('n', ds.indexes['n'].get_level_values(0))
+                ds = ds.rename({'n': dims[0]})
             if hasattr(x, self.time_dim_coord):
                 xt = x[self.time_dim_coord]
                 ds.coords[self.time_dim_coord] = (xt.dims, xt)
         else:
             y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
             ds = xr.DataArray(y, coords=[('station', self.index)])
-        print('Time taken: %s', timer() - self.start_time)
+        self.log.info('Time taken: %s', timer() - self.start_time)
         return ds
 
     def netcdf(self, x):

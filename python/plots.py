@@ -201,6 +201,7 @@ class Coquimbo(Configurable):
             * **xlabels** - (``True``/``False``) plot xlabels
             * **ylabels** - (``True``/``False``) plot ylabels
             * **subplot_kw** - keywords for the constructor of :class:`~matplotlib.gridspec.GridSpecFromSubplotSpec`
+            * **norm** - a :class:`~matplotlib.cm.ScalarMappanle` (optional, e.g. for categorical data)
 
         """
         try:
@@ -216,7 +217,10 @@ class Coquimbo(Configurable):
         for i, (n, c) in enumerate(df.iteritems()):
             if c.isnull().all(): continue
             ax = plt.gcf().add_subplot(g[0, i], projection=crs.PlateCarree())
-            pl.append(ax.scatter(*lonlat, c=c, vmin=vmin, vmax=vmax, transform=crs.PlateCarree()))
+            if 'norm' in kwargs:
+                pl.append(ax.scatter(*lonlat, c=kwargs['norm'].to_rgba(c), transform=crs.PlateCarree()))
+            else:
+                pl.append(ax.scatter(*lonlat, c=c, vmin=vmin, vmax=vmax, transform=crs.PlateCarree()))
             self(ax)
             ax.outline_patch.set_edgecolor('w')
             gl = ax.gridlines(linestyle='--', color='w', draw_labels=True)
@@ -224,11 +228,11 @@ class Coquimbo(Configurable):
             gl.ylocator = ticker.FixedLocator(range(-33, -27))
             gl.xlabels_top = False
             gl.ylabels_right = False
-            if (geom[3] < geom[1]) and kwargs.get('title', True):
+            if kwargs.get('title', True) and (geom[3] < geom[1]):
                 ax.set_title(n)
-            if (geom[3] < (geom[0] - 1) * geom[1]) or not kwargs.get('xlabels', True):
+            if not kwargs.get('xlabels', True) or (geom[3] < (geom[0] - 1) * geom[1]):
                 gl.xlabels_bottom = False
-            if (i > 0) or not kwargs.get('ylabels', True):
+            if not kwargs.get('ylabels', True) or (i > 0):
                 gl.ylabels_left = False
             gls.append(gl)
         cb = kwargs.get('cbar', 'right')
