@@ -753,7 +753,7 @@ plt.plot(*zip(*d))
 from WuRF.base import align_stations
 err_0h, err_12h = [d - align_stations(d, T) for d in [T2_0h, T2_12h]]
 
-T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned.h5'}, 'ta_c').drop('10', 1, 'elev'), 'avg') + 273.15
+T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned_middle.h5'}, 'ta_c').drop('10', 1, 'elev'), 'avg') + 273.15
 raw_0h, raw_12h = [d - align_stations(d, T_raw) for d in [T2_0h, T2_12h]]
 #+end_src
 
@@ -957,7 +957,7 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 #+CAPTION: Same as above, for 3 clusters.
 
 #+begin_src ipython :results raw :session :savefig "daily_err_cycle_raw_2clusters.png"
-  T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned.h5'}, 'ta_c').drop('10', 1, level='elev'), 'avg') + 273.15
+  T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned_middle.h5'}, 'ta_c').drop('10', 1, level='elev'), 'avg') + 273.15
 
   err_0h = daily_err(slice(28, 52), T2_0h, T_raw).mean('start')
   err_12h = daily_err(slice(16, 40), T2_12h, T_raw).mean('start')
@@ -1000,6 +1000,109 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 #+RESULTS:
 [[file:./obipy-resources/T2/daily_err_cycle_raw_2clusters.png]]
 #+CAPTION: Same as above, for 2 clusters, but with raw-binned station data.
+
+#+begin_src ipython :results silent :session
+  T2m = xr.open_dataarray('/nfs/HPC/arno/data/T2MEAN.nc')
+  T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned_end.h5'}, 'ta_c').drop('10', 1, level='elev'), 'avg') + 273.15
+  err = daily_err(slice(16, 40), T2m, T_raw).mean('start').transpose('station', 'Time')
+  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
+  dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
+#+end_src
+
+
+#+begin_src ipython :results raw :session :savefig "daily_err_cycle_raw_mean_2clusters.png"
+  n_clusters = 2
+  km = cluster.KMeans(n_clusters=n_clusters).fit_predict((err - err.mean('Time')).values)
+
+  fig = plt.figure(figsize=(8, 3))
+  gs = gridspec.GridSpec(1, n_clusters+1, wspace=0.06)
+  sm = ScalarMappable(norm=Normalize(0, 9), cmap='tab10')
+
+  for i in range(n_clusters):
+      share = {} if i==0 else {'sharey': ax}
+      ax = plt.subplot(gs[i], **share)
+      ax.plot(err.sel(station=km==i).values.T)
+      ax.set_xticks([0, 12])
+      ax.set_xticklabels([])
+      if i>0:
+          plt.setp(ax.get_yticklabels(), visible=False)
+  coq.plotrow(pd.DataFrame(km, index=err.station), gs[n_clusters], title=False, xlabels=False, ylabels=False, cbar=None, norm=sm)
+  cplots.add_axes(gs[n_clusters]).legend(
+      [ax.scatter([], [], s=70, facecolors=sm.to_rgba(i)) for i in range(n_clusters)],
+      range(n_clusters), loc=2, bbox_to_anchor=(1, 1)
+  )
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/daily_err_cycle_raw_mean_2clusters.png]]
+#+CAPTION: Same as above, but for the accumulated mean T2 values instead of point values ('wrfxtrm...' files), and raw data binned to 'end' of intervals.
+
+#+begin_src ipython :results silent :session
+  from sklearn import cluster
+  from matplotlib.colors import Normalize
+  from matplotlib.cm import ScalarMappable
+
+  km = cluster.KMeans(n_clusters=2).fit_predict((err - err.mean('Time')).values)
+  df = pd.concat((dz, sta['d03_var_sso'], pd.Series(km, index=err.station, name='km')), 1)
+  sm = ScalarMappable(norm=Normalize(0, 9), cmap='tab10')
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "dz_vs_sso_clusters.png"
+  df = pd.concat((dz, sta['d03_var_sso'], pd.Series(km, index=err.station, name='km')), 1).dropna()
+
+  fig, axs = plt.subplots(1, 3, figsize=(9, 3))
+  axs[0].scatter(df['dz'], df['km'], c=sm.to_rgba(df['km']))
+  axs[0].set_xlabel('dz')
+  axs[1].scatter(df['d03_var_sso'], df['km'], c=sm.to_rgba(df['km']))
+  axs[1].set_xlabel('sso')
+  axs[2].scatter(df['dz'], df['d03_var_sso'] ** .5, c=sm.to_rgba(df['km']))
+  axs[2].yaxis.set_label_position('right')
+  axs[2].yaxis.set_ticks_position('right')
+  axs[2].set_xlabel('dz')
+  axs[2].set_ylabel('$\sqrt{sso}$', usetex=True)
+  x = axs[2].get_ylim()
+  axs[2].plot(x, x, color='w')
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/dz_vs_sso_clusters.png]]
+#+CAPTION: **Left two** plots: cluster label (0, 1) against **dz** (grid minus station elevation) and **sso** (subgridscale orographic variance, 'VAR_SSO' in the 'geo_em...' files). **Right:** $\sqrt{sso}$ against dz, with 1-1 diagonal.
+
+#+begin_src ipython :results silent :session
+from glue import qglue
+qglue(a = df)
+#+end_src
+
+
+
+#+begin_src ipython :results raw :session
+  e0 = err.sel(station = km==0)
+  i = e0.argmax('Time')
+
+  plt.figure()
+  x = e0.sel(station = i==0)
+  plt.plot(x.values.flatten(), label=x.station.item())
+  x = e0.sel(station = i==23)
+  plt.plot(x.values.flatten(), label=x.station.item())
+  x = e0.sel(station = i==3)
+  plt.plot(x.values.flatten(), label=x.station.item())
+  plt.legend()
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/yQQxlG.png]]
+#+begin_src ipython :results raw :session
+  plt.figure()
+  x = e0.sel(station = i==4)
+  plt.plot(x.values.T)
+  plt.legend(x.station.values)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/IJzo4U.png]]
+
+
+
 
 ** Skewness & kurtosis
    
