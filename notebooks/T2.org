@@ -558,11 +558,6 @@ plt.plot(*zip(*d))
       x = ds.values if ds.dims.index('station') == 1 else ds.values.T
       return pd.DataFrame(x, index=getattr(ds, (set(ds.dims) - {'station'}).pop()), columns=ds.station)
 
-  def day(op, ds):
-      x = ds.copy()
-      x.coords['day'] = ('Time', pd.DatetimeIndex(x.indexes['Time'].date))
-      return getattr(x.groupby('day'), op)('Time')
-
   def lead_day(day, ds):
       x = ds.isel(Time=slice(day*24, (day+1)*24)).stack(idx=('Time','start'))
       x.coords['idx'] = ('idx', x.XTIME)
@@ -800,6 +795,11 @@ plt.plot(corr_0h.mean(('start', 'station')))
 
   table = runpy.run_path('/home/arno/Dropbox/spacemacs/private/nandu/pandas2org.py')['table']
 
+  def day(op, ds):
+      x = ds.copy()
+      x.coords['day'] = ('Time', pd.DatetimeIndex(x.indexes['Time'].date))
+      return getattr(x.groupby('day'), op)('Time')
+
   def daily_err(sl, ds, T_sta):
       x = ds.isel(Time=sl)
       return (x - align_stations(x, T_sta)).dropna('station', 'all')
@@ -1002,9 +1002,14 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 #+CAPTION: Same as above, for 2 clusters, but with raw-binned station data.
 
 #+begin_src ipython :results silent :session
+  from sklearn import cluster
+  from matplotlib.colors import Normalize
+  from matplotlib.cm import ScalarMappable
+
   T2m = xr.open_dataarray('/nfs/HPC/arno/data/T2MEAN.nc')
   T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned_end.h5'}, 'ta_c').drop('10', 1, level='elev'), 'avg') + 273.15
-  err = daily_err(slice(16, 40), T2m, T_raw).mean('start').transpose('station', 'Time')
+  e0 = daily_err(slice(16, 40), T2m, T_raw)
+  err = e0.mean('start').transpose('station', 'Time')
   sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
   dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
 #+end_src
@@ -1037,18 +1042,9 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 [[file:./obipy-resources/T2/daily_err_cycle_raw_mean_2clusters.png]]
 #+CAPTION: Same as above, but for the accumulated mean T2 values instead of point values ('wrfxtrm...' files), and raw data binned to 'end' of intervals.
 
-#+begin_src ipython :results silent :session
-  from sklearn import cluster
-  from matplotlib.colors import Normalize
-  from matplotlib.cm import ScalarMappable
-
-  km = cluster.KMeans(n_clusters=2).fit_predict((err - err.mean('Time')).values)
-  df = pd.concat((dz, sta['d03_var_sso'], pd.Series(km, index=err.station, name='km')), 1)
-  sm = ScalarMappable(norm=Normalize(0, 9), cmap='tab10')
-#+end_src
-
 #+begin_src ipython :results raw :session :savefig "dz_vs_sso_clusters.png"
   df = pd.concat((dz, sta['d03_var_sso'], pd.Series(km, index=err.station, name='km')), 1).dropna()
+  sm = ScalarMappable(norm=Normalize(0, 9), cmap='tab10')
 
   fig, axs = plt.subplots(1, 3, figsize=(9, 3))
   axs[0].scatter(df['dz'], df['km'], c=sm.to_rgba(df['km']))
@@ -1068,40 +1064,327 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 [[file:./obipy-resources/T2/dz_vs_sso_clusters.png]]
 #+CAPTION: **Left two** plots: cluster label (0, 1) against **dz** (grid minus station elevation) and **sso** (subgridscale orographic variance, 'VAR_SSO' in the 'geo_em...' files). **Right:** $\sqrt{sso}$ against dz, with 1-1 diagonal.
 
+#+begin_src ipython :results raw :session :savefig "PiscoElqui_daily_cycle.png"
+  fig = plt.figure(figsize=(10,5))
+  t1 = T2_12h.sel(station='8', Time=slice(16, 39)).stack(t=('Time','start')).sortby('XTIME')
+  t2 = T2m.sel(station='8', Time=slice(16, 39)).stack(t=('Time','start')).sortby('XTIME')
+
+  colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+  plt.plot(T['8'], label='station regular')
+  plt.plot(T_raw['8'], label='station raw')
+  plt.plot(t1.XTIME, t1, label='model regular')
+  plt.plot(t2.XTIME, t2, label='model mean')
+  plt.gca().set_xlim('2017-02-05', '2017-02-10')
+  plt.gca().set_ylim(270, 305)
+  plt.legend(loc=9)
+
+  dt1 = pd.Series(t1.values, index=t1.XTIME) - T['8']
+  dt2 = pd.Series(t2.values, index=t2.XTIME) - T_raw['8']
+  bx = plt.twinx()
+  plt.plot(dt1.index, dt1, color=colors[4], label='error regular')
+  plt.plot(dt2.index, dt2, color=colors[5], label='error raw')
+  bx.set_ylim(-10, 25)
+  plt.legend(loc=8)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/PiscoElqui_daily_cycle.png]]
+
+#+CAPTION: Example data for a few days from Pisco Elqui ('8'). Model data is bilinearly interpolated to station location. 'Regular' refers, for the data, to the direct database retrieval for a given timestamp, whereas 'raw' refers to manual binning with timestamp referring to the end of the binning interval (1 hour in this case). For the model, 'mean' refers to the accumulated and averaged data (in the 'wrfxtrm...' files), rather than the time-point values (which are the default for WRF output). For the error (right y-axis), 'regular' refers to 'model regular' minus 'station regular', whereas 'raw' refers to 'model mean' minus 'station raw'.
+
+#+begin_src ipython :results raw :session :savefig "topo_scatter_err_minmax.png"
+  fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+  fig.subplots_adjust(wspace=0.05)
+
+  e1 = err - err.mean('Time')
+  df = pd.concat((sta, dz, pd.DataFrame(e1.max('Time').values, index=e1.station, columns=['dmax']),
+                  pd.DataFrame(e1.min('Time').values, index=e1.station, columns=['dmin'])), 1).dropna()
+  elev = df['elev'].astype(float)
+  sm = ScalarMappable(norm=Normalize(elev.min(), elev.max()), cmap='spring').to_rgba(elev)
+  met = df[df.index.str.contains('MET')]
+
+  axs[0, 0].scatter(df.d03_var_sso, df.dmax, c=sm)
+  axs[0, 0].scatter(met.d03_var_sso, met.dmax, edgecolor='lime', facecolor='none', marker='o', s=70)
+  axs[0, 0].set_ylabel('$(\Delta T)_{max}$', usetex=True)
+  axs[0, 0].set_xlabel('var_sso')
+  axs[0, 0].xaxis.get_major_formatter().set_powerlimits((0, 0))
+
+  axs[0, 1].scatter(df.d03_var_sso, df.dmin, c=sm)
+  axs[0, 1].scatter(met.d03_var_sso, met.dmin, edgecolor='lime', facecolor='none', marker='o', s=70)
+  axs[0, 1].set_ylabel('$(\Delta T)_{min}$', usetex=True)
+  axs[0, 1].set_xlabel('var_sso')
+  axs[0, 1].yaxis.set_ticks_position('right')
+  axs[0, 1].yaxis.set_label_position('right')
+  axs[0, 1].xaxis.get_major_formatter().set_powerlimits((0, 0))
+
+  axs[1, 0].scatter(df.dz, df.d03_var_sso**.5, c=sm)
+  axs[1, 0].scatter(met.dz, met.d03_var_sso**.5, edgecolor='lime', facecolor='none', marker='o', s=70)
+  axs[1, 0].set_xlabel('dz')
+  axs[1, 0].set_ylabel('$\sqrt{sso}$', usetex=True)
+  axs[1, 1].scatter(elev, df.d03_var_sso**.5, c=sm)
+  axs[1, 1].scatter(met.elev.astype(float), met.d03_var_sso**.5, edgecolor='lime', facecolor='none', marker='o', s=70)
+  axs[1, 1].set_xlabel('elev')
+  axs[1, 1].set_yticklabels([])
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/topo_scatter_err_minmax.png]]
+#+CAPTION: Maximum and minimum errors of the average daily cycle against subgridscale orographic variance ('var_sso') (**top** row). The **bottom** row plots the square root of *var_sso* against the model-station elevation difference (**dz**, **left**) and station elevation (**right**). The colors correspond to station elevation (as in plot 4). The lime-circle points mark the stations in the Huasco valley ('MET...'), which appear as outliers in many analyses. My supsicion is that it has to do with the orientation of the valley and the precise geometry of the station location. The two stations with the highest *var_sso* are Pisco Elqui and Rivadavia ('8' and 'PYRV'), whose valley is oriented N-S.
+
+#+begin_src ipython :results raw :session :savefig "topo_scatter_err_minmax_dz.png"
+  fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+  fig.subplots_adjust(wspace=0.05)
+
+  e1 = err - err.mean('Time')
+  df = pd.concat((sta, dz, pd.DataFrame(e1.max('Time').values, index=e1.station, columns=['dmax']),
+                  pd.DataFrame(e1.min('Time').values, index=e1.station, columns=['dmin'])), 1).dropna()
+  dz = df['dz'].astype(float)
+  sm = ScalarMappable(norm=Normalize(dz.min(), dz.max()), cmap='spring').to_rgba(dz)
+  met = df[df.index.str.contains('MET')]
+
+  axs[0].scatter(df.d03_var_sso, df.dmax, c=sm)
+  axs[0].scatter(met.d03_var_sso, met.dmax, edgecolor='lime', facecolor='none', marker='o', s=70)
+  axs[0].set_ylabel('$(\Delta T)_{max}$', usetex=True)
+  axs[0].set_xlabel('var_sso')
+  axs[0].xaxis.get_major_formatter().set_powerlimits((0, 0))
+
+  axs[1].scatter(df.d03_var_sso, df.dmin, c=sm)
+  axs[1].scatter(met.d03_var_sso, met.dmin, edgecolor='lime', facecolor='none', marker='o', s=70)
+  axs[1].set_ylabel('$(\Delta T)_{min}$', usetex=True)
+  axs[1].set_xlabel('var_sso')
+  axs[1].xaxis.get_major_formatter().set_powerlimits((0, 0))
+  axs[1].yaxis.set_ticks_position('right')
+  axs[1].yaxis.set_label_position('right')
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/topo_scatter_err_minmax_dz.png]]
+#+CAPTION: Same as (top row) above, but now the color corresponds to **dz** (third plot).
+
 #+begin_src ipython :results silent :session
-from glue import qglue
-qglue(a = df)
+  from functools import singledispatch
+
+  def xr2pd(ds):
+      x = ds.values if ds.dims.index('station') == 1 else ds.values.T
+      return pd.DataFrame(x, index=getattr(ds, (set(ds.dims) - {'station'}).pop()), columns=ds.station)
+
+  @singledispatch
+  def day(ds, op):
+      x = ds.copy()
+      x.coords['day'] = ('t', pd.DatetimeIndex(x.indexes['t'].date))
+      return xr2pd(getattr(x.groupby('day'), op)('t'))
+  @day.register(pd.DataFrame)
+  def _(ds, op):
+      return day(xr.DataArray(ds).rename({'dim_0': 't'}), op)
+  
+  t0 = T2m.isel(Time=slice(16, 40)).stack(t=('Time', 'start')).sortby('XTIME')
+  t0.coords['t']=('t', t0.XTIME)
+  err_min = day(t0, 'min') - day(T_raw, 'min')
+  err_max = day(t0, 'max') - day(T_raw, 'max')
+  df = pd.concat((dz, sta, err_min.mean(), err_max.mean()), 1).dropna()
 #+end_src
 
+#+begin_src ipython :results raw :session :savefig "topo_scatter_minmax_err.png"
+  fig = plt.figure(figsize=(10, 10))
+  gs = gridspec.GridSpec(2, 2, wspace=.05, hspace=.05)
 
+  met = df[df.index.str.contains('MET')]
+  elev = df['elev'].astype(float)
+  sm = ScalarMappable(norm=Normalize(elev.min(), elev.max()), cmap='spring').to_rgba(elev)
 
-#+begin_src ipython :results raw :session
-  e0 = err.sel(station = km==0)
-  i = e0.argmax('Time')
+  ax = fig.add_subplot(gs[0, 0])
+  ax.scatter(df.d03_var_sso, df[0], c=sm)
+  ax.scatter(met.d03_var_sso, met[0], edgecolor='lime', facecolor='none', marker='o', s=70)
+  ax.set_xticklabels([])
+  ax.set_ylabel('$\Delta (T_{min})$', usetex=True)
 
-  plt.figure()
-  x = e0.sel(station = i==0)
-  plt.plot(x.values.flatten(), label=x.station.item())
-  x = e0.sel(station = i==23)
-  plt.plot(x.values.flatten(), label=x.station.item())
-  x = e0.sel(station = i==3)
-  plt.plot(x.values.flatten(), label=x.station.item())
-  plt.legend()
+  ax = fig.add_subplot(gs[0, 1], sharey=ax)
+  ax.scatter(df.d03_var_sso, df[1], c=sm)
+  ax.scatter(met.d03_var_sso, met[1], edgecolor='lime', facecolor='none', marker='o', s=70)
+  ax.set_xticklabels([])
+  ax.yaxis.set_ticks_position('right')
+  ax.yaxis.set_label_position('right')
+  ax.set_ylabel('$\Delta (T_{max})$', usetex=True)
+
+  dz = df['dz'].astype(float)
+  sm = ScalarMappable(norm=Normalize(dz.min(), dz.max()), cmap='spring').to_rgba(dz)
+  met = df[df.index.str.contains('MET')]
+  ax = fig.add_subplot(gs[1, 0])
+  ax.scatter(df.d03_var_sso, df[0], c=sm)
+  ax.scatter(met.d03_var_sso, met[0], edgecolor='lime', facecolor='none', marker='o', s=70)
+  ax.xaxis.get_major_formatter().set_powerlimits((0, 0))
+  ax.set_xlabel('var_sso')
+  ax.set_ylabel('$\Delta (T_{min})$', usetex=True)
+
+  ax = fig.add_subplot(gs[1, 1], sharey=ax)
+  ax.scatter(df.d03_var_sso, df[1], c=sm)
+  ax.scatter(met.d03_var_sso, met[1], edgecolor='lime', facecolor='none', marker='o', s=70)
+  ax.xaxis.get_major_formatter().set_powerlimits((0, 0))
+  ax.yaxis.set_ticks_position('right')
+  ax.yaxis.set_label_position('right')
+  ax.set_xlabel('var_sso')
+  ax.set_ylabel('$\Delta (T_{max})$', usetex=True)
 #+end_src
 
 #+RESULTS:
-[[file:./obipy-resources/T2/yQQxlG.png]]
-#+begin_src ipython :results raw :session
-  plt.figure()
-  x = e0.sel(station = i==4)
-  plt.plot(x.values.T)
-  plt.legend(x.station.values)
+[[file:./obipy-resources/T2/topo_scatter_minmax_err.png]]
+#+CAPTION: Errors of daily maximum and minimum T2 temperatures (as opposed to daily maximum and minimum of errors, as above) against subgridscale orographic variance ('var_sso'). The color in the **top** panel corresponds to station elevation, in the **bottom** panel to 'dz' (model grid minus station elevation).
+
+#+begin_src ipython :results silent :session
+  lapse_rate = xr.open_dataarray('/nfs/HPC/arno/data/lapse_2015-18.nc').squeeze() 
+  T2_12h_corr = T2_12h - xr.DataArray(dz).squeeze() * lapse_rate
+  T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned_middle.h5'}, 'ta_c').drop('10', 1, level='elev'), 'avg') + 273.15
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "PiscoElqui_daily_cycle_corr.png"
+  fig = plt.figure(figsize=(10,5))
+  tc = T2_12h_corr.sel(station='8', Time=slice(16, 39)).stack(t=('Time','start')).sortby('XTIME')
+
+  colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+  plt.plot(T['8'], label='station regular')
+  plt.plot(T_raw['8'], label='station raw')
+  plt.plot(tc.XTIME, tc, label='model')
+  plt.gca().set_xlim('2017-02-05', '2017-02-10')
+  plt.gca().set_ylim(275, 310)
+  plt.legend(loc=9)
+
+  dt1 = pd.Series(tc.values, index=tc.XTIME)
+  dt2 = dt1 - T_raw['8']
+  dt1 = dt1 - T['8']
+  bx = plt.twinx()
+  plt.plot(dt1.index, dt1, color=colors[4], label='error regular')
+  plt.plot(dt2.index, dt2, color=colors[5], label='error raw')
+  bx.set_ylim(-5, 30)
+  plt.legend(loc=8)
 #+end_src
 
 #+RESULTS:
-[[file:./obipy-resources/T2/IJzo4U.png]]
+[[file:./obipy-resources/T2/PiscoElqui_daily_cycle_corr.png]]
+#+CAPTION: Example daily cycle as above, for Pisco Elqui ('8'), but with the model data corrected by using the temperature difference between the lowest two model levels as an approximation to the boundary layer lapse rate and multiplying it with the difference between model grid and station elevations ('dz'). NOTE: I use the point-value model output here since I have only computed accumulated (mean) values for T2, not T (which is needed for the lapse rate). To be consistent, I therefore use the point-values for both; for that reason, I also use the 'T_raw' station data with time labels in the 'middle' of binning intervals.
+
+#+begin_src ipython :results raw :session :savefig "mean_min_max_bias_corr.png"
+  T2 = T2_12h.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
+  T2.coords['t'] = T2.XTIME
+  bias_seas = pd.concat((
+      (xr2pd(T2) - T_raw).resample('QS-MAR').mean(),
+      (day(T2, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
+      (day(T2, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
+      ), keys=['mean', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+
+  T2c = T2_12h_corr.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
+  T2c.coords['t'] = T2c.XTIME
+  bias_seas_corr = pd.concat((
+      (xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
+      (day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
+      (day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
+      ), keys=['mean', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+
+  fig = plt.figure(figsize=(9, 6))
+  plt.set_cmap('Spectral_r')
+  gs = gridspec.GridSpec(3, 2)
+  subplot_kw = {'wspace': 0.01}
+  for i, m in enumerate(['mean', 'min', 'max']):
+      for j, b in enumerate([bias_seas, bias_seas_corr]):
+          df = b.loc[m].T
+          df.columns = ['JJA', 'SON', 'DJF', 'MAM']
+          coq.plotrow(df, gs[i, j], vmin=-10, vmax=10,  cbar=None, xlabels=False, ylabels=False, subplot_kw=subplot_kw)
+      cplots.row_label(gs[i, 0], m, labelpad=20)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/mean_min_max_bias_corr.png]]
+#+CAPTION: Mean bias of daily mean, minimum and maximum T2 temperatures from 2016-06 to 2017-05, by season. **Left** - without correction; **right** - corrected by using the difference between the air temperatures of the first two model layers as an approximation to the time-varying lapse rate.
+
+#+begin_src ipython :results raw :session :savefig "MEA_min_max_corr.png"
+  T2 = T2_12h.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
+  T2.coords['t'] = T2.XTIME
+  bias_seas = pd.concat((
+      abs(xr2pd(T2) - T_raw).resample('QS-MAR').mean(),
+      abs(day(T2, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
+      abs(day(T2, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
+      ), keys=['mean', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+
+  T2c = T2_12h_corr.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
+  T2c.coords['t'] = T2c.XTIME
+  bias_seas_corr = pd.concat((
+      abs(xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
+      abs(day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
+      abs(day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
+      ), keys=['mean', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+
+  fig = plt.figure(figsize=(9, 6))
+  plt.set_cmap('cividis')
+  gs = gridspec.GridSpec(3, 2)
+  subplot_kw = {'wspace': 0.01}
+  for i, m in enumerate(['mean', 'min', 'max']):
+      for j, b in enumerate([bias_seas, bias_seas_corr]):
+          df = b.loc[m].T
+          df.columns = ['JJA', 'SON', 'DJF', 'MAM']
+          coq.plotrow(df, gs[i, j], vmin=0, vmax=10,  cbar=None, xlabels=False, ylabels=False, subplot_kw=subplot_kw)
+      cplots.row_label(gs[i, 0], m, labelpad=20)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/MEA_min_max_corr.png]]
+#+CAPTION: Same as above, but for MAE.
+
+#+begin_src ipython :results silent :session
+  err = daily_err(slice(16, 40), T2_12h_corr, T_raw).mean('start')
+  e1 = err - err.mean('Time')
+  df = pd.concat((dz, sta,
+      pd.DataFrame(e1.max('Time').values, index=e1.station, columns=['dmax']),
+      pd.DataFrame(e1.min('Time').values, index=e1.station, columns=['dmin']),
+      (day(T2c, 'min') - day(T_raw, 'min')).mean(),
+      (day(T2c, 'max') - day(T_raw, 'max')).mean()
+  ), 1).dropna()
+#+end_src
 
 
+#+begin_src ipython :results raw :session
+  fig = plt.figure(figsize=(10, 10))
+  gs = gridspec.GridSpec(2, 2, wspace=.05, hspace=.05)
+
+  met = df[df.index.str.contains('MET')]
+  elev = df['elev'].astype(float)
+  sm = ScalarMappable(norm=Normalize(elev.min(), elev.max()), cmap='spring').to_rgba(elev)
+
+  ax = fig.add_subplot(gs[0, 0])
+  ax.scatter(df.d03_var_sso, df['dmin'], c=sm)
+  ax.scatter(met.d03_var_sso, met['dmin'], edgecolor='lime', facecolor='none', marker='o', s=70)
+  ax.set_xticklabels([])
+  ax.set_ylabel('$(\Delta T)_{min}$', usetex=True)
+
+  ax = fig.add_subplot(gs[0, 1], sharey=ax)
+  ax.scatter(df.d03_var_sso, df['dmax'], c=sm)
+  ax.scatter(met.d03_var_sso, met['dmax'], edgecolor='lime', facecolor='none', marker='o', s=70)
+  ax.set_xticklabels([])
+  ax.yaxis.set_ticks_position('right')
+  ax.yaxis.set_label_position('right')
+  ax.set_ylabel('($\Delta T)_{max}$', usetex=True)
+
+  # dz = df['dz'].astype(float)
+  # sm = ScalarMappable(norm=Normalize(dz.min(), dz.max()), cmap='spring').to_rgba(dz)
+  ax = fig.add_subplot(gs[1, 0])
+  ax.scatter(df.d03_var_sso, df[0], c=sm)
+  ax.scatter(met.d03_var_sso, met[0], edgecolor='lime', facecolor='none', marker='o', s=70)
+  ax.xaxis.get_major_formatter().set_powerlimits((0, 0))
+  ax.set_xlabel('var_sso')
+  ax.set_ylabel('$\Delta (T_{min})$', usetex=True)
+
+  ax = fig.add_subplot(gs[1, 1], sharey=ax)
+  ax.scatter(df.d03_var_sso, df[1], c=sm)
+  ax.scatter(met.d03_var_sso, met[1], edgecolor='lime', facecolor='none', marker='o', s=70)
+  ax.xaxis.get_major_formatter().set_powerlimits((0, 0))
+  ax.yaxis.set_ticks_position('right')
+  ax.yaxis.set_label_position('right')
+  ax.set_xlabel('var_sso')
+  ax.set_ylabel('$\Delta (T_{max})$', usetex=True)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/9dMi4O.png]]
 
 
 ** Skewness & kurtosis
