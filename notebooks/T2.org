@@ -45,7 +45,9 @@
    import xarray as xr
    import helpers as hh
    import matplotlib.pyplot as plt
-   from matplotlib import ticker, gridspec
+   from matplotlib import ticker, gridspec, path
+   from matplotlib.colors import Normalize
+   from matplotlib.cm import ScalarMappable
    from glob import glob
    from cartopy import crs
    import plots as cplots
@@ -141,6 +143,81 @@
 
 #+CAPTION: Linear interpolation of land (1) and sea (0) values to station locations on the various model grids.
 #+RESULTS:
+
+* elevation
+#+begin_src ipython :results silent :session
+  import gdal
+  ds = gdal.Open({'condor': '/home/arno/Documents/data/geo/merged.tif'}[hh.config.hostname])
+  g = ds.GetGeoTransform()
+  b = ds.GetRasterBand(1)
+  z = b.ReadAsArray()
+  Z = xr.DataArray(z, coords=[
+      ('lat', g[3] + g[5] * (np.arange(z.shape[0]) + .5)),
+      ('lon', g[0] + g[1] * (np.arange(z.shape[1]) + .5))
+  ])
+
+  h = xr.open_dataarray({'condor': '/home/arno/Documents/data/WRF/3d/grid_d03.nc'}[hh.config.hostname]).squeeze()
+  with xr.open_dataset({'condor': '/home/arno/Documents/data/WRF/3d/geo_em.d03.nc'}[hh.config.hostname]) as ds:
+      sso = ds['VAR_SSO'].load().squeeze()
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
+  dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "elevation.png"
+    fig = plt.figure(figsize=(15, 5))
+    gs = gridspec.GridSpec(1, 12, wspace=0.2)
+
+    lon, lat, c = pd.concat((sta[['lon', 'lat']], dz), 1).dropna().astype(float).values.T
+    SM = ScalarMappable(norm=Normalize(0, max(abs(c))), cmap='binary')
+    SM.set_array(abs(c))
+    sm = SM.to_rgba(abs(c))
+    x0, x1, y0, y1 = -72.2, -69, -32.8, -28.5
+    p = path.Path([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)])
+    z = Z.sel(lat=slice(y1, y0))
+    plt.set_cmap('terrain')
+
+    a1 = fig.add_subplot(gs[1:4], projection=crs.PlateCarree())
+    im = a1.imshow(z, origin='upper', transform=crs.PlateCarree(), extent=(z.lon[0], z.lon[-1], z.lat[-1], z.lat[0]))
+    coq(a1, lines_only=True, colors=['w', 'k'])
+    a1.set_title('SRTM')
+    a1.background_patch.set_alpha(0)
+    a1.outline_patch.set_edgecolor('w')
+    a1.set_boundary(p)
+    cplots.cbar(im, 'left', width=.02, space=.01, label='m', label_kw={'color': 'k'})
+    vmin, vmax = im.get_clim()
+
+    ax = fig.add_subplot(gs[4:7], projection=crs.PlateCarree(), sharey=a1)
+    ax.pcolormesh(h.XLONG, h.XLAT, h, transform=crs.PlateCarree(), vmin=vmin, vmax=vmax)
+    coq(ax, lines_only=True, colors=['w', 'k'])
+    ax.set_title('HGT')
+    ax.outline_patch.set_edgecolor('w')
+    ax.background_patch.set_alpha(0)
+    ax.set_extent((x0, x1, y0, y1))
+
+    ax = fig.add_subplot(gs[8:11], projection=crs.PlateCarree(), sharey=a1)
+    plt.set_cmap('rainbow')
+    a = ax.pcolormesh(h.XLONG, h.XLAT, sso, transform=crs.PlateCarree())
+    ax.scatter(lon[c<0], lat[c<0], c=sm[c<0, :], marker='^', transform=crs.PlateCarree())
+    ax.scatter(lon[c>0], lat[c>0], c=sm[c>0, :], marker='v', transform=crs.PlateCarree())
+    coq(ax, lines_only=True, colors=['w', 'k'])
+    ax.set_title('VAR_SSO')
+    ax.background_patch.set_alpha(0)
+    ax.outline_patch.set_edgecolor('w')
+    ax.set_extent((x0, x1, y0, y1))
+    cb = cplots.cbar(a, width=.02, space=.01, label='m$^2$', label_kw={'color': 'k'})
+    cb.formatter.set_scientific(True)
+    cb.formatter.set_powerlimits((0, 0))
+    cb.update_ticks()
+    cplots.cbar(SM, 'left', ax, width=.02, space=.01, label='m')
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/elevation.png]]
+#+CAPTION: DEMS from the Shuttle Radar Topography Mission (SRTM), the smoothed grid used in WRF (variable 'HGT'), and the subgridscale orographic variance after smooting (variable 'VAR_SSO'). The triangles in plot 3 (left colorbar) display the absolute value of *dz* via their color, while their orientation indicates whether the station is located lower (downward) or higher (upward) than the model grid.
 
 * T2
 ** Mean bias
@@ -773,6 +850,7 @@ plt.plot(abs(raw_12h).mean(('start', 'station')), label='12h raw')
 #+CAPTION: **Top** - Bias, **bottom** - MAE of model error against hour of the simulation, for the wrf_operacional simulations. The lines labeled 'raw' use for comparison the 'raw' station data binned to hourly intervals *centered* on the given timestamp (it is relatively difficult to say what the non-raw station data timestamps correspond to). **Note** that the bump appearing in the morning is more pronounced in the raw-binned data (its existing in the non-raw data prompted me to see if it would disappear with 'raw' ones - what *could* be involved is the morning boundary layer breakup).
 
 ** different ways of correcting for lapse rate
+*** exploration
 #+begin_src ipython :results silent :session
 lapse_rate = xr.open_dataarray('/nfs/HPC/arno/data/lapse_2015-18.nc').squeeze() 
 corr = xr.DataArray(dz).squeeze() * lapse_rate
@@ -1003,8 +1081,6 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 
 #+begin_src ipython :results silent :session
   from sklearn import cluster
-  from matplotlib.colors import Normalize
-  from matplotlib.cm import ScalarMappable
 
   T2m = xr.open_dataarray('/nfs/HPC/arno/data/T2MEAN.nc')
   T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned_end.h5'}, 'ta_c').drop('10', 1, level='elev'), 'avg') + 273.15
@@ -1234,18 +1310,21 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 #+begin_src ipython :results silent :session
   lapse_rate = xr.open_dataarray('/nfs/HPC/arno/data/lapse_2015-18.nc').squeeze() 
   T2_12h_corr = T2_12h - xr.DataArray(dz).squeeze() * lapse_rate
+  T2_12h_drad = T2_12h + xr.DataArray(dz).squeeze() * 0.0098 # dry adiabatic lapse rate
   T_raw = hh.stationize(hh.read_hdf({'condor': '/nfs/HPC/arno/data/station_raw_binned_middle.h5'}, 'ta_c').drop('10', 1, level='elev'), 'avg') + 273.15
 #+end_src
 
 #+begin_src ipython :results raw :session :savefig "PiscoElqui_daily_cycle_corr.png"
   fig = plt.figure(figsize=(10,5))
   tc = T2_12h_corr.sel(station='8', Time=slice(16, 39)).stack(t=('Time','start')).sortby('XTIME')
+  td = T2_12h_drad.sel(station='8', Time=slice(16, 39)).stack(t=('Time','start')).sortby('XTIME')
 
   colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
   plt.plot(T['8'], label='station regular')
   plt.plot(T_raw['8'], label='station raw')
   plt.plot(tc.XTIME, tc, label='model')
+  plt.plot(td.XTIME, td, label='model dry adiabatic')
   plt.gca().set_xlim('2017-02-05', '2017-02-10')
   plt.gca().set_ylim(275, 310)
   plt.legend(loc=9)
@@ -1297,6 +1376,38 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 [[file:./obipy-resources/T2/mean_min_max_bias_corr.png]]
 #+CAPTION: Mean bias of daily mean, minimum and maximum T2 temperatures from 2016-06 to 2017-05, by season. **Left** - without correction; **right** - corrected by using the difference between the air temperatures of the first two model layers as an approximation to the time-varying lapse rate.
 
+#+begin_src ipython :results raw :session :savefig "mean_min_max_bias_drad.png"
+  T2c = T2_12h_drad.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
+  T2c.coords['t'] = T2c.XTIME
+  bias_seas_mean = pd.concat((
+      (xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
+      (day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
+      (day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
+      ), keys=['ave', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+
+  bias_seas_MAE = pd.concat((
+      abs(xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
+      abs(day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
+      abs(day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
+      ), keys=['ave', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+
+  fig = plt.figure(figsize=(9, 6))
+  gs = gridspec.GridSpec(3, 2)
+  subplot_kw = {'wspace': 0.01}
+  for i, m in enumerate(['ave', 'min', 'max']):
+      for j, b in enumerate([bias_seas_mean, bias_seas_MAE]):
+          plt.set_cmap(['Spectral_r', 'cividis'][j])
+          df = b.loc[m].T
+          df.columns = ['JJA', 'SON', 'DJF', 'MAM']
+          coq.plotrow(df, gs[i, j], vmin=[-10, 0][j], vmax=10,  cbar=None, xlabels=False, ylabels=False, subplot_kw=subplot_kw)
+      cplots.row_label(gs[i, 0], m, labelpad=20)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/mean_min_max_bias_drad.png]]
+#+CAPTION: Bias (**left**) and absolute (**right**) error versions of the T2 seasonal errors from 2016-06 to 2017-05, corrected with the **dry adiabatic lapse rate**.
+
+
 #+begin_src ipython :results raw :session :savefig "MEA_min_max_corr.png"
   T2 = T2_12h.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
   T2.coords['t'] = T2.XTIME
@@ -1304,7 +1415,7 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
       abs(xr2pd(T2) - T_raw).resample('QS-MAR').mean(),
       abs(day(T2, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
       abs(day(T2, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
-      ), keys=['mean', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+      ), keys=['MAE', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
 
   T2c = T2_12h_corr.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
   T2c.coords['t'] = T2c.XTIME
@@ -1312,13 +1423,13 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
       abs(xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
       abs(day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
       abs(day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
-      ), keys=['mean', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+      ), keys=['MAE', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
 
   fig = plt.figure(figsize=(9, 6))
   plt.set_cmap('cividis')
   gs = gridspec.GridSpec(3, 2)
   subplot_kw = {'wspace': 0.01}
-  for i, m in enumerate(['mean', 'min', 'max']):
+  for i, m in enumerate(['MAE', 'min', 'max']):
       for j, b in enumerate([bias_seas, bias_seas_corr]):
           df = b.loc[m].T
           df.columns = ['JJA', 'SON', 'DJF', 'MAM']
@@ -1385,8 +1496,15 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 
 #+RESULTS:
 [[file:./obipy-resources/T2/9dMi4O.png]]
-
-
+*** Notes
+**** Using dry adiabatic lapse rate gives one of the better corrections for the daily maximum temperatures, at least inland.
+***** consistent with well-mixed, dry boundary layer at mid-day
+***** in the Pisco Elqui valley, the PBL parameterization underestimates the correction, the dry lapse rate is better (for daily max)
+**** The same is not true for minimum temperatures, as to be expected.
+***** During the night, stratification occurs and an inversion may be produced.
+**** At the coast, where *dz* is not very large, there is not much difference between corrections
+**** The model-based correction doesn't do well for minimum temps in winter in the Pisco Elqui valley
+**** Both corrections seem to make things generally worse for minimum temperatures, except in winter in the Pisco Elqui valley with the dry adiabatic lapse rate (and there's a still slight cold bias).
 ** Skewness & kurtosis
    
 #+begin_src ipython :results silent :session

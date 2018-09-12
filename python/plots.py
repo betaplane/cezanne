@@ -110,7 +110,7 @@ def row_label(obj, label, rotation=0, size=12, labelpad=40, **kwargs):
 def _(obj, *args, **kwargs):
     return row_label(add_axes(obj), *args, **kwargs)
 
-def cbar(plot, loc='right', center=False, width=.01, space=.01, label=None):
+def cbar(plot, loc='right', ax=None, center=False, width=.01, space=.01, label=None, label_kw={}):
     """Wrapper to attach colorbar on either side of a :class:`~matplotlib.axes.Axes.plot` and to add coastlines and grids.
 
     :param plot: Plot to attach the colorbar to.
@@ -123,21 +123,24 @@ def cbar(plot, loc='right', center=False, width=.01, space=.01, label=None):
     :param label: Label for the colorbar (units) - currently placed inside the colorbar.
 
     """
-    try:
-        ax = plot.ax
-    except AttributeError:
-        ax = plot.axes
+    if ax is None:
+        try:
+            ax = plot.ax
+        except AttributeError:
+            ax = plot.axes
     bb = ax.get_position()
     x = bb.x0 - space - width if loc=='left' else bb.x1 + space
     cax = ax.figure.add_axes([x, bb.y0, width, bb.y1-bb.y0])
-    plt.colorbar(plot, cax=cax)
+    cb = plt.colorbar(plot, cax=cax)
     cax.yaxis.set_ticks_position(loc)
     if center is not False:
         lim = np.abs(plot.get_clim()).max() if isinstance(center, bool) else center
         plot.set_clim(-lim, lim)
 
     if label is not None:
-        cax.text(.5, .95, label, ha='center', va='top', size=12, fontweight='bold', usetex=True)
+        cax.text(.5, .95, label, ha='center', va='top', size=12, fontweight='bold', usetex=True, **label_kw)
+
+    return cb
 
 class Coquimbo(Configurable):
     """Add map features for Coquimbo region to a given :class:`~cartopy.mpl.geoaxes.GeoAxes` instance. Usage::
