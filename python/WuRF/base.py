@@ -149,6 +149,9 @@ class WuRFiles(Application):
     from_date = Unicode().tag(config = True)
     """From what date onwards to search (only simulation start dates), if a start date is desired (as %Y%m%d :obj:`str`)."""
 
+    to_date = Unicode().tag(config = True)
+    """Up to what date to search (only simulation start dates), if an end date is desired (as %Y%m%d :obj:`str`)."""
+
     domain = Unicode('d03').tag(config=True)
     """Which of the WRF domains (e.g. ``d03``) to use."""
 
@@ -180,6 +183,8 @@ class WuRFiles(Application):
             dirs = [d for d in dirs if d[-2:] == '{:02}'.format(self.hour)]
         if self.from_date != '':
             dirs = [d for d in dirs if d[-10:-2] >= self.from_date]
+        if self.to_date != '':
+            dirs = [d for d in dirs if d[-10:-2] <= self.to_date]
         self.dirs = sorted(dirs, key=lambda s:s[-10:])
 
         assert len(self.dirs) > 0, "no directories added"

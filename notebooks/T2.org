@@ -159,10 +159,7 @@
   h = xr.open_dataarray({'condor': '/home/arno/Documents/data/WRF/3d/grid_d03.nc'}[hh.config.hostname]).squeeze()
   with xr.open_dataset({'condor': '/home/arno/Documents/data/WRF/3d/geo_em.d03.nc'}[hh.config.hostname]) as ds:
       sso = ds['VAR_SSO'].load().squeeze()
-#+end_src
 
-
-#+begin_src ipython :results silent :session
   sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
   dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
 #+end_src
@@ -217,7 +214,7 @@
 
 #+RESULTS:
 [[file:./obipy-resources/T2/elevation.png]]
-#+CAPTION: DEMS from the Shuttle Radar Topography Mission (SRTM), the smoothed grid used in WRF (variable 'HGT'), and the subgridscale orographic variance after smooting (variable 'VAR_SSO'). The triangles in plot 3 (left colorbar) display the absolute value of *dz* via their color, while their orientation indicates whether the station is located lower (downward) or higher (upward) than the model grid.
+#+CAPTION: DEMS from the Shuttle Radar Topography Mission (SRTM), the smoothed grid used in WRF (variable 'HGT'), and the subgridscale orographic variance after smooting (variable 'VAR_SSO'). The triangles in plot 3 (left colorbar) are colored according to the absolute elevation difference between model grid and true station location ('dz'), while their orientation indicates whether the station is located lower (downward) or higher (upward) than the model grid.
 
 * T2
 ** Mean bias
@@ -1376,38 +1373,6 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 [[file:./obipy-resources/T2/mean_min_max_bias_corr.png]]
 #+CAPTION: Mean bias of daily mean, minimum and maximum T2 temperatures from 2016-06 to 2017-05, by season. **Left** - without correction; **right** - corrected by using the difference between the air temperatures of the first two model layers as an approximation to the time-varying lapse rate.
 
-#+begin_src ipython :results raw :session :savefig "mean_min_max_bias_drad.png"
-  T2c = T2_12h_drad.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
-  T2c.coords['t'] = T2c.XTIME
-  bias_seas_mean = pd.concat((
-      (xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
-      (day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
-      (day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
-      ), keys=['ave', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
-
-  bias_seas_MAE = pd.concat((
-      abs(xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
-      abs(day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
-      abs(day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
-      ), keys=['ave', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
-
-  fig = plt.figure(figsize=(9, 6))
-  gs = gridspec.GridSpec(3, 2)
-  subplot_kw = {'wspace': 0.01}
-  for i, m in enumerate(['ave', 'min', 'max']):
-      for j, b in enumerate([bias_seas_mean, bias_seas_MAE]):
-          plt.set_cmap(['Spectral_r', 'cividis'][j])
-          df = b.loc[m].T
-          df.columns = ['JJA', 'SON', 'DJF', 'MAM']
-          coq.plotrow(df, gs[i, j], vmin=[-10, 0][j], vmax=10,  cbar=None, xlabels=False, ylabels=False, subplot_kw=subplot_kw)
-      cplots.row_label(gs[i, 0], m, labelpad=20)
-#+end_src
-
-#+RESULTS:
-[[file:./obipy-resources/T2/mean_min_max_bias_drad.png]]
-#+CAPTION: Bias (**left**) and absolute (**right**) error versions of the T2 seasonal errors from 2016-06 to 2017-05, corrected with the **dry adiabatic lapse rate**.
-
-
 #+begin_src ipython :results raw :session :savefig "MEA_min_max_corr.png"
   T2 = T2_12h.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
   T2.coords['t'] = T2.XTIME
@@ -1440,6 +1405,37 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 #+RESULTS:
 [[file:./obipy-resources/T2/MEA_min_max_corr.png]]
 #+CAPTION: Same as above, but for MAE.
+
+#+begin_src ipython :results raw :session :savefig "mean_min_max_bias_drad.png"
+  T2c = T2_12h_drad.isel(Time=slice(16, 40)).stack(t=('Time', 'start'))
+  T2c.coords['t'] = T2c.XTIME
+  bias_seas_mean = pd.concat((
+      (xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
+      (day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
+      (day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
+      ), keys=['ave', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+
+  bias_seas_MAE = pd.concat((
+      abs(xr2pd(T2c) - T_raw).resample('QS-MAR').mean(),
+      abs(day(T2c, 'min') - day(T_raw, 'min')).resample('QS-MAR').mean(),
+      abs(day(T2c, 'max') - day(T_raw, 'max')).resample('QS-MAR').mean()
+      ), keys=['ave', 'min', 'max']).xs(slice('2016-06', '2017-03'), 0, 1, False)
+
+  fig = plt.figure(figsize=(9, 6))
+  gs = gridspec.GridSpec(3, 2)
+  subplot_kw = {'wspace': 0.01}
+  for i, m in enumerate(['ave', 'min', 'max']):
+      for j, b in enumerate([bias_seas_mean, bias_seas_MAE]):
+          plt.set_cmap(['Spectral_r', 'cividis'][j])
+          df = b.loc[m].T
+          df.columns = ['JJA', 'SON', 'DJF', 'MAM']
+          coq.plotrow(df, gs[i, j], vmin=[-10, 0][j], vmax=10,  cbar=None, xlabels=False, ylabels=False, subplot_kw=subplot_kw)
+      cplots.row_label(gs[i, 0], m, labelpad=20)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/mean_min_max_bias_drad.png]]
+#+CAPTION: Bias (**left**) and absolute (**right**) error versions of the T2 seasonal errors from 2016-06 to 2017-05, corrected with the **dry adiabatic lapse rate**.
 
 #+begin_src ipython :results silent :session
   err = daily_err(slice(16, 40), T2_12h_corr, T_raw).mean('start')
@@ -1505,6 +1501,14 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 **** At the coast, where *dz* is not very large, there is not much difference between corrections
 **** The model-based correction doesn't do well for minimum temps in winter in the Pisco Elqui valley
 **** Both corrections seem to make things generally worse for minimum temperatures, except in winter in the Pisco Elqui valley with the dry adiabatic lapse rate (and there's a still slight cold bias).
+
+** soil temp (TSLB)
+#+begin_src ipython :results silent :session
+# ts = pd.read_hdf(hh.config.Field.file_name, 'ts_c').xs('prom', 1, level='aggr')
+depth = abs(ts.columns.get_level_values('elev').astype(float))
+#+end_src
+
+
 ** Skewness & kurtosis
    
 #+begin_src ipython :results silent :session

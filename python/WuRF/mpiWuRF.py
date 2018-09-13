@@ -24,6 +24,7 @@ class CC(CCBase):
         * **domain** - Which of the WRF domains (e.g. ``d03``) to use.
         * **hour** - Hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
         * **from_date** - From what date onwards to search (only simulation start dates), if a start date is desired (as %Y%m%d :obj:`str`).
+        * **to_date** - Up to what date to search (only simulation start dates), if an end date is desired (as %Y%m%d :obj:`str`).
         * **directory_pattern** - Glob pattern for the directory names (e.g. ``c01_*``)
         * **wrfout_prefix** - Prefix of the WRF output files (e.g. ``wrfout``).
         * **outfile** - Base name of the output netCDF file (**no extension**, numberings are added in case of restarts, in the form '_part#' where # is the number). Defaults to the :attr:`outfile` trait which can be set by command line ('-o' flag) and config.
