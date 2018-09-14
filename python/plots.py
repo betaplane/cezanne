@@ -121,6 +121,7 @@ def cbar(plot, loc='right', ax=None, center=False, width=.01, space=.01, label=N
     :param width: Width of the colorbar.
     :param space: Space between edge of plot and colorbar.
     :param label: Label for the colorbar (units) - currently placed inside the colorbar.
+    "param label_kw: :obj:`dict` of additional keyword arguments for the label text.
 
     """
     if ax is None:

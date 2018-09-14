@@ -1501,12 +1501,108 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 **** At the coast, where *dz* is not very large, there is not much difference between corrections
 **** The model-based correction doesn't do well for minimum temps in winter in the Pisco Elqui valley
 **** Both corrections seem to make things generally worse for minimum temperatures, except in winter in the Pisco Elqui valley with the dry adiabatic lapse rate (and there's a still slight cold bias).
-
-** soil temp (TSLB)
+** soil temp (ts_c, TSLB)
 #+begin_src ipython :results silent :session
-# ts = pd.read_hdf(hh.config.Field.file_name, 'ts_c').xs('prom', 1, level='aggr')
+from WuRF.base import tease_apart, align_stations
+ts = pd.read_hdf(hh.config.Field.file_name, 'ts_c').xs('prom', 1, level='aggr')
 depth = abs(ts.columns.get_level_values('elev').astype(float))
+_, TSLB = tease_apart('/nfs/HPC/arno/data/TSLB_???.nc', 'TSLB')
 #+end_src
+
+
+#+begin_src ipython :results silent :session
+  ts0 = TSLB.isel(soil_layers_stag=[0, 1], Time=slice(16, 40)).stack(t=('start', 'Time')).sortby('XTIME') - 273.15
+  # tsip = ts0.isel(soil_layers_stag=0) + ts0.diff('soil_layers_stag') * 0.25
+  ts1 = pd.DataFrame(ts0.isel(soil_layers_stag=1).transpose('t', 'station').values, index=ts0.XTIME, columns=ts0.station)
+  ts0 = pd.DataFrame(ts0.isel(soil_layers_stag=0).transpose('t', 'station').values, index=ts0.XTIME, columns=ts0.station)
+#+end_src
+
+#+begin_src ipython :results raw :session
+  def day(df):
+      g = df.groupby(df.index.date)
+      return (g.max() - g.min()).mean()
+
+  fig = plt.figure(figsize=(8, 9))
+  gs = gridspec.GridSpec(2, 1, hspace=.05, wspace=.05)
+  plt.set_cmap('rainbow')
+  tso = ts.loc[:, depth==0.1]
+  tso.columns = tso.columns.get_level_values('station')
+  df = pd.concat((tso.mean(), ts0.mean(), ts1.mean()), 1)
+  df.columns = ['obs', 'layer 1', 'layer 2']
+  coq.plotrow(df, gs[0])
+  cplots.row_label(gs[0], 'mean', labelpad=60)
+
+  df = pd.concat((day(tso), day(ts0), day(ts1)), 1)
+  coq.plotrow(df, gs[1], title=False)
+  cplots.row_label(gs[1], 'daily amp', labelpad=60)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/2SaGRR.png]]
+#+CAPTION: Mean and daily cycle of observed ('obs') soil temperatures at -0.1 m, as well as in the top two layers of the NOAH LSM. The top two layers have thicknesses of 10 and 30 cm, respectively. Daily cycle refers to the mean of daily maximum minus daily minimum. The cold bias of the model is consistent with the cold bias in air temperatures, which largely lead the soil temperatures (see below).
+
+#+begin_src ipython :results raw :session :savefig "TSBL_T2_LLH_wavelet.png"
+  import pycwt
+  import matplotlib as mpl
+
+  a = ts0['LLH'].loc['2016-11-15':'2017-03-11']
+  b = T2_12h.sel(station='LLH', Time=slice(16, 39)).stack(t=('Time', 'start')).sortby('XTIME') - 273.15
+  b = pd.Series(b, index=b.XTIME).loc['2016-11-15':'2017-03-11']
+  wct = pycwt.wct(a, b.loc['2016-11-15':'2017-03-11'], dt=1/24, sig=False)
+
+  fig, axs = plt.subplots(3, 1, figsize=(10, 6))
+  t = mpl.dates.date2num(a.index.to_pydatetime())
+  axsl = list(axs)
+
+  for j in [1.5, .2]:
+      for i, (norm, cmap) in enumerate(zip([(0, 1), (-np.pi, np.pi)], ['cividis', 'seismic'])):
+          if j==.2 and i==0: continue
+          ax = axsl.pop(0)
+          im = mpl.image.NonUniformImage(ax, interpolation='bilinear', norm=Normalize(*norm), cmap=cmap)
+          im.set_data(t, wct[3], wct[i])
+          im.set_extent((t[0], t[-1], j, 0))
+          ax.images.append(im)
+          plt.colorbar(im, ax=ax)
+          ax.set_xticklabels([])
+  ax.xaxis.set_major_formatter(mpl.dates.DateFormatter('%m-%d'))
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/TSBL_T2_LLH_wavelet.png]]
+#+CAPTION: Wavelet coherence/phase between soil temperature ('TSLB', top layer) and T2, interpolated to station LLH. Top panel shows coherence, the following two phase; the last plot is zoomed into the longer frequencies. Negative values (blue) of the phase plot indicate T2 leading the TSLB signal. Frequency (y axis) is 1/day.
+
+** soil moisture (hs, SMOIS)
+#+begin_src ipython :results silent :session
+sm = xr.open_dataarray({'condor': '/nfs/HPC/arno/data/SMOIS_145.nc'}[hh.config.hostname])
+hs = pd.read_hdf(hh.config.Field.file_name, 'hs')
+hs = hs.xs('prom', 1, level='aggr')[['CNFJB', 'CNFJQ']]
+#+end_src
+
+
+#+begin_src ipython :results raw :session
+tab = sm.isel(start=slice(16, 40)).mean(('start', 'Time')).to_dataframe().unstack()
+tab.columns = tab.columns.droplevel(0)
+table(tab)
+#+end_src
+
+#+RESULTS:
+|       |                  0 |                   1 |                   2 |                   3 |
+|-------+--------------------+---------------------+---------------------+---------------------|
+| CNFJB | 0.4133500937418161 | 0.42049734998723043 |  0.3776516872325936 | 0.37956916075681124 |
+| CNFJQ | 0.2693925887016526 |  0.2794720091590805 | 0.22654675303090938 | 0.22974003487416714 |
+
+#+begin_src ipython :results raw :session
+tab = hs.mean().unstack()
+tab.index = tab.index.get_level_values(0)
+table(tab)
+#+end_src
+
+#+RESULTS:
+|       |               -0.1 |               -0.2 |               -0.5 |
+|-------+--------------------+--------------------+--------------------|
+| CNFJB | 16.227916633775212 | 17.436791901087354 | 16.321969650409876 |
+| CNFJQ | 14.575972260904477 | 15.108363282918049 |  15.14085535884631 |
+
 
 
 ** Skewness & kurtosis

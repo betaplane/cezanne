@@ -241,7 +241,9 @@ class WuRFiles(Application):
         s = [d.strftime('%Y%m%d%H') for d in t]  # (from modified time in previous_file to original WRFOUT)
         n = len(self.dirs)
         self.dirs = [d for d in self.dirs if d[-10:] not in s]
-        self.log.info("%s directories removed.", n - len(self.dirs))
+        m = len(self.dirs)
+        self.log.info("%s directories removed.", n - m)
+        return m
 
     def duration(self):
         """Save a list of simulation lengths (in timesteps), per directory in :attr:`.dirs`. The list is saved in :attr:`.lengths`."""
@@ -351,9 +353,11 @@ class CCBase(WuRFiles):
                 self._func = getattr(import_module(mod), f.strip('.'))
             return self._func(value)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, stations=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.data = None
+        if stations is not None:
+            self._stations = stations
 
 def piece_together(glob_pattern):
     """Piece together individual files resulting from a WRF output concatenation procedure (due to different simulation lengths and random interruptions) into larger files.
@@ -361,17 +365,16 @@ def piece_together(glob_pattern):
     """
     xr = import_module('xarray')
     D = {}
-    t = {133: 121, 169: 145}
-    for g in sorted(glob(glob_pattern)):
+    for g in sorted(glob(glob_pattern), key=lambda s:s.split('_')[-1].split('.')[0]):
         f = xr.open_dataset(g)
         j = len(f.Time)
-        d = f.sel(Time=slice(0, t[j]))
+        d = f.isel(Time=slice(0, 121 if j < 145 else 145))
         i = len(d.Time)
         try:
             D[i] = xr.concat((D[i], d), 'start')
         except KeyError:
             D[i] = d
-    for f in D.items():
+    for l, f in D.items():
         f.to_netcdf('{}_{}.nc'.format(glob_pattern[:-1], l))
 
 

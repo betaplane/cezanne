@@ -57,12 +57,11 @@ class CC(CCBase):
 
         while len(self.dirs) > 0:
             try:
-                start = timer()
                 self.concat(True)
-                self.write('final', start)
-            except:
-                self.write('inter', start)
-                break
+                self.write('final')
+            except Exception as exc:
+                print(exc)
+                self.write('inter')
 
     def sort_data(self):
         if self.lead_day == -1:
@@ -70,12 +69,12 @@ class CC(CCBase):
         else:
             self.data = self.data.rename({'Time': 't'}).stack(Time=('start', 't')).sortby('XTIME')
 
-    def write(self, middle, start):
+    def write(self, middle):
         fn = '{}_{}_{}.nc'.format(self.outfile, middle, self.fileno)
         self.sort_data()
         self.data.to_netcdf(fn)
-        self.remove_dirs(self.data)
-        self.data = None
+        n = self.remove_dirs(self.data)
+        self.data = None if n==0 else self._extract2(self.dirs[0])
         self.fileno += 1
 
     def concat(self, interval=False):
@@ -103,7 +102,7 @@ class CC(CCBase):
                 for i, f in enumerate(exe.map(self._extract2, self.dirs[1:])):
                     self.data = xr.concat((self.data, f), 'start')
                     if interval and ((i + 1) % self.write_interval == 0):
-                        self.write('reg', i+1, start)
+                        self.write('reg')
             self.sort_data()
         self.log.info('Time taken: {:.2f}'.format(timer() - start))
 
