@@ -1501,6 +1501,7 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 **** At the coast, where *dz* is not very large, there is not much difference between corrections
 **** The model-based correction doesn't do well for minimum temps in winter in the Pisco Elqui valley
 **** Both corrections seem to make things generally worse for minimum temperatures, except in winter in the Pisco Elqui valley with the dry adiabatic lapse rate (and there's a still slight cold bias).
+**** for validation, consider placing more emphasis on stations with low dz / high VAR_SSO!!!
 ** soil temp (ts_c, TSLB)
 #+begin_src ipython :results silent :session
 from WuRF.base import tease_apart, align_stations
@@ -1517,7 +1518,7 @@ _, TSLB = tease_apart('/nfs/HPC/arno/data/TSLB_???.nc', 'TSLB')
   ts0 = pd.DataFrame(ts0.isel(soil_layers_stag=0).transpose('t', 'station').values, index=ts0.XTIME, columns=ts0.station)
 #+end_src
 
-#+begin_src ipython :results raw :session
+#+begin_src ipython :results raw :session :savefig "soil_temp_obs_vs_model.png"
   def day(df):
       g = df.groupby(df.index.date)
       return (g.max() - g.min()).mean()
@@ -1538,7 +1539,7 @@ _, TSLB = tease_apart('/nfs/HPC/arno/data/TSLB_???.nc', 'TSLB')
 #+end_src
 
 #+RESULTS:
-[[file:./obipy-resources/T2/2SaGRR.png]]
+[[file:./obipy-resources/T2/soil_temp_obs_vs_model.png]]
 #+CAPTION: Mean and daily cycle of observed ('obs') soil temperatures at -0.1 m, as well as in the top two layers of the NOAH LSM. The top two layers have thicknesses of 10 and 30 cm, respectively. Daily cycle refers to the mean of daily maximum minus daily minimum. The cold bias of the model is consistent with the cold bias in air temperatures, which largely lead the soil temperatures (see below).
 
 #+begin_src ipython :results raw :session :savefig "TSBL_T2_LLH_wavelet.png"
@@ -1602,6 +1603,10 @@ table(tab)
 |-------+--------------------+--------------------+--------------------|
 | CNFJB | 16.227916633775212 | 17.436791901087354 | 16.321969650409876 |
 | CNFJQ | 14.575972260904477 | 15.108363282918049 |  15.14085535884631 |
+
+#+begin_src ipython :results silent :session
+
+#+end_src
 
 
 
