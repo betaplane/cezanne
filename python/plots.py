@@ -121,7 +121,7 @@ def cbar(plot, loc='right', ax=None, center=False, width=.01, space=.01, label=N
     :param width: Width of the colorbar.
     :param space: Space between edge of plot and colorbar.
     :param label: Label for the colorbar (units) - currently placed inside the colorbar.
-    "param label_kw: :obj:`dict` of additional keyword arguments for the label text.
+    :param label_kw: :obj:`dict` of additional keyword arguments for the label text.
 
     """
     if ax is None:
@@ -157,6 +157,7 @@ class Coquimbo(Configurable):
 
     ..NOTE:
         The bounding box of the plot is set via the :attr:`bbox` class attribute, which is a :class:`traitlets.List` configurable and can also be set in a configuration file.
+
     """
 
     bbox = List([-72.2, -69.8, -32.5, -28.2])
@@ -166,10 +167,10 @@ class Coquimbo(Configurable):
 
     def __init__(self, *args, config={}, **kwargs):
         try:
-            config = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
-            config.merge(config)
+            cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
+            cfg.merge(config)
         except ConfigFileNotFound: pass
-        super().__init__(config=config, **kwargs)
+        super().__init__(config=cfg, **kwargs)
 
         gshhs = import_module('data.GSHHS')
         self.coast = self.clip(gshhs.GSHHS('GSHHS_shp/i/GSHHS_i_L1'))
@@ -191,7 +192,7 @@ class Coquimbo(Configurable):
         f = lambda b: np.all(np.r_[b[:2], self.bbox[:2]] <= np.r_[self.bbox[2:], b[2:]])
         return [g for g in reader.geometries() if f(np.array(g.envelope.bounds))]
 
-    def plotrow(self, df, subplot_spec=gs.GridSpec(1, 1)[0], subplot_kw={}, **kwargs):
+    def plotrow(self, df, subplot_spec=gs.GridSpec(1, 1)[0], subplot_kw={}, cbar_kw={}, **kwargs):
         """Plot the columns of :class:`~pandas.DataFrame` ``df`` as a raw of Coquimbo-area plots.
 
         :Keyword Arguments:
@@ -199,11 +200,11 @@ class Coquimbo(Configurable):
             * **lonlat** - A :class:`numpy.ndarray` containing longitues, latitudes as columns and stations corresponding to the passed DataFrame as rows. If none is passed, the default 'stations' DataFrame is loaded and indexed according to the index of the passed DataFrame.
             * **vmin** - see :func:`matplotlib.pyplot.scatter`
             * **vmax** - see :func:`matplotlib.pyplot.scatter`
-            * **cbar** - Colorbar location (see :func:`matplotlib.pyplot.colorbar`) or ``None`` if none is desired (default 'right').
-            * **cbar_label** - Unit string with which to label the colorbar (see :func:`cbar`)
             * **title** - (``True``/``False``) plot titles (taken from column names of input DataFrame).
             * **xlabels** - (``True``/``False``) plot xlabels
             * **ylabels** - (``True``/``False``) plot ylabels
+            * **cbar** - Colorbar location (see :func:`matplotlib.pyplot.colorbar`) or ``None`` if none is desired (default 'right').
+            * **cbar_kw** - keywords for :func:`cbar`
             * **subplot_kw** - keywords for the constructor of :class:`~matplotlib.gridspec.GridSpecFromSubplotSpec`
             * **norm** - a :class:`~matplotlib.cm.ScalarMappanle` (optional, e.g. for categorical data)
 
@@ -241,8 +242,7 @@ class Coquimbo(Configurable):
             gls.append(gl)
         cb = kwargs.get('cbar', 'right')
         if (cb is not None):
-            cbar(pl[-1], loc=cb,
-                 space=kwargs.get('cbar_space', .02),
-                 width=kwargs.get('cbar_width', .02),
-                 label=kwargs.get('cbar_label', None))
+            cbar_kw.setdefault('space', 0.02)
+            cbar_kw.setdefault('width', 0.02)
+            cbar(pl[-1], loc=cb, **cbar_kw)
         return pl, gls

@@ -17,10 +17,10 @@ class GSHHS(Configurable, Reader):
 
     def __init__(self, filename, *args, config={}, **kwargs):
         try:
-            config = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
-            config.merge(config)
+            cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
+            cfg.merge(config)
         except ConfigFileNotFound: pass
-        super().__init__(config=config, **kwargs)
+        super().__init__(config=cfg, **kwargs)
 
         z = ZipFile(self.path)
 

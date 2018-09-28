@@ -14,6 +14,9 @@
 .. automodule:: python.data.NCDC
     :members:
 
+.. automodule:: python.data.SMAP
+    :members:
+
 .. _netCDF4: http://unidata.github.io/netcdf4-python/
 
 """

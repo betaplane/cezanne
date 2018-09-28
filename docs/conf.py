@@ -48,7 +48,7 @@ class Mock(MagicMock):
         return MagicMock()
 
 # somehow the autodoc version doesn't work properly
-autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib']
+autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables']
 
 sys.modules.update((n, Mock()) for n in autodoc_mock_imports)
 

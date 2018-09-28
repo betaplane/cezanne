@@ -113,10 +113,10 @@ class base_app(Application):
     config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
     def __init__(self, *args, config={}, **kwargs):
         try:
-            config = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
-            config.merge(config)
+            cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
+            cfg.merge(config)
         except ConfigFileNotFound: pass
-        super().__init__(config=config, **kwargs)
+        super().__init__(config=cfg, **kwargs)
 
 class Field(base_app):
     raw_url = Unicode().tag(config = True)

@@ -145,6 +145,16 @@
 #+RESULTS:
 
 * elevation
+
+#+begin_src ipython :results silent :session
+  h = xr.open_dataarray({'condor': '/home/arno/Documents/data/WRF/3d/grid_d03.nc'}[hh.config.hostname]).squeeze()
+  with xr.open_dataset({'condor': '/home/arno/Documents/data/WRF/3d/geo_em.d03.nc'}[hh.config.hostname]) as ds:
+      sso = ds['VAR_SSO'].load().squeeze()
+
+  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
+  dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
+#+end_src
+
 #+begin_src ipython :results silent :session
   import gdal
   ds = gdal.Open({'condor': '/home/arno/Documents/data/geo/merged.tif'}[hh.config.hostname])
@@ -155,13 +165,6 @@
       ('lat', g[3] + g[5] * (np.arange(z.shape[0]) + .5)),
       ('lon', g[0] + g[1] * (np.arange(z.shape[1]) + .5))
   ])
-
-  h = xr.open_dataarray({'condor': '/home/arno/Documents/data/WRF/3d/grid_d03.nc'}[hh.config.hostname]).squeeze()
-  with xr.open_dataset({'condor': '/home/arno/Documents/data/WRF/3d/geo_em.d03.nc'}[hh.config.hostname]) as ds:
-      sso = ds['VAR_SSO'].load().squeeze()
-
-  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
-  dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
 #+end_src
 
 #+begin_src ipython :results raw :session :savefig "elevation.png"
@@ -215,6 +218,32 @@
 #+RESULTS:
 [[file:./obipy-resources/T2/elevation.png]]
 #+CAPTION: DEMS from the Shuttle Radar Topography Mission (SRTM), the smoothed grid used in WRF (variable 'HGT'), and the subgridscale orographic variance after smooting (variable 'VAR_SSO'). The triangles in plot 3 (left colorbar) are colored according to the absolute elevation difference between model grid and true station location ('dz'), while their orientation indicates whether the station is located lower (downward) or higher (upward) than the model grid.
+
+#+begin_src ipython :results silent :session
+from datetime import datetime
+T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, level='elev')) + 273.15
+x = pd.concat((dz, sta['d03_var_sso']), 1).dropna()
+x = x[abs(x['dz'])<100]
+idx = T.columns.intersection(x.index)
+n = (datetime.now() - datetime(2015, 8, 15)).days * 24
+a = T.loc['2015-08-15-:, idx].count() / n
+#+end_src
+
+
+#+begin_src ipython :results raw :session
+fig = plt.figure(figsize=(8, 5))
+fig.subplots_adjust(wspace=0.2)
+plt.set_cmap('cividis')
+gs = gridspec.GridSpec(1, 2)
+coq.plotrow(x.loc[idx, 'd03_var_sso'].to_frame() ** .5, gs[0], cbar_kw={'space': .002})
+coq.plotrow(a.to_frame('avail'), gs[1], ylabels=False, cbar_kw={'space': .002})
+#+end_src
+
+#+CAPTION: CEAZAMet stations where the model grid (domain d03) is within +/- 100m of the true station elevation. **Right** - square root of subgridscale orographic varianca ('VAR_SSO' in 'geo_em...nc' file); **left** - data availbility as a fraction of the time since 2015-08-15 (beginning of WRF operacional data).
+
+#+RESULTS:
+[[file:./obipy-resources/T2/bRF9HK.png]]
+
 
 * T2
 ** Mean bias
