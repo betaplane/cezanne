@@ -126,7 +126,9 @@ class SMAP(EarthData):
             r = self.session.get(os.path.join(self.url, l, h5), stream=True)
             r.raise_for_status()
             self.append_data(r, d)
-            if i+1 % self.write_interval == 0:
+            print(i+1 % self.write_interval)
+            if (i+1 % self.write_interval) == 0:
+                print('write')
                 self.x.to_dataset(name=self.var_name).to_netcdf('{}_{}.nc'.format(self.outfile, self.fileno))
                 self.fileno += 1
                 del self.x

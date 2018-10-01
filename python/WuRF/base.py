@@ -200,8 +200,8 @@ class WuRFiles(Application):
             g = [f for f in glob(os.path.join(d, '{}_{}_{}'.format(prefix, domain, s))) if os.path.isfile(f)]
         return (g, len(g), ts.hour)
 
-    def files(self, domain=None, lead_day=None, prefix='wrfout'):
-        name = partial(self._name, domain, lead_day, prefix)
+    def get_files(self, lead_day=None):
+        name = partial(self._name, self.domain, lead_day, self.wrfout_prefix)
         self.files, self.length, self.hour = zip(*[name(d) for d in self.dirs])
 
     def by_sim_length(self, n):

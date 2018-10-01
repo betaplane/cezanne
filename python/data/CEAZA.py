@@ -79,7 +79,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from traitlets.config import Application
+from traitlets.config import Application, Config
 from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import Unicode, Instance, Dict, Integer, Bool
 from importlib import import_module
@@ -115,7 +115,7 @@ class base_app(Application):
         try:
             cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
             cfg.merge(config)
-        except ConfigFileNotFound: pass
+        except ConfigFileNotFound: cfd = Config(config)
         super().__init__(config=cfg, **kwargs)
 
 class Field(base_app):
