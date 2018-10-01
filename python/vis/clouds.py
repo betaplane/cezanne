@@ -175,7 +175,7 @@ class Visualization(Surface):
             self.vol.remove()
         cld = wrf.vinterp(self.nc, wrf.getvar(self.nc, self.var_name, timeidx=int(i)), 'ght_msl', iz)
         xyzc = self.xyz + [cld.values.transpose(2, 1, 0)]
-        self.vol = self.mlab.pipeline.volume(self.mlab.pipeline.scalar_field(*xyzc), color=(1, 1, 1))
+        self.vol = self.mlab.pipeline.volume(self.mlab.pipeline.scalar_field(*xyzc), color=(1, 1, 1), figure=self.fig)
         return self.mlab.screenshot(antialiased=True)
 
     def write_movie(self):
@@ -185,10 +185,17 @@ class Visualization(Surface):
         getattr(vc, writer)(self.movie_file, fps=self.fps)
 
     def start(self):
-        
+        # http://docs.enthought.com/mayavi/mayavi/auto/example_offscreen.html
+        from mayavi.api import OffScreenEngine
+        from mayavi.tools.sources import scalar_field
+        from mayavi.modules.api import Volume
+        eng = OffScreenEngine()
+        scene = eng.new_scene()
+        eng.add_source(scalar_field())
 
 if __name__ == '__main__':
     app = Visualization(surface=True)
     app.parse_command_line()
     app.initialize(offscreen=True)
-    app.start()
+    app.anim_func(0)
+    app.mlab.savefig('test.png')
