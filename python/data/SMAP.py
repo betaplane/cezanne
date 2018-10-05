@@ -97,9 +97,6 @@ class SMAP(EarthData):
     def get(self):
         """Get SMAP data from the url specified in the :attr:`EarthData.config_file` or as the :mod:`configurable <traitlets.config>` :attr:`EarthData.url` traitlet. Retrieved data is appended to an :class:`xarray.DataArray` accessible as :attr:`.x` on this class.
 
-        :param update: name of an existing netCDF4_ file whose existing dimension named 'time' contains all dates to be skipped during data retrieval, or opened dataset
-        :type update: :obj:`str` or :class:`~xarray.Dataset` or :class:`~xarray.DataArray`
-
         """
         def f(link):
             try:
@@ -109,7 +106,7 @@ class SMAP(EarthData):
                 assert d <= self.to_date
             except:
                 return False
-            return (link, np.datetime64(d))
+            return (link, d)
 
         links = [f(l) for l in self.listdir(self.url)]
         links = [l for l in links if l]
@@ -119,16 +116,14 @@ class SMAP(EarthData):
         if len(g) > 0:
             self.fileno = max([int(re.search('_(\d+)\.nc', h).group(1)) for h in g]) + 1
             with xr.open_mfdataset(g) as ds:
-                links = [l for l in links if l[1] not in ds.time]
+                links = [l for l in links if l[1].date() not in np.unique(ds.indexes['time'].date)]
 
         for i, (l, d) in enumerate(tqdm(links)):
             h5 = [h for h in self.listdir(os.path.join(self.url, l)) if h[-2:] == 'h5'][0]
             r = self.session.get(os.path.join(self.url, l, h5), stream=True)
             r.raise_for_status()
             self.append_data(r, d)
-            print(i+1 % self.write_interval)
-            if (i+1 % self.write_interval) == 0:
-                print('write')
+            if (i+1) % self.write_interval == 0:
                 self.x.to_dataset(name=self.var_name).to_netcdf('{}_{}.nc'.format(self.outfile, self.fileno))
                 self.fileno += 1
                 del self.x
@@ -152,7 +147,7 @@ class SMAP(EarthData):
             os.path.join(group, '{}{}'.format(self.var_name, ext))), self.missing_value)
         X = xr.DataArray(x.filled(np.nan), coords=[('lat', lat.flatten()), ('lon', lon.flatten())])
         X = X.sel(lon=self.lon_extent, lat=self.lat_extent).expand_dims('time')
-        X['time'] = ('time', pd.DatetimeIndex([date + np.timedelta64({'AM': 0, 'PM': 12}[am_pm], 'h')]))
+        X['time'] = ('time', pd.DatetimeIndex([date]) + pd.Timedelta({'AM': 0, 'PM': '12h'}[am_pm]))
         return X
 
     def append_data(self, resp, date):
