@@ -1628,14 +1628,71 @@ table(tab)
 #+end_src
 
 #+RESULTS:
-|       |               -0.1 |               -0.2 |               -0.5 |
-|-------+--------------------+--------------------+--------------------|
-| CNFJB | 16.227916633775212 | 17.436791901087354 | 16.321969650409876 |
-| CNFJQ | 14.575972260904477 | 15.108363282918049 |  15.14085535884631 |
+|       |               -0.1 |               -0.2 |               -0.5 |                SMAP |
+|-------+--------------------+--------------------+--------------------+---------------------|
+| CNFJB | 16.227916633775212 | 17.436791901087354 | 16.321969650409876 | 0.14533954858779907 |
+| CNFJQ | 14.575972260904477 | 15.108363282918049 |  15.14085535884631 | (same grid box)     |
+
+#+begin_src ipython :results raw :session
+from geo import nearest
+i, j, _ = nearest(*np.meshgrid(smap.lon, smap.lat), *sta.loc['CNFJB', ['lon', 'lat']])
+smap.isel(lat=i,lon=j).mean('time').item()
+#+end_src
+
+#+RESULTS:
+: 0.14533954858779907
+
 
 #+begin_src ipython :results silent :session
-
+  lm = xr.open_dataset('/home/arno/Documents/data/WRF/3d/geo_em.d03.nc')['LANDMASK'].squeeze()
+  lm[lm==0] = np.nan
+  smap = xr.open_dataarray('/nfs/HPC/arno/data/SMAP_SPL3SMP.nc').sel(time=slice(None, '2017-07-18'))
+  smois_121 = xr.open_dataarray('/nfs/HPC/arno/data/SMOIS_field_121.nc')
+  def layer(i):
+      smois_145 = xr.open_dataarray('/nfs/HPC/arno/data/SMOIS_field_145_layer{}.nc'.format(i+1))
+      return xr.concat((
+          smois_121.isel(Time=slice(24, 48), soil_layers_stag=0),
+          smois_145.isel(Time=slice(24, 48)
+      )), 'start').sel(start=slice('2015-08-15', '2017-07-18'))
 #+end_src
+
+#+begin_src ipython :results raw :session :savefig "SMAP_SMOIS_avg.png"
+  vmax = .5
+  fig, axs = plt.subplots(1, 3, figsize=(9, 5), subplot_kw={'projection': crs.PlateCarree()})
+  fig.subplots_adjust(hspace=0.04)
+  plt.set_cmap('cividis')
+  x = smap.mean('time')
+  pl = axs[0].pcolormesh(x.lon, x.lat, x, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
+  axs[0].scatter(*sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  coq(axs[0], lines_only=True, colors=['w'])
+  axs[0].background_patch.set_color('none')
+  axs[0].set_extent(coq.bbox)
+  axs[0].outline_patch.set_edgecolor('w')
+  axs[0].set_title('SMAP')
+
+  y = layer(0)
+  pl = axs[1].pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
+  coq(axs[1], lines_only=True, colors=['w'])
+  axs[1].scatter(*sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  axs[1].background_patch.set_color('none')
+  axs[1].outline_patch.set_edgecolor('w')
+  axs[1].set_extent(coq.bbox)
+  axs[1].set_title('SMOIS layer 1')
+  
+  y = layer(1)
+  pl = axs[2].pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
+  coq(axs[2], lines_only=True, colors=['w'])
+  axs[2].scatter(*sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  axs[2].background_patch.set_color('none')
+  axs[2].outline_patch.set_edgecolor('w')
+  axs[2].set_extent(coq.bbox)
+  axs[2].set_title('SMOIS layer 2')
+  cplots.cbar(pl, 'right', axs[2], width=.02, space=.02)
+#+end_src
+
+#+CAPTION: Average soil moiusture (as fraction) from SMAP and the NOAH top two model layers. The time window for the average is from 2015-08 (start SMAP) to 2017-07 (see above). Red dots indicate stations Fray Jorge Bosque (CNFJB) and Fray Jorge Quebrada (CNFJQ), for which soil moisture data is available.
+#+RESULTS:
+[[file:./obipy-resources/T2/SMAP_SMOIS_avg.png]]
 
 
 
