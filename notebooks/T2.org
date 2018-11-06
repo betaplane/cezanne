@@ -244,7 +244,6 @@ coq.plotrow(a.to_frame('avail'), gs[1], ylabels=False, cbar_kw={'space': .002})
 #+RESULTS:
 [[file:./obipy-resources/T2/bRF9HK.png]]
 
-
 * T2
 ** Mean bias
 *** old data (up to 2016-12)
@@ -330,9 +329,8 @@ coq.plotrow(a.to_frame('avail'), gs[1], ylabels=False, cbar_kw={'space': .002})
       df.columns = x.station
       return (df - T_sta).dropna(0, 'all').resample('h').mean()
 
-  T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, 'elev')) + 273.15
-  sta = pd.read_hdf(hh.config.Meta.file_name, 'stations')
-  dz = (sta['d03'] - sta['elev'].astype(float)).to_frame('dz')
+  T = hh.stationize(pd.read_hdf(hh.config.Field.file_name, 'ta_c').drop('10', 1, level='elev')) + 273.15
+  dz = (hh.sta['d03'] - hh.sta['elev'].astype(float)).to_frame('dz')
   T2_0h, T2_12h = separate_start_hours('/nfs/HPC/arno/data/T2_*_81*', 'T2')
   # where the change in GFS occurs
   T2_12h_preJul17 = T2_12h.sel(start=slice(None, '2017-07-18'))
@@ -1656,14 +1654,17 @@ smap.isel(lat=i,lon=j).mean('time').item()
       )), 'start').sel(start=slice('2015-08-15', '2017-07-18'))
 #+end_src
 
+
 #+begin_src ipython :results raw :session :savefig "SMAP_SMOIS_avg.png"
   vmax = .5
   fig, axs = plt.subplots(1, 3, figsize=(9, 5), subplot_kw={'projection': crs.PlateCarree()})
   fig.subplots_adjust(hspace=0.04)
   plt.set_cmap('cividis')
   x = smap.mean('time')
-  pl = axs[0].pcolormesh(x.lon, x.lat, x, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
-  axs[0].scatter(*sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  lon = (lambda k, l: k - np.r_[l[0], l] / 2)(x.lon, np.diff(x.lon))
+  lat = (lambda k, l: k - np.r_[l[0], l] / 2)(x.lat, np.diff(x.lat))
+  pl = axs[0].pcolormesh(lon, lat, x, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
+  axs[0].scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
   coq(axs[0], lines_only=True, colors=['w'])
   axs[0].background_patch.set_color('none')
   axs[0].set_extent(coq.bbox)
@@ -1673,16 +1674,16 @@ smap.isel(lat=i,lon=j).mean('time').item()
   y = layer(0)
   pl = axs[1].pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
   coq(axs[1], lines_only=True, colors=['w'])
-  axs[1].scatter(*sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  axs[1].scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
   axs[1].background_patch.set_color('none')
   axs[1].outline_patch.set_edgecolor('w')
   axs[1].set_extent(coq.bbox)
   axs[1].set_title('SMOIS layer 1')
-  
+
   y = layer(1)
   pl = axs[2].pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
   coq(axs[2], lines_only=True, colors=['w'])
-  axs[2].scatter(*sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  axs[2].scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
   axs[2].background_patch.set_color('none')
   axs[2].outline_patch.set_edgecolor('w')
   axs[2].set_extent(coq.bbox)
@@ -1693,9 +1694,97 @@ smap.isel(lat=i,lon=j).mean('time').item()
 #+CAPTION: Average soil moiusture (as fraction) from SMAP and the NOAH top two model layers. The time window for the average is from 2015-08 (start SMAP) to 2017-07 (see above). Red dots indicate stations Fray Jorge Bosque (CNFJB) and Fray Jorge Quebrada (CNFJQ), for which soil moisture data is available.
 #+RESULTS:
 [[file:./obipy-resources/T2/SMAP_SMOIS_avg.png]]
+*** a simple calculation which WRF gridpoints fall into which SMAP grid cells
+**** based simply on minimum distance to SMAP gridpoint (center)
+#+begin_src ipython :results silent :session
+  lon, lat = smois_121.XLONG[0, :, :], smois_121.XLAT[0, :, :]
+  i = np.vectorize(lambda x: abs(smap.lon - x).argmin().item())(lon)
+  j = np.vectorize(lambda x: abs(smap.lat - x).argmin().item())(lat)
+  z = list(zip(i.flatten(), j.flatten()))
+  s = list(set(z))
+  ij = np.array([s.index(e) for e in z]).reshape(i.shape)
+#+end_src
+
+*** to confirm that the simple nearest-neighbor calculation above approximately works
+#+begin_src ipython :results raw :session
+  ax = plt.axes(projection=crs.PlateCarree())
+  ax.pcolormesh(lon, lat, ij, transform=crs.PlateCarree())
+  coq(ax, lines_only=True)
+#+end_src
+#+RESULTS:
+[[file:./obipy-resources/T2/2QNlQK.png]]
+
+#+begin_src ipython :results silent :session
+  y = (layer(0) * lm).mean('Time')
+  y['bin'] = (('south_north', 'west_east'), ij)
+  smois_smap = y.groupby('bin').mean(axis=-1)
+  smois_smap['start'] = ('start', pd.DatetimeIndex(smois_smap.indexes['start'].date))
+  smois_smap = smois_smap.rename({'start': 'time'})
+#+end_src
 
 
+#+begin_src ipython :results silent :session
+  smap_c = smap.copy()
+  smap_c['b'] = (('lat', 'lon'), -np.ones(smap.shape[1:]))
+  for k in np.unique(i):
+      for l in np.unique(j):
+          try:
+              smap_c.b[k, l] = s.index((k, l))
+          except ValueError:
+              pass
+  smap_st = smap_c.stack(bin = ('lat', 'lon'))
+  smap_st = smap_st.sel(bin = smap_st.b>=0)
+  smap_st['bin'] = smap_st.b
+  smap_st = smap_st.drop('b')
+#+end_src
 
+
+#+begin_src ipython :results raw :session :savefig "SMOIS_T2.png"
+  fig = plt.figure(figsize=(10, 6))
+  smap_st.mean('bin').plot(label='SMAP')
+  smois_smap.mean('bin').plot(label='SMOIS')
+  abs(smois_smap - smap_st).mean('bin').plot(label='MAE')
+  x = pd.concat((bias_0h.abs().mean(1).resample('D').mean(), bias_12h_preJul17.abs().mean(1).resample('D').mean()))
+  plt.legend()
+  bx = fig.axes[0].twinx()
+  x.plot(color='r', label='T2 MAE')
+  plt.legend()
+#+end_src
+
+#+CAPTION: Soil moisture and T2 errors: 'SMOIS' refers to the top layer of the NOAH LSM, averaged over the model domain and daily, 'SMAP' to the SMAP values (also averaged over the grid cells corresponding to our WRF domain, and 'MAE' to the absolute error. For 'MAE', the WRF variable ('SMOIS') is averaged across blocks of grid cells approximately corresponding to the grid cells of the SMAP product (~ 36 x 36 km) and daily, and then the absolute difference is computed and averaged over the domain.
+#+RESULTS:
+[[file:./obipy-resources/T2/SMOIS_T2.png]]
+*** tests
+**** 2016/08 - 2016/10 (or just 2016/10)
+**** soil moisture
+| namelist           | value | meaning                              |
+|--------------------+-------+--------------------------------------|
+| sf_surface_physics |     1 | thermal diffusion only (no moisture) |
+|                    |     7 | Pleim-Xiu LSM (with nudging)         |
+**** initialization
+***** DFI (digital filter initialization)
+  | namelist - &dfi_control  |  value | meaning                               |
+  |--------------------------+--------+---------------------------------------|
+  | dfi_opt                  |      0 | off (also needed for restart run)     |
+  |                          |      1 | DFL (digital filter launch)           |
+  |                          |      2 | DDFI (diabatic DFI)                   |
+  |                          |      3 | TDFI (twice DFI, recommended)         |
+  | dfi_nfilter              |      0 | uniform                               |
+  |                          |      1 | Lanczos                               |
+  |                          |      2 | Hamming                               |
+  |                          |      3 | Blackman                              |
+  |                          |      4 | Kaiser                                |
+  |                          |      5 | Potter                                |
+  |                          |      6 | Dolph window                          |
+  |                          |      7 | Dolph (default, recommended)          |
+  |                          |      8 | recursive high-order filter           |
+  | dfi_write_filtered_input | .true. | write out filtered state before start |
+  | ... more options         |        |                                       |
+  | constant_bc              |        | boundary conditions in &bdy_control   |
+  | time_step_dfi            |        |                                       |
+
+***** track error across forecast lead time
+**** grid / obs nudging - &fdda
 ** Skewness & kurtosis
    
 #+begin_src ipython :results silent :session

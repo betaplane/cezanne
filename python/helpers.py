@@ -7,6 +7,7 @@ from functools import singledispatch
 import os, re
 
 config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+sta = pd.read_hdf(config.Meta.file_name, 'stations')
 
 def read_hdf(filedict, key):
     return pd.read_hdf(filedict[config.hostname], key)
@@ -20,6 +21,20 @@ def try_list(obj, *args):
         except Exception as e:
             print(e)
 
+def drop_duplicates(arr, dim):
+    """Drop duplicates from an :class:`xarray.DataArray` dimension (the first occurence of a duplicate label is retained).
+
+    :param arr: array on which to operate (is not modified)
+    :type arr: :class:`xarray.DataArray`
+    :param dim: name of dimesion along which to look for duplicates
+    :type dim: :obj:`str`
+    :returns: new array with duplicates dropped
+    :rtype: :class:`xarray.DataArray`
+
+    """
+    idx = arr.indexes[dim]
+    j = np.hstack(idx.get_indexer_for([i])[1:] for i in idx.get_duplicates())
+    return arr.isel(**{dim: list(set(range(len(idx))) - set(j))})
 
 def g2d(v):
     m, n = v.shape[-2:]

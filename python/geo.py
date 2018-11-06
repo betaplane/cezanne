@@ -90,7 +90,7 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
     :returns: i, j arrays of grid cell indexes
 
     """
-    from shapely import MultiPoint, Polygon, LinearRing
+    from shapely.geometry import MultiPoint, Polygon, LinearRing
     s = np.array(grid_lon.shape) - 1
     if mask is None:
         def ll(i, j):
@@ -115,7 +115,7 @@ class Squares(object):
             * *x* and *y* distances of the four 'square' points from POI (``var='distances'``)
             * indexes of the four points in the shape of the ``x`` and ``y`` variables (``var='indexes'``)
 
-The *x* and *y* components of each of these ``var`` dimensions are accessed via a dimension called ``xy``.
+    The *x* and *y* components of each of these ``var`` dimensions are accessed via a dimension called ``xy``.
 
     """
     @classmethod
@@ -142,8 +142,8 @@ The *x* and *y* components of each of these ``var`` dimensions are accessed via 
     def compute(x, y, k, l):
         """Compute the actual containing 'squares' surrounding a point of interest (POI) from projected coordinates.
 
-        :param lon: 2-dimensional (matrix-ordered) projected x (longitude) coordinates
-        :param lat: 2-dimensional (matrix-ordered) projected y (latitude) coordinates
+        :param x: 2-dimensional (matrix-ordered) projected x (longitude) coordinates
+        :param y: 2-dimensional (matrix-ordered) projected y (latitude) coordinates
         :param k: 1-dimensional array of projected x-direction coordinates of the POI
         :param l: 1-dimensional array of projected y-direction coordinates of the POI
         :returns: see :class:`.Squares` for description of returned DataArray
