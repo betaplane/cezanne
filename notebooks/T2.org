@@ -1600,6 +1600,7 @@ _, TSLB = tease_apart('/nfs/HPC/arno/data/TSLB_???.nc', 'TSLB')
 #+CAPTION: Wavelet coherence/phase between soil temperature ('TSLB', top layer) and T2, interpolated to station LLH. Top panel shows coherence, the following two phase; the last plot is zoomed into the longer frequencies. Negative values (blue) of the phase plot indicate T2 leading the TSLB signal. Frequency (y axis) is 1/day.
 
 ** soil moisture (hs, SMOIS)
+*** mean point values
 #+begin_src ipython :results silent :session
 sm = xr.open_dataarray({'condor': '/nfs/HPC/arno/data/SMOIS_145.nc'}[hh.config.hostname])
 hs = pd.read_hdf(hh.config.Field.file_name, 'hs')
@@ -1640,7 +1641,7 @@ smap.isel(lat=i,lon=j).mean('time').item()
 #+RESULTS:
 : 0.14533954858779907
 
-
+*** mean fields (SMAP vs. NOAH)
 #+begin_src ipython :results silent :session
   lm = xr.open_dataset('/home/arno/Documents/data/WRF/3d/geo_em.d03.nc')['LANDMASK'].squeeze()
   lm[lm==0] = np.nan
@@ -1655,112 +1656,169 @@ smap.isel(lat=i,lon=j).mean('time').item()
 #+end_src
 
 
-#+begin_src ipython :results raw :session :savefig "SMAP_SMOIS_avg.png"
-  vmax = .5
-  fig, axs = plt.subplots(1, 3, figsize=(9, 5), subplot_kw={'projection': crs.PlateCarree()})
-  fig.subplots_adjust(hspace=0.04)
+#+CAPTION: Top row: Average soil moiusture (as fraction) from SMAP and the NOAH top two model layers. Bottom row: StDev. The time window for the average is from 2015-08 (start SMAP) to 2017-07 (see above). Red dots indicate stations Fray Jorge Bosque (CNFJB) and Fray Jorge Quebrada (CNFJQ), for which soil moisture data is available.
+
+#+begin_src ipython :results raw :session :savefig "SMAP_SMOIS_avg_var.png"
+  def figbg(ax, title=None):
+      coq(ax, lines_only=True, colors=['w'])
+      ax.background_patch.set_color('none')
+      ax.set_extent(coq.bbox)
+      ax.outline_patch.set_edgecolor('w')
+      if title is not None:
+          ax.set_title(title)
+
+  vmax = .4
+  vstd = .3
+
+  fig = plt.figure(figsize=(9, 10))
   plt.set_cmap('cividis')
+  gs = gridspec.GridSpec(2, 3, hspace=.04, wspace=.02)
+
+  ax = fig.add_subplot(gs[0, 0], projection=crs.PlateCarree())
   x = smap.mean('time')
   lon = (lambda k, l: k - np.r_[l[0], l] / 2)(x.lon, np.diff(x.lon))
   lat = (lambda k, l: k - np.r_[l[0], l] / 2)(x.lat, np.diff(x.lat))
-  pl = axs[0].pcolormesh(lon, lat, x, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
-  axs[0].scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
-  coq(axs[0], lines_only=True, colors=['w'])
-  axs[0].background_patch.set_color('none')
-  axs[0].set_extent(coq.bbox)
-  axs[0].outline_patch.set_edgecolor('w')
-  axs[0].set_title('SMAP')
+  pl = ax.pcolormesh(lon, lat, x, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
+  ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  figbg(ax, 'SMAP')
 
+  ax = fig.add_subplot(gs[1, 0], projection=crs.PlateCarree())
+  x = smap.std('time')
+  pl = ax.pcolormesh(lon, lat, x, transform=crs.PlateCarree(), vmin=0, vmax=vstd)
+  ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  figbg(ax, None)
+
+  ax = fig.add_subplot(gs[0, 1], projection=crs.PlateCarree())
   y = layer(0)
-  pl = axs[1].pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
-  coq(axs[1], lines_only=True, colors=['w'])
-  axs[1].scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
-  axs[1].background_patch.set_color('none')
-  axs[1].outline_patch.set_edgecolor('w')
-  axs[1].set_extent(coq.bbox)
-  axs[1].set_title('SMOIS layer 1')
+  pl = ax.pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
+  coq(ax, lines_only=True, colors=['w'])
+  ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  figbg(ax, 'SMOIS layer 1')
 
+  ax = fig.add_subplot(gs[1, 1], projection=crs.PlateCarree())
+  pl = ax.pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.std(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vstd)
+  coq(ax, lines_only=True, colors=['w'])
+  ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  figbg(ax, None)
+
+  ax = fig.add_subplot(gs[0, 2], projection=crs.PlateCarree())
   y = layer(1)
-  pl = axs[2].pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
-  coq(axs[2], lines_only=True, colors=['w'])
-  axs[2].scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
-  axs[2].background_patch.set_color('none')
-  axs[2].outline_patch.set_edgecolor('w')
-  axs[2].set_extent(coq.bbox)
-  axs[2].set_title('SMOIS layer 2')
-  cplots.cbar(pl, 'right', axs[2], width=.02, space=.02)
+  pl = ax.pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
+  coq(ax, lines_only=True, colors=['w'])
+  ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  figbg(ax, 'SMOIS layer 2')
+  cplots.cbar(pl, 'right', ax, width=.02, space=.02)
+
+  ax = fig.add_subplot(gs[1, 2], projection=crs.PlateCarree())
+  pl = ax.pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vstd)
+  coq(ax, lines_only=True, colors=['w'])
+  ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
+  figbg(ax, None)
+  cplots.cbar(pl, 'right', ax, width=.02, space=.02)
+
+  cplots.row_label(gs[1, :], 'std')
+  cplots.row_label(gs[0, :], 'avg')
 #+end_src
 
-#+CAPTION: Average soil moiusture (as fraction) from SMAP and the NOAH top two model layers. The time window for the average is from 2015-08 (start SMAP) to 2017-07 (see above). Red dots indicate stations Fray Jorge Bosque (CNFJB) and Fray Jorge Quebrada (CNFJQ), for which soil moisture data is available.
 #+RESULTS:
-[[file:./obipy-resources/T2/SMAP_SMOIS_avg.png]]
-*** a simple calculation which WRF gridpoints fall into which SMAP grid cells
-**** based simply on minimum distance to SMAP gridpoint (center)
+[[file:./obipy-resources/T2/SMAP_SMOIS_avg_var.png]]
+
+
+*** domain average (and comparison to T2) over time
+**** a simple calculation which WRF gridpoints fall into which SMAP grid cells
+***** based simply on minimum distance to SMAP gridpoint (center)
+ #+begin_src ipython :results silent :session
+   lon, lat = smois_121.XLONG[0, :, :], smois_121.XLAT[0, :, :]
+   i = np.vectorize(lambda x: abs(smap.lat - x).argmin().item())(lat)
+   j = np.vectorize(lambda x: abs(smap.lon - x).argmin().item())(lon)
+   z = list(zip(i.flatten(), j.flatten()))
+   s = list(set(z))
+   ij = np.array([s.index(e) for e in z]).reshape(i.shape)
+ #+end_src
+
+***** to confirm that the simple nearest-neighbor calculation above approximately works
+  #+begin_src ipython :results raw :session
+    ax = plt.axes(projection=crs.PlateCarree())
+    ax.pcolormesh(lon, lat, ij, transform=crs.PlateCarree())
+    coq(ax, lines_only=True)
+  #+end_src
+  #+RESULTS:
+  [[file:./obipy-resources/T2/2QNlQK.png]]
+
+**** results
+ #+begin_src ipython :results silent :session
+   y = (layer(0) * lm).mean('Time')
+   y['bin'] = (('south_north', 'west_east'), ij)
+   smois_smap = y.groupby('bin').mean(axis=-1)
+   smois_smap['start'] = ('start', pd.DatetimeIndex(smois_smap.indexes['start'].date))
+   smois_smap = smois_smap.rename({'start': 'time'})
+
+   smap_c = smap.copy()
+   smap_c['b'] = (('lat', 'lon'), -np.ones(smap.shape[1:]))
+   for k in np.unique(i):
+       for l in np.unique(j):
+           try:
+               smap_c.b[k, l] = s.index((k, l))
+           except ValueError:
+               pass
+   smap_st = smap_c.stack(bin = ('lat', 'lon'))
+   smap_st = smap_st.sel(bin = smap_st.b>=0)
+   smap_st['bin'] = smap_st.b
+   smap_st = smap_st.drop('b')
+ #+end_src
+
+
 #+begin_src ipython :results silent :session
-  lon, lat = smois_121.XLONG[0, :, :], smois_121.XLAT[0, :, :]
-  i = np.vectorize(lambda x: abs(smap.lon - x).argmin().item())(lon)
-  j = np.vectorize(lambda x: abs(smap.lat - x).argmin().item())(lat)
-  z = list(zip(i.flatten(), j.flatten()))
-  s = list(set(z))
-  ij = np.array([s.index(e) for e in z]).reshape(i.shape)
+  def DTR(x):
+      s = x.resample('D')
+      return s.max() - s.min()
+
+  dtr_wrf = pd.concat((DTR(bias_0h), DTR(bias_12h_preJul17))).mean(1)
+  dtr_T = DTR(T).mean(1)
 #+end_src
 
-*** to confirm that the simple nearest-neighbor calculation above approximately works
-#+begin_src ipython :results raw :session
-  ax = plt.axes(projection=crs.PlateCarree())
-  ax.pcolormesh(lon, lat, ij, transform=crs.PlateCarree())
-  coq(ax, lines_only=True)
+ #+begin_src ipython :results raw :session :savefig "SMOIS_T2.png"
+   colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+   fig = plt.figure(figsize=(10, 6))
+   smap_st.mean('bin').dropna('time').plot(color=colors[0], label='SMAP')
+   smois_smap.mean('bin').plot(color=colors[1], label='SMOIS')
+   abs(smois_smap - smap_st).mean('bin').plot(color=colors[2], label='MAE')
+   x = pd.concat((bias_0h.abs().mean(1).resample('D').mean(), bias_12h_preJul17.abs().mean(1).resample('D').mean()))
+   plt.legend()
+   bx = fig.axes[0].twinx()
+   (dtr_wrf - dtr_T).abs().plot(color=colors[4], label='DTR MAE')
+   x.plot(color=colors[3], label='T2 MAE')
+   plt.legend()
+ #+end_src
+
+ #+CAPTION: Soil moisture and T2 errors: 'SMOIS' refers to the top layer of the NOAH LSM, averaged over the model domain and daily, 'SMAP' to the SMAP values (also averaged over the grid cells corresponding to our WRF domain, and 'MAE' to the absolute error. For 'MAE', the WRF variable ('SMOIS') is averaged across blocks of grid cells approximately corresponding to the grid cells of the SMAP product (~ 36 x 36 km) and daily, and then the absolute difference is computed and averaged over the domain. 'DTR' stands for daily temperature range.
+ #+RESULTS:
+ [[file:./obipy-resources/T2/SMOIS_T2.png]]
+
+
+#+begin_src ipython :results raw :session :savefig "DTR.png"
+fig = plt.figure(figsize=(10, 6))
+dtr_wrf.plot(label='WRF')
+dtr_T.plot(label='stations')
+plt.gca().set_xlim('2015-05', '2017-08')
+plt.gca().set_ylim(0, 20)
+plt.legend()
 #+end_src
+
+#+CAPTION: Daily Temperature Ranges (DTR) for the mean over all station locations, for WRF results (interpolated to station locations) and the station data.
 #+RESULTS:
-[[file:./obipy-resources/T2/2QNlQK.png]]
-
-#+begin_src ipython :results silent :session
-  y = (layer(0) * lm).mean('Time')
-  y['bin'] = (('south_north', 'west_east'), ij)
-  smois_smap = y.groupby('bin').mean(axis=-1)
-  smois_smap['start'] = ('start', pd.DatetimeIndex(smois_smap.indexes['start'].date))
-  smois_smap = smois_smap.rename({'start': 'time'})
-#+end_src
+[[file:./obipy-resources/T2/DTR.png]]
 
 
-#+begin_src ipython :results silent :session
-  smap_c = smap.copy()
-  smap_c['b'] = (('lat', 'lon'), -np.ones(smap.shape[1:]))
-  for k in np.unique(i):
-      for l in np.unique(j):
-          try:
-              smap_c.b[k, l] = s.index((k, l))
-          except ValueError:
-              pass
-  smap_st = smap_c.stack(bin = ('lat', 'lon'))
-  smap_st = smap_st.sel(bin = smap_st.b>=0)
-  smap_st['bin'] = smap_st.b
-  smap_st = smap_st.drop('b')
-#+end_src
-
-
-#+begin_src ipython :results raw :session :savefig "SMOIS_T2.png"
-  fig = plt.figure(figsize=(10, 6))
-  smap_st.mean('bin').plot(label='SMAP')
-  smois_smap.mean('bin').plot(label='SMOIS')
-  abs(smois_smap - smap_st).mean('bin').plot(label='MAE')
-  x = pd.concat((bias_0h.abs().mean(1).resample('D').mean(), bias_12h_preJul17.abs().mean(1).resample('D').mean()))
-  plt.legend()
-  bx = fig.axes[0].twinx()
-  x.plot(color='r', label='T2 MAE')
-  plt.legend()
-#+end_src
-
-#+CAPTION: Soil moisture and T2 errors: 'SMOIS' refers to the top layer of the NOAH LSM, averaged over the model domain and daily, 'SMAP' to the SMAP values (also averaged over the grid cells corresponding to our WRF domain, and 'MAE' to the absolute error. For 'MAE', the WRF variable ('SMOIS') is averaged across blocks of grid cells approximately corresponding to the grid cells of the SMAP product (~ 36 x 36 km) and daily, and then the absolute difference is computed and averaged over the domain.
-#+RESULTS:
-[[file:./obipy-resources/T2/SMOIS_T2.png]]
 *** tests
 **** 2016/08 - 2016/10 (or just 2016/10)
 **** soil moisture
-| namelist           | value | meaning                              |
-|--------------------+-------+--------------------------------------|
-| sf_surface_physics |     1 | thermal diffusion only (no moisture) |
-|                    |     7 | Pleim-Xiu LSM (with nudging)         |
+| namelist           | value | meaning                              | notes / questions                                 |
+|--------------------+-------+--------------------------------------+---------------------------------------------------|
+| sf_surface_physics |     0 | no sfc temp prediction               | does that mean no T2 etc? (-> v. short run first) |
+|                    |     1 | thermal diffusion only (no moisture) |                                                   |
+|                    |     7 | Pleim-Xiu LSM (with nudging)         |                                                   |
 **** initialization
 ***** DFI (digital filter initialization)
   | namelist - &dfi_control  |  value | meaning                               |
@@ -1783,8 +1841,10 @@ smap.isel(lat=i,lon=j).mean('time').item()
   | constant_bc              |        | boundary conditions in &bdy_control   |
   | time_step_dfi            |        |                                       |
 
-***** track error across forecast lead time
-**** grid / obs nudging - &fdda
+****** track error across forecast lead time
+***** grid / obs nudging - &fdda
+***** obsgrid (same as nudging?)
+****** Pleim-Xiu LSM nudging
 ** Skewness & kurtosis
    
 #+begin_src ipython :results silent :session

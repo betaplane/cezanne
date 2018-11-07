@@ -193,7 +193,7 @@ class Coquimbo(Configurable):
         return [g for g in reader.geometries() if f(np.array(g.envelope.bounds))]
 
     def plotrow(self, df, subplot_spec=gs.GridSpec(1, 1)[0], subplot_kw={}, cbar_kw={}, **kwargs):
-        """Plot the columns of :class:`~pandas.DataFrame` ``df`` as a raw of Coquimbo-area plots.
+        """Plot the columns of :class:`~pandas.DataFrame` ``df`` as a row of Coquimbo-area plots.
 
         :Keyword Arguments:
             * **subplot_spec** - A :class:`matplotlib.gridspec.SubplotSpec` (e.g. a row from a :class:`matplotlib.gridspec.GridSpec`) in which to embed the generated plot, or ``None``
