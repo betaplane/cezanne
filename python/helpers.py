@@ -37,9 +37,19 @@ def drop_duplicates(arr, dim):
     j = np.hstack(idx.get_indexer_for([i])[1:] for i in idx.get_duplicates())
     return arr.isel(**{dim: list(set(range(len(idx))) - set(j))})
 
-def data_breaks(x, break_size):
+def data_gaps(x, gap_size):
+    """Get indexes of those columns of a :class:`pandas.DataFrame` which do not have gaps larger or equal to ``gap_size``.
+
+    :param x: DataFrame to analyse - should be regularly resampled
+    :type x: :class:`pandas.DataFrame`
+    :param gap_size: minimum break length given as number of samples
+    :type gap_size: :obj:`int`
+    :returns: indexes of the columns that don't have gaps larger than ``gap_size``
+    :rtype: :class:`pandas.Index`
+
+    """
     tree = import_module('sklearn.tree')
-    tr = tree.DecisionTreeClassifier(min_samples_leaf = break_size)
+    tr = tree.DecisionTreeClassifier(min_samples_leaf = gap_size)
     t = np.array(x.index, dtype='datetime64[m]', ndmin=2).astype(float).T
     y = x.isnull().astype(int).apply(lambda c: tr.fit(t, c).predict(t), 0)
     return y.columns[y.sum() == 0]

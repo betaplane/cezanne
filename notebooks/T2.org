@@ -1771,7 +1771,7 @@ smap.isel(lat=i,lon=j).mean('time').item()
   with xr.open_dataset('/home/arno/Documents/data/WRF/3d/geo_em.d03.nc') as ds:
       sta = stations_in_domain(hh.sta, ds)
 
-  k = hh.data_breaks(T.loc['2015-05':'2017-07'], 48).intersection(sta.index)
+  k = hh.data_gaps(T.loc['2015-05':'2017-07'], 48).intersection(sta.index)
 
   def DTR(x):
       s = x.resample('D')
