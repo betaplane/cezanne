@@ -79,6 +79,14 @@ def domain_kml(directory):
             k.newlinestring(coords = coords)
     return k
 
+def stations_in_domain(sta, ds):
+    geom = import_module('shapely.geometry')
+    coords = list(zip(ds.corner_lons[-4:], ds.corner_lats[-4:]))
+    p = geom.Polygon(geom.LinearRing(coords))
+    i = [p.contains(geom.Point(ll)) for ll in sta[['lon', 'lat']].astype(float).values]
+    return sta[i]
+
+
 def cells(grid_lon, grid_lat, lon, lat, mask=None):
     """Get grid indexes corresponding to lat/lon points, using shapely polygons.
 

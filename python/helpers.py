@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from traitlets.config.loader import PyFileConfigLoader
 from functools import singledispatch
+from importlib import import_module
 import os, re
 
 config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
@@ -35,6 +36,13 @@ def drop_duplicates(arr, dim):
     idx = arr.indexes[dim]
     j = np.hstack(idx.get_indexer_for([i])[1:] for i in idx.get_duplicates())
     return arr.isel(**{dim: list(set(range(len(idx))) - set(j))})
+
+def data_breaks(x, break_size):
+    tree = import_module('sklearn.tree')
+    tr = tree.DecisionTreeClassifier(min_samples_leaf = break_size)
+    t = np.array(x.index, dtype='datetime64[m]', ndmin=2).astype(float).T
+    y = x.isnull().astype(int).apply(lambda c: tr.fit(t, c).predict(t), 0)
+    return y.columns[y.sum() == 0]
 
 def g2d(v):
     m, n = v.shape[-2:]

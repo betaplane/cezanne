@@ -1656,8 +1656,6 @@ smap.isel(lat=i,lon=j).mean('time').item()
 #+end_src
 
 
-#+CAPTION: Top row: Average soil moiusture (as fraction) from SMAP and the NOAH top two model layers. Bottom row: StDev. The time window for the average is from 2015-08 (start SMAP) to 2017-07 (see above). Red dots indicate stations Fray Jorge Bosque (CNFJB) and Fray Jorge Quebrada (CNFJQ), for which soil moisture data is available.
-
 #+begin_src ipython :results raw :session :savefig "SMAP_SMOIS_avg_var.png"
   def figbg(ax, title=None):
       coq(ax, lines_only=True, colors=['w'])
@@ -1668,7 +1666,7 @@ smap.isel(lat=i,lon=j).mean('time').item()
           ax.set_title(title)
 
   vmax = .4
-  vstd = .3
+  vstd = .2
 
   fig = plt.figure(figsize=(9, 10))
   plt.set_cmap('cividis')
@@ -1696,7 +1694,7 @@ smap.isel(lat=i,lon=j).mean('time').item()
   figbg(ax, 'SMOIS layer 1')
 
   ax = fig.add_subplot(gs[1, 1], projection=crs.PlateCarree())
-  pl = ax.pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.std(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vstd)
+  pl = ax.pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean('Time').std('start') * lm, transform=crs.PlateCarree(), vmin=0, vmax=vstd)
   coq(ax, lines_only=True, colors=['w'])
   ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
   figbg(ax, None)
@@ -1710,7 +1708,7 @@ smap.isel(lat=i,lon=j).mean('time').item()
   cplots.cbar(pl, 'right', ax, width=.02, space=.02)
 
   ax = fig.add_subplot(gs[1, 2], projection=crs.PlateCarree())
-  pl = ax.pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean(('start', 'Time')) * lm, transform=crs.PlateCarree(), vmin=0, vmax=vstd)
+  pl = ax.pcolormesh(y.XLONG[0,:,:], y.XLAT[0,:,:], y.mean('Time').std('start') * lm, transform=crs.PlateCarree(), vmin=0, vmax=vstd)
   coq(ax, lines_only=True, colors=['w'])
   ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
   figbg(ax, None)
@@ -1720,6 +1718,7 @@ smap.isel(lat=i,lon=j).mean('time').item()
   cplots.row_label(gs[0, :], 'avg')
 #+end_src
 
+#+CAPTION: Top row: Average soil moiusture (as fraction) from SMAP and the NOAH top two model layers. Bottom row: StDev - in the case of SMOIS in WRF, after first averaging daily, so as to facilitate comparison to SMAP. *NOTE*: The daily variability is higher in the second soil layer in NOAH. The time window for the average is from 2015-08 (start SMAP) to 2017-07 (see above). Red dots indicate stations Fray Jorge Bosque (CNFJB) and Fray Jorge Quebrada (CNFJQ), for which soil moisture data is available.
 #+RESULTS:
 [[file:./obipy-resources/T2/SMAP_SMOIS_avg_var.png]]
 
@@ -1767,14 +1766,23 @@ smap.isel(lat=i,lon=j).mean('time').item()
    smap_st = smap_st.drop('b')
  #+end_src
 
-
 #+begin_src ipython :results silent :session
+  from geo import stations_in_domain
+  with xr.open_dataset('/home/arno/Documents/data/WRF/3d/geo_em.d03.nc') as ds:
+      sta = stations_in_domain(hh.sta, ds)
+
+  k = hh.data_breaks(T.loc['2015-05':'2017-07'], 48).intersection(sta.index)
+
   def DTR(x):
       s = x.resample('D')
       return s.max() - s.min()
 
-  dtr_wrf = pd.concat((DTR(bias_0h), DTR(bias_12h_preJul17))).mean(1)
-  dtr_T = DTR(T).mean(1)
+  def DF(x):
+      y = x.isel(Time=slice(24, 48)).stack(t=('Time', 'start')).sortby('XTIME')
+      return pd.DataFrame(y.transpose('t', 'station').values, index=y.XTIME, columns=y.station)
+
+  dtr_wrf = pd.concat((DTR(DF(T2_0h.sel(station=sta.index))), DTR(DF(T2_12h_preJul17.sel(station=sta.index)))))
+  dtr_T = DTR(T[sta.index.intersection(T.columns)])
 #+end_src
 
  #+begin_src ipython :results raw :session :savefig "SMOIS_T2.png"
@@ -1787,7 +1795,7 @@ smap.isel(lat=i,lon=j).mean('time').item()
    x = pd.concat((bias_0h.abs().mean(1).resample('D').mean(), bias_12h_preJul17.abs().mean(1).resample('D').mean()))
    plt.legend()
    bx = fig.axes[0].twinx()
-   (dtr_wrf - dtr_T).abs().plot(color=colors[4], label='DTR MAE')
+   (dtr_wrf - dtr_T).abs().mean(1).plot(color=colors[4], label='DTR MAE')
    x.plot(color=colors[3], label='T2 MAE')
    plt.legend()
  #+end_src
@@ -1798,19 +1806,36 @@ smap.isel(lat=i,lon=j).mean('time').item()
 
 
 #+begin_src ipython :results raw :session :savefig "DTR.png"
-fig = plt.figure(figsize=(10, 6))
-dtr_wrf.plot(label='WRF')
-dtr_T.plot(label='stations')
-plt.gca().set_xlim('2015-05', '2017-08')
-plt.gca().set_ylim(0, 20)
-plt.legend()
+  colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+  R = pd.read_hdf('/home/arno/Documents/data/CEAZAMet/station_data.h5', 'pp_mm').xs('prom', 1, level='aggr').resample('D').sum()
+
+  fig = plt.figure(figsize=(10, 6))
+  plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+  dtr_T.mean(1).plot(label='stations')
+  dtr_T[k].mean(1).plot(label='stations restr')
+  dtr_wrf.mean(1).plot(label='WRF')
+  dtr_wrf[k].mean(1).plot(label='WRF restr')
+  plt.gca().set_ylim(0, 20)
+  plt.gca().set_ylabel('$^{\circ}$C')
+  plt.legend(loc=2)
+  bx = plt.gca().twinx()
+  abs(dtr_wrf - dtr_T).mean(1).plot(label='diff', color=colors[4])
+  abs(dtr_wrf[k] - dtr_T[k]).mean(1).plot(label='diff restr', color=colors[5])
+  plt.legend(loc=1)
+  bx.set_ylabel('$^{\circ}$C')
+
+  plt.subplot2grid((3, 1), (2, 0), sharex=bx)
+  r = R.columns.get_level_values('station').intersection(sta.index)
+  R[r.intersection(k)].mean(1).plot(label='restr')
+  R[r].mean(1).plot(label='all')
+  plt.legend()
+  plt.gca().set_xlim('2015-05', '2017-08')
+  plt.gca().set_ylabel('mm day$^{-1}$')
 #+end_src
 
-#+CAPTION: Daily Temperature Ranges (DTR) for the mean over all station locations, for WRF results (interpolated to station locations) and the station data.
+#+CAPTION: Mean (for several stations) Daily Temperature Ranges (DTR) of station data and WRF simulations interpolated to station locations. The series with 'restr' in the labels restrict the mean to stations who do not have gaps longer than 48h between May 2015 and July 2017. The right hand scale of the top plot (series labels with 'diff') represent the mean absolute difference between the DTRs from stations and WRF. The lower panel plots station precipitation along the same time axis, with means formed in the same way as for the DTRs.
 #+RESULTS:
 [[file:./obipy-resources/T2/DTR.png]]
-
-
 *** tests
 **** 2016/08 - 2016/10 (or just 2016/10)
 **** soil moisture
