@@ -141,7 +141,7 @@ class SMAP(EarthData):
         x = c.take(0, axis=axis)
         for i in range(1, c.shape[axis]):
             x = np.ma.masked_equal(np.where(x.mask, c.take(i, axis), x), self.missing_value)
-        assert not x.mask, "missing coordinates"
+        assert not np.any(x.mask), "missing coordinates" # np.any takes both scalars and arrays, any needs a collection
         return x.data
 
     def to_dataset(self, h5, am_pm, date):
@@ -156,13 +156,16 @@ class SMAP(EarthData):
 
         g = h5.get_node('{}_{}'.format(self.group, am_pm))
         ext = '_pm' if am_pm == 'PM' else ''
-        coords = {
-            'col': self.coords(g[self.lon_name + ext], 0),
-            'row': self.coords(g[self.lat_name + ext], 1)
-        }
-        x = xr.Dataset({name(i): arr(i) for i in g if len(i.shape)==2}, coords)
+        try:
+            self.coords = {
+                'col': self.coords(g[self.lon_name + ext], 0),
+                'row': self.coords(g[self.lat_name + ext], 1)
+            }
+        except AssertionError:
+            pass
+        x = xr.Dataset({name(i): arr(i) for i in g if len(i.shape)==2}, self.coords)
         y = xr.Dataset({name(i): (('row', 'col', 'class'), np.ma.masked_equal(i, self.missing_value))
-                        for i in g if len(i.shape)==3}, coords)
+                        for i in g if len(i.shape)==3}, self.coords)
         X = xr.merge((x, y)).sel(row=self.lat_extent, col=self.lon_extent).expand_dims('time')
         X['time'] = ('time', pd.DatetimeIndex([date]) + pd.Timedelta({'AM': 0, 'PM': '12h'}[am_pm]))
         return X
