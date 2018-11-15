@@ -136,7 +136,7 @@ class SMAP(EarthData):
         if hasattr(self, 'x'):
             self.x.to_netcdf('{}_{}.nc'.format(self.outfile, self.fileno), unlimited_dims=['time'])
 
-    def coords(self, coord, axis):
+    def make_coords(self, coord, axis):
         c = np.ma.masked_equal(coord, self.missing_value)
         x = c.take(0, axis=axis)
         for i in range(1, c.shape[axis]):
@@ -156,10 +156,12 @@ class SMAP(EarthData):
 
         g = h5.get_node('{}_{}'.format(self.group, am_pm))
         ext = '_pm' if am_pm == 'PM' else ''
+        # so far, the lat / lon have been the same for each file - so in case they are missing
+        # (which happens), take the ones that have been obtained previously
         try:
             self.coords = {
-                'col': self.coords(g[self.lon_name + ext], 0),
-                'row': self.coords(g[self.lat_name + ext], 1)
+                'col': self.make_coords(g[self.lon_name + ext], 0),
+                'row': self.make_coords(g[self.lat_name + ext], 1)
             }
         except AssertionError:
             pass
