@@ -109,26 +109,32 @@ class SMAP(EarthData):
             return (link, d)
 
         links = [f(l) for l in self.listdir(self.url)]
-        links = [l for l in links if l]
+        links = sorted([l for l in links if l], key=lambda x: x[1])
 
+        path, outfile = os.path.split(self.outfile)
+        pat = re.compile('{}_(\d+)\.nc'.format(outfile))
+
+        self.dummy = 0   # see append_data()
         self.fileno = 0
-        g = glob('{}*'.format(self.outfile))
-        if len(g) > 0:
-            self.fileno = max([int(re.search('_(\d+)\.nc', h).group(1)) for h in g]) + 1
-            with xr.open_mfdataset(g) as ds:
+        gr = [f for f in [pat.search(g) for g in os.listdir(None if path is '' else path)] if f is not None]
+        if len(gr) > 0:
+            self.log.info('existing output files {} detected'.format(m.string for m in gr))
+            self.fileno = max([int(m.group(1)) for m in gr]) + 1
+            with xr.open_mfdataset([os.path.join(path, m.string) for m in gr]) as ds:
                 links = [l for l in links if l[1].date() not in np.unique(ds.indexes['time'].date)]
 
         for i, (l, d) in enumerate(tqdm(links)):
             h5 = [h for h in self.listdir(os.path.join(self.url, l)) if h[-2:] == 'h5'][0]
-            r = self.session.get(os.path.join(self.url, l, h5), stream=True)
+            url = os.path.join(self.url, l, h5)
+            r = self.session.get(url, stream=True)
             r.raise_for_status()
             self.append_data(r, d)
             if (i+1) % self.write_interval == 0:
-                self.x.to_dataset(name=self.var_name).to_netcdf('{}_{}.nc'.format(self.outfile, self.fileno))
+                self.x.to_netcdf('{}_{}.nc'.format(self.outfile, self.fileno), unlimited_dims=['time'])
                 self.fileno += 1
                 del self.x
         if hasattr(self, 'x'):
-            self.x.to_dataset(self.var_name).to_netcdf('{}_{}.nc'.format(self.outfile, self.fileno))
+            self.x.to_netcdf('{}_{}.nc'.format(self.outfile, self.fileno), unlimited_dims=['time'])
 
     def coords(self, coord, axis):
         c = np.ma.masked_equal(coord, self.missing_value)
@@ -137,6 +143,29 @@ class SMAP(EarthData):
             x = np.ma.masked_equal(np.where(x.mask, c.take(i, axis), x), self.missing_value)
         assert not x.mask, "missing coordinates"
         return x.data
+
+    def to_dataset(self, h5, am_pm, date):
+        def arr(x):
+            try:
+                return (('row', 'col'), np.ma.masked_equal(x, self.missing_value))
+            except:
+                return (('row', 'col'), np.array(x))
+
+        def name(x):
+            return x.name[:-3] if x.name[-3:] == '_pm' else x.name
+
+        g = h5.get_node('{}_{}'.format(self.group, am_pm))
+        ext = '_pm' if am_pm == 'PM' else ''
+        coords = {
+            'col': self.coords(g[self.lon_name + ext], 0),
+            'row': self.coords(g[self.lat_name + ext], 1)
+        }
+        x = xr.Dataset({name(i): arr(i) for i in g if len(i.shape)==2}, coords)
+        y = xr.Dataset({name(i): (('row', 'col', 'class'), np.ma.masked_equal(i, self.missing_value))
+                        for i in g if len(i.shape)==3}, coords)
+        X = xr.merge((x, y)).sel(row=self.lat_extent, col=self.lon_extent).expand_dims('time')
+        X['time'] = ('time', pd.DatetimeIndex([date]) + pd.Timedelta({'AM': 0, 'PM': '12h'}[am_pm]))
+        return X
 
     def to_xarray(self, h5, am_pm, date):
         group = '{}_{}'.format(self.group, am_pm)
@@ -155,13 +184,18 @@ class SMAP(EarthData):
         for chunk in resp.iter_content(chunk_size=1024**2):
             b.write(chunk)
         b.seek(0)
-        h5 = tables.open_file('unimportant.h5', driver='H5FD_CORE', driver_core_image=b.read(), driver_core_backing_store=0)
+        h5 = tables.open_file(str(self.dummy), driver='H5FD_CORE', driver_core_image=b.read(), driver_core_backing_store=0)
         for am_pm in ['AM', 'PM']:
-            x = self.to_xarray(h5, am_pm, date)
+            x = self.to_dataset(h5, am_pm, date)
             try:
                 self.x = xr.concat((self.x, x), 'time')
             except AttributeError:
                 self.x = x
+        h5.close()
+        self.dummy += 1  # originally, using the same dummy file name, all data ended up being the very first
+                         # downloaded file
 
 if __name__ == '__main__':
-    pass
+    import sys
+    app = SMAP(outfile=sys.argv[1])
+    app.get()

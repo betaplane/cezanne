@@ -1836,6 +1836,15 @@ smap.isel(lat=i,lon=j).mean('time').item()
 #+CAPTION: Mean (for several stations) Daily Temperature Ranges (DTR) of station data and WRF simulations interpolated to station locations. The series with 'restr' in the labels restrict the mean to stations who do not have gaps longer than 48h between May 2015 and July 2017. The right hand scale of the top plot (series labels with 'diff') represent the mean absolute difference between the DTRs from stations and WRF. The lower panel plots station precipitation along the same time axis, with means formed in the same way as for the DTRs.
 #+RESULTS:
 [[file:./obipy-resources/T2/DTR.png]]
+#+begin_src ipython :results raw :session
+fig = plt.figure()
+hs.plot()
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/fGt0m1.png]]
+
+
 *** tests
 **** 2016/08 - 2016/10 (or just 2016/10)
 **** soil moisture
@@ -1844,6 +1853,9 @@ smap.isel(lat=i,lon=j).mean('time').item()
 | sf_surface_physics |     0 | no sfc temp prediction               | does that mean no T2 etc? (-> v. short run first) |
 |                    |     1 | thermal diffusion only (no moisture) |                                                   |
 |                    |     7 | Pleim-Xiu LSM (with nudging)         |                                                   |
+***** also, continuous soil property simulation across runs
+****** [[zotero://select/items/1_IX6UY7A8][Xiu, Aijun, and Jonathan E. Pleim. “Development of a Land Surface Model. Part I: Application in a Mesoscale Meteorological Model.” Journal of Applied Meteorology 40, no. 2 (February 2001): 192–209. https://doi.org/10.1175/1520-0450(2001)040<0192:DOALSM>2.0.CO;2.]]
+ 
 **** initialization
 ***** DFI (digital filter initialization)
   | namelist - &dfi_control  |  value | meaning                               |
@@ -1870,6 +1882,13 @@ smap.isel(lat=i,lon=j).mean('time').item()
 ***** grid / obs nudging - &fdda
 ***** obsgrid (same as nudging?)
 ****** Pleim-Xiu LSM nudging
+**** topo_shading = 1
+*** tasks
+**** TODO air humidity in model and data
+***** including radiosondes
+**** TODO soil moisture evolution over longer simulation (e.g. WRF_GLACIO)
+**** TODO look in more detail at humedad del suelo timeseries
+***** does it even change, connection to ppt
 ** Skewness & kurtosis
    
 #+begin_src ipython :results silent :session
