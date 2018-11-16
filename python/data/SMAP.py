@@ -88,6 +88,14 @@ class SMAP(EarthData):
     outfile = Unicode().tag(config=True)
     "output base file name (without .nc extension)"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.path, outfile = os.path.split(self.outfile)
+        pat = re.compile('{}_(\d+)\.nc'.format(outfile))
+        self.files = [f for f in
+                      [pat.search(g) for g in os.listdir(None if self.path is '' else self.path)]
+                      if f is not None]
+
     def listdir(self, url):
         r = self.session.get(url)
         r.raise_for_status()
@@ -111,16 +119,12 @@ class SMAP(EarthData):
         links = [f(l) for l in self.listdir(self.url)]
         links = sorted([l for l in links if l], key=lambda x: x[1])
 
-        path, outfile = os.path.split(self.outfile)
-        pat = re.compile('{}_(\d+)\.nc'.format(outfile))
-
         self.dummy = 0   # see append_data()
         self.fileno = 0
-        gr = [f for f in [pat.search(g) for g in os.listdir(None if path is '' else path)] if f is not None]
-        if len(gr) > 0:
-            self.log.info('existing output files {} detected'.format(m.string for m in gr))
-            self.fileno = max([int(m.group(1)) for m in gr]) + 1
-            with xr.open_mfdataset([os.path.join(path, m.string) for m in gr]) as ds:
+        if len(self.files) > 0:
+            self.log.info('existing output files {} detected'.format(m.string for m in self.files))
+            self.fileno = max([int(m.group(1)) for m in self.files]) + 1
+            with xr.open_mfdataset([os.path.join(self.path, m.string) for m in self.files]) as ds:
                 links = [l for l in links if l[1].date() not in np.unique(ds.indexes['time'].date)]
 
         for i, (l, d) in enumerate(tqdm(links)):
@@ -198,7 +202,13 @@ class SMAP(EarthData):
                 self.x = x
         h5.close()
         self.dummy += 1  # originally, using the same dummy file name, all data ended up being the very first
-                         # downloaded file
+                            # downloaded file
+
+    def prune(self, ds):
+        ds = xr.open_mfdataset([os.path.join(self.path, m.string) for m in self.files])
+        x = ds.soil_moisture.sel(col=slice(-72, -69), row=slice(-28, -33))
+        c = x.count(('row', 'col')) / (len(x.col) * len(x.row))
+        return ds.sel(time= c > 0)
 
 if __name__ == '__main__':
     import sys
