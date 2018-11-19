@@ -18,7 +18,7 @@ class CC(CCBase):
     Common arguments to this class and :class:`.threadWuRF.CC` are described as keyword arguments below for convenience.
 
     :Keyword arguments:
-        * :attr:`.write_interval`
+        * :attr:`~.threadWuRF.write_interval`
         * **paths** - List of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs.
         * **domain** - Which of the WRF domains (e.g. ``d03``) to use.
         * **hour** - Hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
@@ -80,7 +80,7 @@ class CC(CCBase):
     def concat(self, interval=False):
         """Concatenate the found WRFOUT files. If ``interpolate=True`` the data is interpolated to station locations; these are found from the HDF file specified as :attr:`CEAZA.Meta.file_name`.
 
-        :param interval: Whether or not to write out files at the interval specified by :attr:`write_interval`. This is mostly intended for internal use when :meth:`concat` is called from :meth:`start`
+        :param interval: Whether or not to write out files at the interval specified by :attr:`~threadWuRF.write_interval`. This is mostly intended for internal use when :meth:`concat` is called from :meth:`start`
 
         """
         if self.interpolate:

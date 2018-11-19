@@ -204,5 +204,7 @@ intersphinx_mapping = {
     'traitlets': ('https://traitlets.readthedocs.io/en/stable/', None),
     'cartopy': ('https://scitools.org.uk/cartopy/docs/latest/', None),
     'ipython': ('https://ipython.readthedocs.io/en/stable/', None),
-    'condor': ('https://betaplane.github.io/condor/', None)
+    'condor': ('https://betaplane.github.io/condor/', None),
+    'tables': ('https://www.pytables.org/', None),
+    'h5py': ('http://docs.h5py.org/en/stable/', None)
 }

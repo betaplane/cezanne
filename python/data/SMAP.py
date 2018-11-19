@@ -2,9 +2,10 @@
 SMAP soil moisture data
 -----------------------
 """
-import os, requests, re, os, tables
+import os, requests, re, os, tempfile
+from importlib import import_module
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from traitlets.config import Application
 from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import Unicode, Instance, Float, Integer
@@ -60,6 +61,53 @@ class EarthData(Application):
     def __del__(self):
         self.session.close()
 
+
+class h5Bytes(object):
+    """Base class for context managers :class:`BytesTables` and :class:`BytesH5py`.
+
+    """
+    def __init__(self, resp):
+        self.resp = resp
+
+    def bytesio(self):
+        b = BytesIO()
+        for chunk in self.resp.iter_content(chunk_size=1024**2):
+            b.write(chunk)
+        b.seek(0)
+        return b
+
+    def __exit__(self, *args):
+        for fh in self.fhs:
+            fh.close()
+
+class BytesTables(h5Bytes):
+    """Context manager that returns an in-memory HDF (h5) file, using the `tables package <https://www.pytables.org>`_.
+
+    """
+    def __enter__(self):
+        tables = import_module('tables')
+        h5 = tables.open_file(next(tempfile._get_candidate_names()),
+                                driver='H5FD_CORE', driver_core_image=self.bytesio().read())
+        self.fhs = [h5]
+        return h5
+
+class BytesH5py(h5Bytes):
+    """Context manager that returns an in-memory HDF (h5) file, using the `h5py package <http://docs.h5py.org/en/stable/>`_.
+
+    """
+    def __enter__(self):
+        h5py = import_module('h5py')
+
+        # file access property list
+        fapl = h5py.h5p.create(h5py.h5p.FILE_ACCESS)
+        fapl.set_fapl_core(backing_store=False)
+        fapl.set_file_image(self.bytesio().getbuffer())
+
+        fh = h5py.h5f.open(fapl=fapl, flags=h5py.h5f.ACC_RDONLY,
+                           name=next(tempfile._get_candidate_names()).encode())
+        h5 = h5py.File(fh, backing_store=False, driver='core', mode='r')
+        self.fhs = [fh, h5]
+        return h5
 
 class SMAP(EarthData):
     """EarthData download app (right now, specifically SMAP data). Main method is :meth:`.get`. See :class:`EarthData` for possible init arguments in addition to the :mod:`traitlets <traitlets.config>` class attributes.
@@ -119,7 +167,6 @@ class SMAP(EarthData):
         links = [f(l) for l in self.listdir(self.url)]
         links = sorted([l for l in links if l], key=lambda x: x[1])
 
-        self.dummy = 0   # see append_data()
         self.fileno = 0
         if len(self.files) > 0:
             self.log.info('existing output files {} detected'.format(m.string for m in self.files))
@@ -128,11 +175,11 @@ class SMAP(EarthData):
                 links = [l for l in links if l[1].date() not in np.unique(ds.indexes['time'].date)]
 
         for i, (l, d) in enumerate(tqdm(links)):
-            h5 = [h for h in self.listdir(os.path.join(self.url, l)) if h[-2:] == 'h5'][0]
-            url = os.path.join(self.url, l, h5)
-            r = self.session.get(url, stream=True)
-            r.raise_for_status()
-            self.append_data(r, d)
+            for h5 in [h for h in self.listdir(os.path.join(self.url, l)) if h[-2:] == 'h5']:
+                url = os.path.join(self.url, l, h5)
+                r = self.session.get(url, stream=True)
+                r.raise_for_status()
+                self.append_data(r, d)
             if (i+1) % self.write_interval == 0:
                 self.x.to_netcdf('{}_{}.nc'.format(self.outfile, self.fileno), unlimited_dims=['time'])
                 self.fileno += 1
@@ -189,20 +236,13 @@ class SMAP(EarthData):
         return X
 
     def append_data(self, resp, date):
-        b = BytesIO()
-        for chunk in resp.iter_content(chunk_size=1024**2):
-            b.write(chunk)
-        b.seek(0)
-        h5 = tables.open_file(str(self.dummy), driver='H5FD_CORE', driver_core_image=b.read(), driver_core_backing_store=0)
-        for am_pm in ['AM', 'PM']:
-            x = self.to_dataset(h5, am_pm, date)
-            try:
-                self.x = xr.concat((self.x, x), 'time')
-            except AttributeError:
-                self.x = x
-        h5.close()
-        self.dummy += 1  # originally, using the same dummy file name, all data ended up being the very first
-                            # downloaded file
+        with BytesTables(resp) as h5:
+            for am_pm in ['AM', 'PM']:
+                x = self.to_dataset(h5, am_pm, date)
+                try:
+                    self.x = xr.concat((self.x, x), 'time')
+                except AttributeError:
+                    self.x = x
 
     def prune(self, ds):
         ds = xr.open_mfdataset([os.path.join(self.path, m.string) for m in self.files])
@@ -210,7 +250,32 @@ class SMAP(EarthData):
         c = x.count(('row', 'col')) / (len(x.col) * len(x.row))
         return ds.sel(time= c > 0)
 
+class SMAPL4(SMAP):
+    """Like :class:`SMAP`, but for the level 4 product (geophysical data - i.e. the model-based value-added variables), and using `h5py <http://docs.h5py.org/en/stable/>`_ instead of `tables <https://www.pytables.org>`_.
+
+    """
+    def append_data(self, resp, date):
+        with BytesH5py(resp) as h5:
+            time_url = datetime.strptime(re.search('_\d{8}T\d{6}_', resp.url).group(0), '_%Y%m%dT%H%M%S_')
+            time_h5 = timedelta(seconds=h5['time'][0]) + datetime(2000, 1, 1, 12)
+            assert time_url == time_h5, "timestamp-filename mismatch"
+
+            x = self.to_dataset(h5, time_h5)
+            try:
+                self.x = xr.concat((self.x, x), 'time')
+            except AttributeError:
+                self.x = x
+
+    def to_dataset(self, h5, time):
+        g = h5['Geophysical_Data']
+        ds = xr.Dataset({v: (('lat', 'lon'), np.ma.masked_equal(g[v], self.missing_value)) for v in g},
+                        {'lat': h5['cell_lat'][:, 0], 'lon': h5['cell_lon'][0, :]})
+        ds = ds.sel(lat=self.lat_extent, lon=self.lon_extent).expand_dims('time')
+        ds['time'] = ('time', [time])
+        return ds
+
+
 if __name__ == '__main__':
-    import sys
-    app = SMAP(outfile=sys.argv[1])
+    app = SMAP()
+    app.parse_command_line()
     app.get()

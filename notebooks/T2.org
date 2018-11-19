@@ -1607,6 +1607,13 @@ hs = pd.read_hdf(hh.config.Field.file_name, 'hs')
 hs = hs.xs('prom', 1, level='aggr')[['CNFJB', 'CNFJQ']]
 #+end_src
 
+#+begin_src ipython :results raw :session :savefig "HS_FrayJorge.png"
+hs.plot(figsize=(8, 3))
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/T2/HS_FrayJorge.png]]
+
 
 #+begin_src ipython :results raw :session
 tab = sm.isel(start=slice(16, 40)).mean(('start', 'Time')).to_dataframe().unstack()
@@ -1621,31 +1628,31 @@ table(tab)
 | CNFJQ | 0.2693925887016526 |  0.2794720091590805 | 0.22654675303090938 | 0.22974003487416714 |
 
 #+begin_src ipython :results raw :session
-tab = hs.mean().unstack()
+tab = hs[:'2012-10'].mean().unstack() # sensor failure, see figure above
 tab.index = tab.index.get_level_values(0)
 table(tab)
 #+end_src
 
 #+RESULTS:
-|       |               -0.1 |               -0.2 |               -0.5 |                SMAP |
-|-------+--------------------+--------------------+--------------------+---------------------|
-| CNFJB | 16.227916633775212 | 17.436791901087354 | 16.321969650409876 | 0.14533954858779907 |
-| CNFJQ | 14.575972260904477 | 15.108363282918049 |  15.14085535884631 | (same grid box)     |
+|       |      -0.1 |      -0.2 |      -0.5 | SMAP            |
+|-------+-----------+-----------+-----------+-----------------|
+| CNFJB | 45.765119 | 41.971980 | 45.970497 | 0.144           |
+| CNFJQ | 42.292605 | 43.845763 | 43.985203 | (same grid box) |
 
 #+begin_src ipython :results raw :session
 from geo import nearest
-i, j, _ = nearest(*np.meshgrid(smap.lon, smap.lat), *sta.loc['CNFJB', ['lon', 'lat']])
-smap.isel(lat=i,lon=j).mean('time').item()
+i, j, _ = nearest(*np.meshgrid(smap.col, smap.row), *hh.sta.loc['CNFJB', ['lon', 'lat']])
+smap.soil_moisture.isel(row=i,col=j).mean('time').item()
 #+end_src
 
 #+RESULTS:
-: 0.14533954858779907
+: 0.14400552213191986
 
 *** mean fields (SMAP vs. NOAH)
 #+begin_src ipython :results silent :session
   lm = xr.open_dataset('/home/arno/Documents/data/WRF/3d/geo_em.d03.nc')['LANDMASK'].squeeze()
   lm[lm==0] = np.nan
-  smap = xr.open_dataarray('/nfs/HPC/arno/data/SMAP_SPL3SMP.nc').sel(time=slice(None, '2017-07-18'))
+  smap = xr.open_dataset('/nfs/HPC/arno/data/SMAP_SPL3SMP.nc').sel(time=slice(None, '2017-07-18'))
   smois_121 = xr.open_dataarray('/nfs/HPC/arno/data/SMOIS_field_121.nc')
   def layer(i):
       smois_145 = xr.open_dataarray('/nfs/HPC/arno/data/SMOIS_field_145_layer{}.nc'.format(i+1))
@@ -1654,7 +1661,6 @@ smap.isel(lat=i,lon=j).mean('time').item()
           smois_145.isel(Time=slice(24, 48)
       )), 'start').sel(start=slice('2015-08-15', '2017-07-18'))
 #+end_src
-
 
 #+begin_src ipython :results raw :session :savefig "SMAP_SMOIS_avg_var.png"
   def figbg(ax, title=None):
@@ -1673,15 +1679,15 @@ smap.isel(lat=i,lon=j).mean('time').item()
   gs = gridspec.GridSpec(2, 3, hspace=.04, wspace=.02)
 
   ax = fig.add_subplot(gs[0, 0], projection=crs.PlateCarree())
-  x = smap.mean('time')
-  lon = (lambda k, l: k - np.r_[l[0], l] / 2)(x.lon, np.diff(x.lon))
-  lat = (lambda k, l: k - np.r_[l[0], l] / 2)(x.lat, np.diff(x.lat))
+  x = smap.soil_moisture.mean('time')
+  lon = (lambda k, l: k - np.r_[l[0], l] / 2)(x.col, np.diff(x.col))
+  lat = (lambda k, l: k - np.r_[l[0], l] / 2)(x.row, np.diff(x.row))
   pl = ax.pcolormesh(lon, lat, x, transform=crs.PlateCarree(), vmin=0, vmax=vmax)
   ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
   figbg(ax, 'SMAP')
 
   ax = fig.add_subplot(gs[1, 0], projection=crs.PlateCarree())
-  x = smap.std('time')
+  x = smap.soil_moisture.std('time')
   pl = ax.pcolormesh(lon, lat, x, transform=crs.PlateCarree(), vmin=0, vmax=vstd)
   ax.scatter(*hh.sta.loc[['CNFJB', 'CNFJQ'], ['lon', 'lat']].astype(float).as_matrix().T, marker='o', color='r', transform=crs.PlateCarree())
   figbg(ax, None)
@@ -1728,8 +1734,8 @@ smap.isel(lat=i,lon=j).mean('time').item()
 ***** based simply on minimum distance to SMAP gridpoint (center)
  #+begin_src ipython :results silent :session
    lon, lat = smois_121.XLONG[0, :, :], smois_121.XLAT[0, :, :]
-   i = np.vectorize(lambda x: abs(smap.lat - x).argmin().item())(lat)
-   j = np.vectorize(lambda x: abs(smap.lon - x).argmin().item())(lon)
+   i = np.vectorize(lambda x: abs(smap.row - x).argmin().item())(lat)
+   j = np.vectorize(lambda x: abs(smap.col - x).argmin().item())(lon)
    z = list(zip(i.flatten(), j.flatten()))
    s = list(set(z))
    ij = np.array([s.index(e) for e in z]).reshape(i.shape)
@@ -1742,7 +1748,7 @@ smap.isel(lat=i,lon=j).mean('time').item()
     coq(ax, lines_only=True)
   #+end_src
   #+RESULTS:
-  [[file:./obipy-resources/T2/2QNlQK.png]]
+  [[file:./obipy-resources/T2/vAnUln.png]]
 
 **** results
  #+begin_src ipython :results silent :session
@@ -1752,15 +1758,15 @@ smap.isel(lat=i,lon=j).mean('time').item()
    smois_smap['start'] = ('start', pd.DatetimeIndex(smois_smap.indexes['start'].date))
    smois_smap = smois_smap.rename({'start': 'time'})
 
-   smap_c = smap.copy()
-   smap_c['b'] = (('lat', 'lon'), -np.ones(smap.shape[1:]))
+   smap_c = smap.soil_moisture.copy()
+   smap_c['b'] = (('row', 'col'), -np.ones(smap_c.shape[1:]))
    for k in np.unique(i):
        for l in np.unique(j):
            try:
                smap_c.b[k, l] = s.index((k, l))
            except ValueError:
                pass
-   smap_st = smap_c.stack(bin = ('lat', 'lon'))
+   smap_st = smap_c.stack(bin = ('row', 'col'))
    smap_st = smap_st.sel(bin = smap_st.b>=0)
    smap_st['bin'] = smap_st.b
    smap_st = smap_st.drop('b')
@@ -1836,14 +1842,6 @@ smap.isel(lat=i,lon=j).mean('time').item()
 #+CAPTION: Mean (for several stations) Daily Temperature Ranges (DTR) of station data and WRF simulations interpolated to station locations. The series with 'restr' in the labels restrict the mean to stations who do not have gaps longer than 48h between May 2015 and July 2017. The right hand scale of the top plot (series labels with 'diff') represent the mean absolute difference between the DTRs from stations and WRF. The lower panel plots station precipitation along the same time axis, with means formed in the same way as for the DTRs.
 #+RESULTS:
 [[file:./obipy-resources/T2/DTR.png]]
-#+begin_src ipython :results raw :session
-fig = plt.figure()
-hs.plot()
-#+end_src
-
-#+RESULTS:
-[[file:./obipy-resources/T2/fGt0m1.png]]
-
 
 *** tests
 **** 2016/08 - 2016/10 (or just 2016/10)
@@ -1855,7 +1853,7 @@ hs.plot()
 |                    |     7 | Pleim-Xiu LSM (with nudging)         |                                                   |
 ***** also, continuous soil property simulation across runs
 ****** [[zotero://select/items/1_IX6UY7A8][Xiu, Aijun, and Jonathan E. Pleim. “Development of a Land Surface Model. Part I: Application in a Mesoscale Meteorological Model.” Journal of Applied Meteorology 40, no. 2 (February 2001): 192–209. https://doi.org/10.1175/1520-0450(2001)040<0192:DOALSM>2.0.CO;2.]]
- 
+***** one test where soil moisture in met_em... is dramatically altered **during** the course of a simulation - to see if only initial data are used by NOAH or also continuous BCs.
 **** initialization
 ***** DFI (digital filter initialization)
   | namelist - &dfi_control  |  value | meaning                               |

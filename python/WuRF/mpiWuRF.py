@@ -19,7 +19,6 @@ class CC(CCBase):
 
     :Keyword arguments:
         * :attr:`.max_workers`
-        * :attr:`.write_interval`
         * **paths** - List of names of base directories containing the 'c01\_...' directories corresponding to individual forecast runs.
         * **domain** - Which of the WRF domains (e.g. ``d03``) to use.
         * **hour** - Hour at which the forecast starts (because we switched from 0h to 12h UTC), if selection by hour is desired.
