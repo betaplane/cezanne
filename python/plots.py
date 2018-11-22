@@ -21,8 +21,8 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
     :param ax: :obj:`~matplotlib.axes.Axes.axes` if subplots are used
     :param label: if `False`, plot no row labels
     :type label: :obj:`bool`
-    :param color: mapping from color values to row indexes whose labels should be printed in the given color
-    :type color: :obj:`dict` {color spec: [row indexes]}
+    :param color: mapping from station name (DataFrame column name) to color in which the corresponding label should be printed
+    :type color: :obj:`dict` {row label: color spec}
     :param bottom: equivalent to ``bottom`` keyword in :class:`matplotlib.figure.SubplotParams`
     :param top: equivalent to ``top`` keyword in :class:`matplotlib.figure.SubplotParams`
 
@@ -30,6 +30,7 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
         Same as for :class:`matplotlib.figure.SubplotParams`, plus:
             * **figsize** - override automatic figure sizing
             * **fig_width** - override only the figure width
+            * **grid_color** - color spec for the grid over the matrix
 
     """
     if ax is None:
@@ -40,6 +41,7 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
 
     try: df = stationize(df)
     except: pass
+    grid_color = kwargs.pop('grid_color', plt.rcParams['grid.color'])
     fig.subplots_adjust(bottom=bottom, top=top, **kwargs)
     plt.set_cmap('viridis')
     y = np.arange(df.shape[1] + 1)
@@ -50,13 +52,12 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
         for k in l:
             k.set_verticalalignment('bottom')
             k.set_fontsize(8)
-        for c, i in color.items():
-            for j in i:
-                l[j].set_color(c)
+        for i, c in enumerate(df.columns):
+            l[i].set_color(color[c])
     else:
         ax.set_yticklabels([])
     ax.yaxis.set_tick_params(tick1On=False)
-    ax.grid()
+    ax.grid(color=grid_color)
     ax.invert_yaxis()
 
 
@@ -177,16 +178,21 @@ class Coquimbo(Configurable):
         self.border = self.clip(gshhs.GSHHS('WDBII_shp/i/WDBII_border_i_L1'))
         self.rivers = self.clip(gshhs.GSHHS('WDBII_shp/i/WDBII_river_i_L05'))
 
-    def __call__(self, ax, proj=crs.PlateCarree(), lines_only=False, colors=['k']):
+    def __call__(self, ax, proj=crs.PlateCarree(), lines_only=False, colors='w', transparent=False):
+        if isinstance(colors, str):
+            colors = {'coast': colors, 'border': colors, 'outline': colors}
         if lines_only:
-            ax.add_geometries(self.coast, crs=proj, facecolor='none', edgecolor=colors[0], zorder=10)
-            ax.add_geometries(self.border, crs=proj, facecolor='none', edgecolor=colors[-1], linewidth=.5, zorder=10)
+            ax.add_geometries(self.coast, crs=proj, facecolor='none', edgecolor=colors['coast'], zorder=10)
+            ax.add_geometries(self.border, crs=proj, facecolor='none', edgecolor=colors['border'], linewidth=.5, zorder=10)
+            if transparent:
+                ax.background_patch.set_color('none')
+                ax.outline_patch.set_edgecolor(colors['outline'])
         else:
             ax.background_patch.set_color('lightblue')
             ax.add_geometries(self.coast, crs=proj, facecolor='lightgray', edgecolor='k', zorder=0)
             ax.add_geometries(self.rivers, crs=proj, facecolor='none', edgecolor='b', zorder=0)
             ax.add_geometries(self.border, crs=proj, facecolor='none', edgecolor='g', linewidth=.5, zorder=0)
-            ax.set_extent(self.bbox, crs=proj)
+        ax.set_extent(self.bbox, crs=proj)
 
     def clip(self, reader):
         f = lambda b: np.all(np.r_[b[:2], self.bbox[:2]] <= np.r_[self.bbox[2:], b[2:]])
@@ -246,3 +252,7 @@ class Coquimbo(Configurable):
             cbar_kw.setdefault('width', 0.02)
             cbar(pl[-1], loc=cb, **cbar_kw)
         return pl, gls
+
+def axesColor(ax, color):
+    for s in ['bottom', 'top', 'left', 'right']:
+        ax.spines[s].set_color(color)

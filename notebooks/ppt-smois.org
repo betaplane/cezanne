@@ -1,0 +1,299 @@
+#+begin_src ipython :results silent :session
+  import pandas as pd
+  import xarray as xr
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from matplotlib import patches, cm, dates as mdates
+  from cartopy import crs
+  import helpers as hh
+  import geo
+  import plots as cplots
+
+  R = hh.stationize(pd.read_hdf('/home/arno/Documents/data/CEAZAMet/station_data.h5', 'pp_mm'))
+  sta = geo.stations_in_domain(hh.sta, '/home/arno/Documents/data/WRF/3d/geo_em.d03.nc')
+  idx = R.columns.intersection(sta.index)
+  R = R[idx]
+  sta = sta.loc[idx]
+
+  smap = xr.open_dataset('/nfs/HPC/arno/data/SMAP_SPL3SMP.nc')
+
+  # inverse 'land mask' for SMAP
+  lm = smap.soil_moisture.isnull().all('time')
+  coq = cplots.Coquimbo()
+#+end_src
+
+#+begin_src ipython :results silent :session
+  lon, lat = sta[['lon', 'lat']].as_matrix().astype(float).T
+  i = np.vectorize(lambda x: abs(smap.row - x).argmin().item())(lat)
+  j = np.vectorize(lambda x: abs(smap.col - x).argmin().item())(lon)
+  ij = {}
+  for k, l in enumerate(list(zip(i, j))):
+      if lm[l[0], l[1]]: continue
+      try:
+          ij[l].append(sta.index[k])
+      except KeyError:
+          ij[l] = [sta.index[k]]
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "pp_mm_avail.png"
+  from matplotlib import dates as mdates
+  r = R[np.hstack(a[1] for a in ij.items())]
+  color = {}
+  for k, (p, s) in enumerate(ij.items()):
+      color.update((a, ['magenta', 'lime'][k%2]) for a in s)
+  cplots.availability_matrix(r.resample('D').count(), color=color, grid_color='.8')
+  plt.gca().set_xlim('2015-08', '2017-08')
+  plt.gca().xaxis.set_major_locator(mdates.YearLocator())
+  plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/pp_mm_avail.png]]
+
+#+begin_src ipython :results silent :session
+  def time(x):
+      try: return np.datetime64(x.item())
+      except: return np.nan
+
+  def df(r, c):
+      x = pd.DataFrame(smap.soil_moisture.isel(row=r, col=c).values,
+                          index = [time(t) for t in smap.tb_time_utc.isel(row=r, col=c)])
+      return x[x.index.notnull()]
+
+  def cell(p, s):
+      t = [time(t) for t in smap.tb_time_utc.isel(row=p[0], col=p[1])]
+      x = pd.DataFrame(smap.soil_moisture.isel(row=p[0], col=p[1]).values, columns=['smap'], index=t)
+      x = x.loc[x.index.dropna()]
+      T = pd.DataFrame(smap.surface_temperature.isel(row=p[0], col=p[1]).values, columns=['temp'], index=t)
+      T = T.loc[T.index.dropna()]
+      r = R[s].mean(1).dropna()
+      y = pd.DataFrame([r.loc[a: b].sum() for a, b in zip(x.index[:-1], x.index[1:])],
+                       index=x.index[1:], columns=['ceaza'])
+      return pd.concat((x, T, y), 1)[max(r.index[0], x.index[1]): min(r.index[-1], x.index[-1])]
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  def mean(df):
+      return pd.concat((df[['smap', 'temp']].mean(),
+                 df[['ceaza']].resample('D').sum().mean() * 365), 0)
+#+end_src
+
+#+begin_src ipython :results silent :session
+  from sklearn.linear_model import RANSACRegressor, LinearRegression
+  from scipy import odr as ODR
+
+  zm = pd.concat([mean(cell(*k)) for k in ij.items()], 1).T
+  x = zm['smap'].to_frame().values
+  y = zm['ceaza'].to_frame().values
+  rs = RANSACRegressor().fit(x, y)
+  yh = rs.predict(x)
+
+  coastal = np.ones(len(ij)).astype(bool)
+  coastal[[5, 8, 17, 19, 20]] = False
+  lr = LinearRegression().fit(x[coastal], y[coastal])
+  yhc = lr.predict(x)
+
+#+end_src
+
+#+begin_src ipython :results silent :session
+  # Orthogonal Distance Regression (ODR) only makes sense with scaled input
+  sx, sy = x[coastal].std(), y[coastal].std()
+  odr = ODR.ODR(ODR.Data(x[coastal].flatten() / sx, y[coastal].flatten() / sy), ODR.models.unilinear, beta0=[1, 0]).run()
+  odrb = odr.beta[0] * sy/sx, odr.beta[1] * sy
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "regressions_whole_period.png"
+  fig = plt.figure(figsize=(10, 4))
+  xx = np.array([[0], [.3]])
+  in_col = 'cyan'
+  out_col = 'orange'
+
+  ax = plt.subplot(1, 3, 1)
+  plt.scatter(x[rs.inlier_mask_], y[rs.inlier_mask_], color=in_col)
+  plt.scatter(x[~rs.inlier_mask_], y[~rs.inlier_mask_], color=out_col)
+  for i, j, s, m in zip(x, y, ij.values(), rs.inlier_mask_):
+      if not m:
+          ax.annotate(', '.join(s), xy=(i, j), color=out_col)
+  plt.plot(xx, rs.predict(xx), in_col)
+  ax.set_ylim(-10, 510)
+  ax.set_xlim(0, .6)
+  ax.set_ylabel('ppt [mm]')
+  ax.set_title('RANSAC')
+
+  ax = plt.subplot(1, 3, 2)
+  plt.scatter(x[coastal], y[coastal], color=in_col)
+  plt.scatter(x[~coastal], y[~coastal], color=out_col)
+  for i, j, s, m in zip(x, y, ij.values(), coastal):
+      if not m:
+          plt.gca().annotate(', '.join(s), xy=(i, j), color=out_col)
+  plt.plot(xx, rs.predict(xx), in_col)
+  ax.set_yticklabels([])
+  ax.set_ylim(-10, 510)
+  ax.set_xlim(0, .6)
+  ax.set_xlabel('SMAP')
+  ax.set_title('w/o coastal')
+
+  ax = plt.subplot(1, 3, 3)
+  plt.scatter(x[coastal], y[coastal], color=in_col)
+  plt.scatter(x[~coastal], y[~coastal], color=out_col)
+  plt.plot(xx, xx * odrb[0] + odrb[1], in_col)
+  ax.set_yticklabels([])
+  ax.set_ylim(-10, 510)
+  ax.set_xlim(0, .6)
+  ax.set_title('ODR w/o coastal')
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/regressions_whole_period.png]]
+
+###
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/ransac_2016.png]]
+
+#+begin_src ipython :results silent :session
+  def plot(ij, stations, ax, color='w'):
+      x = smap.soil_moisture.isel(row=ij[0], col=ij[1]).dropna('time')
+      y = R[stations].mean(1).dropna(0)
+      plt.plot(x.time, x, color='magenta')
+      bx = ax.twinx()
+      plt.plot(y.index, y, color='lightgreen')
+      bx.set_xlim(max(x.time.values[0], y.index[0]), min(x.time.values[-1], y.index[-1]))
+      # ax.set_ylim(0, .6)
+      # bx.set_ylim(0, 12)
+      ax.set_xticks([])
+      ylim = bx.get_ylim()
+      dy = np.diff(ylim).item()
+      plt.text(bx.get_xlim()[0], ylim[1]-dy/4, ', '.join(stations), color=color)
+      cplots.axesColor(ax, color)
+      cplots.axesColor(bx, color)
+#+end_src
+
+
+#+begin_src ipython :results raw :session :savefig "SMAP_pp_mm.png"
+  fig = plt.figure(figsize=(10, 9))
+  fig.subplots_adjust(wspace=.3)
+  for k, (p, s) in enumerate(ij.items()):
+      ax = plt.subplot(11, 2, k+1)
+      plot(p, s, ax, 'w' if rs.inlier_mask_[k] else 'orange')
+      ax.set_xlim('2015-08', '2017-07-10')
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/SMAP_pp_mm.png]]
+
+# ###
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/SMAP_pp_mm_comparison.png]]
+
+#+begin_src ipython :results raw :session :savefig "SMAP_sta_grid.png"
+  fig, ax = plt.subplots(subplot_kw={'projection': crs.PlateCarree()}, figsize=(10, 10))
+  colors = plt.get_cmap('tab20').colors
+  dx, dy = np.diff(smap.col).mean(), abs(np.diff(smap.row).mean())
+  for k, (p, s) in enumerate(ij.items()):
+      ax.scatter(*sta.loc[s, ['lon', 'lat']].as_matrix().astype(float).T, transform=crs.PlateCarree(), color=colors[k%20])
+      r = smap.row.values[p[0]]
+      c = smap.col.values[p[1]]
+      ax.add_patch(patches.Rectangle((c-dx/2, r-dy/2), dx, dy, facecolor=colors[k%20], alpha=0.5))
+      for n, m in sta.loc[s].iterrows():
+          ax.annotate(n, xy=m[['lon', 'lat']].astype(float),
+                      xycoords=crs.PlateCarree()._as_mpl_transform(ax))
+  figbg(ax)
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/SMAP_sta_grid.png]]
+
+
+#+begin_src ipython :results silent :session
+  def time(x):
+      try: return np.datetime64(x.item())
+      except: return np.nan
+
+  def tpl1(x, idx):
+      y = x.iloc[x.index.get_indexer(idx) + 1]
+      y.index = idx
+      return y
+
+  lij = list(ij.items())
+  def cell(p, s):
+      t = [time(t) for t in smap.tb_time_utc.isel(row=p[0], col=p[1])]
+      x = pd.DataFrame(smap.soil_moisture.isel(row=p[0], col=p[1]).values, columns=['smap'], index=t)
+      x = x.loc[x.index.dropna()]
+      T = pd.DataFrame(smap.surface_temperature.isel(row=p[0], col=p[1]).values, columns=['temp'], index=t)
+      T = T.loc[T.index.dropna()]
+      dx = x.diff()
+      idx = x[dx > 0].dropna().index
+      hdx = x.iloc[x.index.get_indexer(idx) - 1].index
+      y = R[s].mean(1)
+      y = pd.DataFrame([y.loc[a: b].sum() for a, b in zip(hdx, idx)], index=idx, columns=['ceaza'])
+      return pd.concat((dx.loc[idx], tpl1(dx, idx), T.loc[idx], tpl1(T, idx), y), 1)
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+# appears not absolutely necessary since statsmodels.tsa.ar_model.AR takes a time parameter
+  def resample(x):
+      y = x.resample('H').mean().dropna()
+      t = y.index.values
+      t23 = y.index.hour == 23
+      t[t23] = t[t23] - pd.Timedelta('1H')
+      y.index = t
+      return y.asfreq('12H').interpolate()
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  from statsmodels.tsa import ar_model
+
+  class regress(object):
+      def __init__(self, z):
+          self.r = ar_model.AR(z['smap'], z.index).fit(1).resid.to_frame()
+          self.i = self.r[(self.r > .05) & (self.r.shift(-1) > 0)].dropna().index
+          x = self.r.loc[self.i]
+          # x = pd.concat((self.r, self.r.shift(-1)), 1).loc[self.i]
+          # x = pd.concat((self.r, z['temp']), 1).loc[self.i]
+          self.b = np.linalg.lstsq(x, z.loc[self.i, 'ceaza'])
+          self.x = pd.concat((z['ceaza'], x.dot(self.b[0])), 1)
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig "reg_map.png"
+  fig, axs = plt.subplots(1, 2, subplot_kw={'projection': crs.PlateCarree()}, figsize=(10, 7))
+  fig.subplots_adjust(wspace=.1)
+  dx, dy = np.diff(smap.col).mean(), abs(np.diff(smap.row).mean())
+  def sm(z, cmap, norm=None):
+      m = cm.ScalarMappable(norm=norm, cmap=cmap)
+      m.set_array(z)
+      return (m, m.to_rgba(z.flatten()))
+  err_norm = (lambda x: cm.colors.Normalize(-x, x))(max(abs((yh - y)[rs.inlier_mask_])))
+  orig_sm, error_sm = sm(y, 'cividis'), sm(yh - y, 'PiYG_r', err_norm)
+  for k, (p, s) in enumerate(ij.items()):
+      r = smap.row.values[p[0]]
+      c = smap.col.values[p[1]]
+      axs[0].add_patch(patches.Rectangle((c-dx/2, r-dy/2), dx, dy, 
+                                         facecolor=orig_sm[1][k], linewidth=0))
+      patchd = {'linewidth': 0, 'zorder': 1}
+      if not rs.inlier_mask_[k]:
+          patchd = {'edgecolor': 'orange', 'linewidth': 2, 'zorder': 10}
+      axs[1].add_patch(patches.Rectangle((c-dx/2, r-dy/2), dx, dy, facecolor=error_sm[1][k], **patchd))
+
+      for ax in axs:
+          ax.scatter(*sta.loc[s, ['lon', 'lat']].as_matrix().astype(float).T, transform=crs.PlateCarree(),
+                     edgecolor='w', marker='o', facecolor='none', zorder=20)
+          for n, m in sta.loc[s].iterrows():
+              ax.annotate(n, xy=m[['lon', 'lat']].astype(float),
+                          xycoords=crs.PlateCarree()._as_mpl_transform(ax), zorder=20)
+
+  for ax in axs:
+      coq(ax, lines_only=True, transparent=True)
+  plt.colorbar(orig_sm[0], ax=axs[0])
+  plt.colorbar(error_sm[0], ax=axs[1])
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/reg_map.png]]
+
+###
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/9I8Swi.png]]
+

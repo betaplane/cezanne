@@ -1774,8 +1774,7 @@ smap.soil_moisture.isel(row=i,col=j).mean('time').item()
 
 #+begin_src ipython :results silent :session
   from geo import stations_in_domain
-  with xr.open_dataset('/home/arno/Documents/data/WRF/3d/geo_em.d03.nc') as ds:
-      sta = stations_in_domain(hh.sta, ds)
+  sta = stations_in_domain(hh.sta, '/home/arno/Documents/data/WRF/3d/geo_em.d03.nc')
 
   k = hh.data_gaps(T.loc['2015-05':'2017-07'], 48).intersection(sta.index)
 
@@ -1880,7 +1879,9 @@ smap.soil_moisture.isel(row=i,col=j).mean('time').item()
 ***** grid / obs nudging - &fdda
 ***** obsgrid (same as nudging?)
 ****** Pleim-Xiu LSM nudging
-**** topo_shading = 1
+**** topo_shading = 1, slope_rad = 1 (depends on ra_sw_physics?)
+**** SST
+**** obsgrid observation nudging
 *** tasks
 **** TODO air humidity in model and data
 ***** including radiosondes

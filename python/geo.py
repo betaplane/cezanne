@@ -79,9 +79,10 @@ def domain_kml(directory):
             k.newlinestring(coords = coords)
     return k
 
-def stations_in_domain(sta, ds):
+def stations_in_domain(sta, geo_em):
     geom = import_module('shapely.geometry')
-    coords = list(zip(ds.corner_lons[-4:], ds.corner_lats[-4:]))
+    with open_dataset(geo_em) as ds:
+        coords = list(zip(ds.corner_lons[-4:], ds.corner_lats[-4:]))
     p = geom.Polygon(geom.LinearRing(coords))
     i = [p.contains(geom.Point(ll)) for ll in sta[['lon', 'lat']].astype(float).values]
     return sta[i]
@@ -95,7 +96,7 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
     :param lon: array of point longitudes
     :param lat: array of point latitudes
     :param mask: 1-0 mask of grid points to be taken into account (e.g. land mask)
-    :returns: i, j arrays of grid cell indexes
+    :returns: tuple(k, i, j) where i, j are the lon, lat index arrays corresponding to index array k in the input lon, lat arrays (in case of masking)
 
     """
     from shapely.geometry import MultiPoint, Polygon, LinearRing
@@ -113,8 +114,8 @@ def cells(grid_lon, grid_lat, lon, lat, mask=None):
     lr = [Polygon(LinearRing(a)) for a in k]
     mp = MultiPoint(list(zip(lon, lat)))
     c = [[l for l, r in enumerate(lr) if r.contains(p)] for p in mp]
-    c = [r[0] for r in c if len(r)>0]
-    return np.unravel_index(c, s) if mask is None else (i[c], j[c])
+    l, c = zip(*[(l, r[0]) for l, r in enumerate(c) if len(r)>0])
+    return tuple(np.r_[(l, ), np.unravel_index(c, s)]) if mask is None else (l, i[list(c)], j[list(c)])
 
 class Squares(object):
     """Determine the 4 points in a model grid which form a rectangular grid cell containing any points of interest, for example for interpolation (see :mod:`.data.interpolate`). All methods return a DataArray containing:
