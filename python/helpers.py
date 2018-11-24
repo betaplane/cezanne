@@ -217,3 +217,30 @@ def stationize_str(s, *args, **kwargs):
 
 def coord_names(xr, *names):
     return [[c for c in xr.coords if re.search(n, c, re.IGNORECASE)][0] for n in names]
+
+def table(df):
+    """Format a small :class:`~pandas.DataFrame` as an `org-mode table<https://orgmode.org/manual/Tables.html>`_.
+
+    :param df: input DataFrame
+    :type df: :class:`~pandas.DataFrame`
+    :returns: org-mode table as IPython display string with 'text/org' MIME type
+
+    """
+    disp = import_module('IPython.display')
+
+    def index(idx):
+        if isinstance(idx, pd.MultiIndex):
+            x = list(idx)
+            return [x[0]] +[[' ' if x[i][j] == z else z for j, z in enumerate(y)]
+                            for i, y in enumerate(x[1:])]
+        else:
+            return [[i] for i in idx]
+
+    idx = index(df.index)
+    cols = index(df.columns)
+    M = df.as_matrix()
+    s = '|\n|'.join('|'.join(' ' for _ in range(len(idx[0]))) + '|' + \
+                          '|'.join(str(c[i]) for c in cols) for i in range(len(cols[0]))) + \
+        '|\n|' + '|'.join('-' for _ in range(len(idx[0]) + len(M[0]))) + '|\n|' + \
+        '|\n|'.join('|'.join(str(i) for j in z for i in j) for z in zip(idx, M))
+    return disp.publish_display_data({'text/org': '|' + s + '|'})

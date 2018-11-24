@@ -161,7 +161,7 @@ class Coquimbo(Configurable):
 
     """
 
-    bbox = List([-72.2, -69.8, -32.5, -28.2])
+    bbox = List([-72.2, -69.8, -32.5, -28.2]).tag(config=True)
     """configurable bounding box (minx, miny, maxx, maxy) of the region"""
 
     config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)

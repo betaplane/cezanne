@@ -1430,7 +1430,7 @@ err_12h = daily_err(slice(16, 40), T2_12h, T).mean('start')
 #+end_src
 
 #+RESULTS:
-[[file:./obipy-resources/T2/MEA_min_max_corr.png]]
+[[file:./obipy-resources/T2/MAE_min_max_corr.png]]
 #+CAPTION: Same as above, but for MAE.
 
 #+begin_src ipython :results raw :session :savefig "mean_min_max_bias_drad.png"
