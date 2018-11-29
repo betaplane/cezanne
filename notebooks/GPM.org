@@ -1,0 +1,48 @@
+#+begin_src ipython :results silent :session
+  import pandas as pd
+  import helpers as hh
+  import geo
+
+  R = hh.stationize(pd.read_hdf('/home/arno/Documents/data/CEAZAMet/station_data.h5', 'pp_mm'))
+#+end_src
+
+#+begin_src ipython :results silent :session
+  wr = xr.open_mfdataset('/home/arno/Documents/data/WRF/3d/RAINNC_?_diff.nc', concat_dim='start')
+  lon, lat = wr.XLONG[0, 0, :, :].load().squeeze(), wr.XLAT[0, 0, :, :].load().squeeze()
+  rain = wr['RAINNC'].isel(Time=slice(24, 48)).load()
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  with xr.open_dataset('/home/arno/Documents/data/WRF/3d/geo_em.d03.nc') as ds:
+      sta = geo.stations_in_domain(ds, hh.sta)
+      idx = R.columns.intersection(sta.index)
+      sta = sta.loc[idx]
+      _, i, j = geo.cells(ds, *sta[['lon', 'lat']].astype(float).as_matrix().T)
+      R = R[idx]
+
+  ri = rain.isel_points(south_north=i, west_east=j).load()
+#+end_src
+
+#+begin_src ipython :results silent :session
+  x = ri.stack(time=('start', 'Time')).sortby('XTIME')
+  rr = pd.DataFrame(x.transpose('time', 'points').values, index=x.XTIME, columns=sta.index)
+#+end_src
+
+#+begin_src ipython :results silent :session
+  d0 = pd.read_csv('/home/arno/Downloads/IMERG_V05_b0.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1)
+  d1 = pd.read_csv('/home/arno/Downloads/IMERG_V05_b10000.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1)
+  d2 = pd.read_csv('/home/arno/Downloads/IMERG_V05_b50000.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1)
+#+end_src
+
+#+begin_src ipython :results raw :session
+r = R.loc['2017-05': '2017-06', 'LSC']
+x = g['LSC'].resample('H').mean()
+plt.figure()
+plt.plot(r.index, r, 'x')
+plt.plot(x.index, x, 'x')
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/GPM/MnIgD8.png]]
+

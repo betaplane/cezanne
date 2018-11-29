@@ -37,7 +37,8 @@ extensions = ['sphinx.ext.autodoc',
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
     'sphinx.ext.githubpages',
-    'sphinxcontrib.bibtex'
+    'sphinxcontrib.bibtex',
+    'sphinx_js'
 ]
 
 # http://docs.readthedocs.io/en/latest/faq.html#i-get-import-errors-on-libraries-that-depend-on-c-modules
@@ -208,3 +209,5 @@ intersphinx_mapping = {
     'tables': ('https://www.pytables.org/', None),
     'h5py': ('http://docs.h5py.org/en/stable/', None)
 }
+
+js_source_path = ['../GEE/']

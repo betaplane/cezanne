@@ -14,7 +14,7 @@
 .. automodule:: python.data.NCDC
     :members:
 
-.. automodule:: python.data.SMAP
+.. automodule:: python.data.EarthData
     :members:
 
 .. _netCDF4: http://unidata.github.io/netcdf4-python/

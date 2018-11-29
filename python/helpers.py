@@ -219,7 +219,7 @@ def coord_names(xr, *names):
     return [[c for c in xr.coords if re.search(n, c, re.IGNORECASE)][0] for n in names]
 
 def table(df):
-    """Format a small :class:`~pandas.DataFrame` as an `org-mode table<https://orgmode.org/manual/Tables.html>`_.
+    """Format a small :class:`~pandas.DataFrame` as an `org-mode table <https://orgmode.org/manual/Tables.html>`_.
 
     :param df: input DataFrame
     :type df: :class:`~pandas.DataFrame`

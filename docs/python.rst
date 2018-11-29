@@ -78,3 +78,8 @@ Filtering
 
 .. automodule:: python.filters
    :members:
+
+Google Earth Engine
+===================
+
+.. js:autofunction:: format_table

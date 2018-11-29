@@ -244,8 +244,9 @@
 [[file:./obipy-resources/ppt-smois/reg_map.png]]
 
 ** aggregate stats
+*** TODO redo this because of not having 'copied' coastal before
 #+begin_src ipython :results raw :session
-  jdx = coastal[:]
+  jdx = coastal.copy()
   jdx[13] = False # Laghu - big errors in WRF
   w=np.asarray(wrf_rain).reshape((-1, 1))
   d = pd.DataFrame(np.r_[[h - y for h in [yh, yhc, yho, w]]].squeeze().T,
@@ -309,13 +310,68 @@
 #+begin_src ipython :results silent :session
   from statsmodels.tsa import ar_model
 
+  coastal = [(105, 76), (103, 76), (106, 76), (102, 76), (104, 76)]
+
   class regress(object):
       def __init__(self, z):
           self.r = ar_model.AR(z['smap'], z.index).fit(1).resid.to_frame()
-          self.i = self.r[(self.r > .05) & (self.r.shift(-1) > 0)].dropna().index
+          self.i = self.r[(self.r > self.r.std()) & (self.r.shift(-1) > 0)].dropna().index
           x = self.r.loc[self.i]
           # x = pd.concat((self.r, self.r.shift(-1)), 1).loc[self.i]
           # x = pd.concat((self.r, z['temp']), 1).loc[self.i]
           self.b = np.linalg.lstsq(x, z.loc[self.i, 'ceaza'])
           self.x = pd.concat((z['ceaza'], x.dot(self.b[0])), 1)
+
+  zz = {}
+  for p, s in ij.items():
+      try:
+          z = cell(p, s)
+          zz[p] = regress(z)
+          print(s)
+      except:
+          print(s, ' failed')
 #+end_src
+
+#+begin_src ipython :results raw :session :savefig "ar1_model_by_station.png"
+  def plot(ij, stations, r, ax, color='w'):
+      plt.plot(r.x.index, r.x['ceaza'], color='lightgreen')
+      plt.plot(r.x.index, r.x[0].fillna(0), color='magenta')
+      ax.set_xticks([])
+      ylim = ax.get_ylim()
+      dy = np.diff(ylim).item()
+      plt.text('2015-08', ylim[1]-dy/4, ', '.join(stations), color=color)
+      cplots.axesColor(ax, color)
+
+  fig = plt.figure(figsize=(10, 9))
+  fig.subplots_adjust(wspace=.3)
+  for k, (p, s) in enumerate(ij.items()):
+      if p not in zz: continue
+      ax = plt.subplot(11, 2, k+1)
+      plot(p, s, zz[p], ax, 'orange' if p in coastal else 'w')
+      ax.set_xlim('2015-08', '2017-07-10')
+#+end_src
+
+#+RESULTS:
+[[file:./obipy-resources/ppt-smois/ar1_model_by_station.png]]
+#+begin_src ipython :results raw :session
+  def err(r):
+      x = r.x.fillna(0).sum().diff()[0].item()
+      dt = np.diff(np.array(r.x.index[[0, -1]]).astype('datetime64[s]').astype(float))
+      return x * 24 * 3600 * 365.25 / dt.item()
+
+  e = {p: err(r) for p, r in zz.items() if p not in coastal}
+  np.mean(np.abs(list(e.values())))
+#+end_src
+
+#+RESULTS:
+: 86.76465745838108
+
+#+begin_src ipython :results raw :session
+  e = {p: err(r) for p, r in zz.items() if p not in coastal and p != (103, 79)}
+  np.mean(np.abs(list(e.values())))
+#+end_src
+
+#+RESULTS:
+: 88.414309593949454
+
+
