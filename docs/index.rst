@@ -11,6 +11,8 @@ Welcome to cezanne's documentation!
    :caption: Contents:
 
    python
+   GEE
+   nandu
 
 Indices and tables
 ==================
