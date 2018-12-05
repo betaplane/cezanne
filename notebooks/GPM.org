@@ -30,10 +30,10 @@
 
 #+begin_src ipython :results silent :session :exports none
   # I shift only by 3 hours s.t. the resulting timestamp refers to the end of the hour, not the beginning
-  d0 = pd.read_csv('/home/arno/Downloads/IMERG_V05_b0.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1).resample('H').mean().shift(-3, 'H')
-  d1 = pd.read_csv('/home/arno/Downloads/IMERG_V05_b10000.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1).resample('H').mean().shift(-3, 'H')
-  d2 = pd.read_csv('/home/arno/Downloads/IMERG_V05_b50000.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1).resample('H').mean().shift(-3, 'H')
-  hq = pd.read_csv('/home/arno/Downloads/IMERG_V05_HQ.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1).resample('H').mean().shift(-3, 'H')
+  d0 = pd.read_csv('/home/arno/Documents/data/GEE/IMERG_V05_b0.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1).resample('H').mean().shift(-3, 'H')
+  d1 = pd.read_csv('/home/arno/Documents/data/GEE/IMERG_V05_b10000.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1).resample('H').mean().shift(-3, 'H')
+  d2 = pd.read_csv('/home/arno/Documents/data/GEE/IMERG_V05_b50000.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1).resample('H').mean().shift(-3, 'H')
+  hq = pd.read_csv('/home/arno/Documents/data/GEE/IMERG_V05_HQ.csv', index_col='date', parse_dates=True).drop(['system:index', '.geo'], 1).resample('H').mean().shift(-3, 'H')
 #+end_src
 
 #+begin_src ipython :results raw :session :exports results
@@ -104,12 +104,13 @@
       cols = a.columns.intersection(b.columns)
       return pd.DataFrame([cor(c) for c in cols], index=cols)
 
-  b = (d0 - R).dropna(0, 'all')
-  pears = pd.concat([corr(vv, x, 0) for x in [b, rr]], 1, keys=['GPM', 'WRF'])
+  a = (d0 - R).dropna(0, 'all')
+  b = (rr - R).dropna(0, 'all')
+  pears = pd.concat([corr(vv, x, 0) for x in [a, b]], 1, keys=['GPM', 'WRF'])
 #+end_src
 
 
-#+begin_src ipython :results raw :session :savefig "error_wind_correlation.png" :exports results :style nandu_dark
+#+begin_src ipython :results raw :session :savefig "error_wind_correlation.png" :exports results
   fig = plt.figure(figsize=(7, 12))
   fig.subplots_adjust(wspace=.05, hspace=.05)
   gs = gridspec.GridSpec(2, 1)
@@ -121,7 +122,8 @@
   cplots.row_label(gs[1], 'P-value')
 #+end_src
 
-#+CAPTION: Pearson correlation (*top*) and P-value (*bottom*) between wind speed and precipitation error for GPM (*left*) and WRF (*right*) estimates w.r.t. observations. Error is positive for an **overestimation** of precipitation. While the GPM estimate has a few data points with `significant' corrlation, the direction of the correlation is often wrong as far as wind-induced undercatch is concerned (positive corrlation would be expected). For the WRF estimates, however, both direction of correlation and P-values seem to indicate the possibility of undercatch being involved.
+#+CAPTION: Pearson correlation (*top*) and P-value (*bottom*) between wind speed and precipitation error for GPM (*left*) and WRF (*right*) estimates w.r.t. observations. Error is positive for an **overestimation** of precipitation.
+#+ATTR_ORG: :width 600
 #+RESULTS:
-[[./obipy-resources/GPM/error_wind_correlation.png]]
+[[/home/arno/Documents/code/notebooks/obipy-resources/GPM/error_wind_correlation.png]]
 
