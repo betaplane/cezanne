@@ -198,8 +198,8 @@ class Squares(object):
 
 
 def nearest(grid_lon, grid_lat, lon, lat):
-    from pyproj import Geod
-    inv = partial(Geod(ellps='WGS84').inv, lon, lat)
+    pyproj = import_module('pyproj')
+    inv = partial(pyproj.Geod(ellps='WGS84').inv, lon, lat)
 
     def dist(x, y):
         return inv(x, y)[2]

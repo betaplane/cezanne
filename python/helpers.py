@@ -190,7 +190,7 @@ def avg(df, interval):
 def stationize(df, aggr='prom'):
     """ Return a copy of a DataFrame with only station codes as column labels. If the resulting set of column lables is not unique (more than one sensor for the same variable at the same station), the returned copy has the ``sensor_code`` as column labels.
 
-    :param df: Input DataFrame with :class:`pandas.MultiIndex` in columns. If :obj:`str`, load the DataFrame from the ``.h5`` file specified as :attr:`data.CEAZAMet.station_data`.
+    :param df: Input DataFrame with :class:`pandas.MultiIndex` in columns. If :obj:`str`, interpret it as the key to load from the ``.h5`` file specified as :attr:`data.CEAZAMet.station_data`.
     :type df: :class:`~pandas.DataFrame` (or :obj:`str`)
     :param aggr: If the input DataFrame has several ``aggr`` levels (e.g. ``prom``, ``min``, ``max``), return this one.
     :type aggr: :obj:`str`
@@ -212,7 +212,7 @@ def stationize(df, aggr='prom'):
 
 @stationize.register(str)
 def stationize_str(s, *args, **kwargs):
-    df = pd.read_hdf(config.CEAZAMet.station_data, s)
+    df = pd.read_hdf(config.Field.file_name, s)
     return stationize(df, *args, **kwargs)
 
 def coord_names(xr, *names):
