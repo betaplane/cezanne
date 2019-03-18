@@ -21,6 +21,7 @@ import os
 import sys
 sys.path.insert(0, os.path.abspath('../python'))
 sys.path.insert(0, os.path.abspath('../'))
+sys.path.insert(0, os.path.expanduser('~/Dropbox/work/Antarctica'))
 
 # -- General configuration ------------------------------------------------
 
@@ -49,7 +50,7 @@ class Mock(MagicMock):
         return MagicMock()
 
 # somehow the autodoc version doesn't work properly
-autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables']
+autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables', 'osgeo']
 
 sys.modules.update((n, Mock()) for n in autodoc_mock_imports)
 
@@ -205,7 +206,8 @@ intersphinx_mapping = {
     'ipython': ('https://ipython.readthedocs.io/en/stable/', None),
     'condor': ('https://betaplane.github.io/condor/', None),
     'tables': ('https://www.pytables.org/', None),
-    'h5py': ('http://docs.h5py.org/en/stable/', None)
+    'h5py': ('http://docs.h5py.org/en/stable/', None),
+    'shapely': ('https://shapely.readthedocs.io/en/stable/', None)
 }
 
 js_source_path = ['../GEE/']

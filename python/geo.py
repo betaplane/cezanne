@@ -3,6 +3,23 @@ import numpy as np
 from xarray import DataArray, Dataset, open_dataset, concat
 from functools import singledispatch, partial
 from importlib import import_module
+from traitlets.config.configurable import Configurable, Config
+from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
+from traitlets import List, Unicode
+import os
+
+class Loc(Configurable):
+    bbox = List([]).tag(config=True)
+
+    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
+
+    def __init__(self, **kwargs):
+        try:
+            cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
+        except ConfigFileNotFound:
+            cfg = Config()
+        super().__init__(config=cfg, **kwargs)
+
 
 # I think this was the old routine that generated the cell boxes
 def kml(name, lon, lat, code=None, nc=None):

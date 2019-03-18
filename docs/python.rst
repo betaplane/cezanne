@@ -47,7 +47,6 @@ WRF
   
 Spatial Regression
 ===================
-
 .. automodule:: python.laplace
    :members:
 
@@ -57,24 +56,25 @@ Various linear stats
 
 Helpers
 =======
-             
 .. automodule:: python.helpers
    :members:
 
 Geo
 ===
-
 .. automodule:: python.geo
    :members:
 
 Plotting
 ========
-
 .. automodule:: python.plots
    :members:
 
 Filtering
 =========
-
 .. automodule:: python.filters
+   :members:
+
+Müller Ice Shelf
+================
+.. automodule:: Mueller
    :members:
