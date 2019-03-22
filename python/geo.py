@@ -10,6 +10,7 @@ import os
 
 class Loc(Configurable):
     bbox = List([]).tag(config=True)
+    path = Unicode('').tag(config=True)
 
     config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
 

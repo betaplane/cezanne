@@ -15,6 +15,7 @@ import xarray as xr
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from . import DataApp
 
 
 class SessionWithHeaderRedirection(requests.Session):
@@ -40,11 +41,10 @@ class SessionWithHeaderRedirection(requests.Session):
                 del headers['Authorization']
         return
 
-class EarthData(Application):
+class EarthData(DataApp):
     """Class to hold EarthData credentials and create a :class:`SessionWithHeaderRedirection`.
 
     """
-    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
     username = Unicode().tag(config=True)
     "EarthData username"
     password = Unicode().tag(config=True)
@@ -52,10 +52,8 @@ class EarthData(Application):
     url = Unicode().tag(config=True)
     "url of the particular dataset to be downloaded"
 
-    def __init__(self, config={}, **kwargs):
-        cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
-        cfg.merge(config)
-        super().__init__(config=cfg, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.session = SessionWithHeaderRedirection(self.username, self.password)
 
     def __del__(self):

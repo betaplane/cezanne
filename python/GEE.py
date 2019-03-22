@@ -5,13 +5,14 @@ Google Earth Engine
 A module that demonstrates how to use the GEE python API and implements some wrapping.
 
 """
-import ee
+import ee, os
 from ee import mapclient
 import numpy as np
 from geo import Loc
-from traitlets import List
+from traitlets import List, Unicode, Integer
 from importlib import import_module
-
+from cartopy.io.shapereader import Reader
+from cartopy import crs
 
 class iList(object):
 
@@ -36,13 +37,19 @@ class GEE(object):
 
     time_fmt = "YYYY-MM-dd'T'HH:mm:ss"
 
-    def __init__(self, collection=None, copy=None):
+    def __init__(self, collection=None, copy=None, sort=True):
         if copy is not None:
             for k, v in copy.__dict__.items():
                 setattr(self, k, v)
         else:
             ee.Initialize() # as long as we use the 'copy' hack - later could be just module leve call
             self.ic = ee.ImageCollection(collection)
+            if sort:
+                self.ic = self.ic.sort('system:time_start')
+            self._list = iList(self.ic)
+
+    def __getitem__(self, n):
+        return self._list[n]
 
     def meta(self):
         self.size = self.ic.size().getInfo()
@@ -70,6 +77,16 @@ class GEE(object):
             return ee.List(newlist).add(d)
         c = self.ic if collection is None else collection
         return np.array(c.iterate(f, []).getInfo(), dtype='datetime64[s]')
+
+    def list_properties(self, prop_name, collection=None):
+        c = self.ic if collection is None else collection
+        return c.iterate(lambda i, l: ee.List(l).add(i.get(prop_name)), []).getInfo()
+
+    def time_series(self, reducer=None, geometry=None, collection=None):
+        c = self.ic if collection is None else collection
+        g = self.shelf if geometry is None else geometry
+        r = ee.Reducer.mean() if reducer is None else reducer
+        return c.iterate(lambda i, l: ee.List(l).add(i.reduceRegion(reducer=r, geometry=g)), []).getInfo()
 
     def date(self, s, max=1000):
         a = np.datetime64(s)
@@ -143,14 +160,21 @@ class GEE(object):
         return job
 
     def exportMovie(self, name, fps=6, **vis_params):
+        def f(im):
+            im.visualize(**vis_params)
         coll = self.ic.map(lambda i: i.visualize(**vis_params))
         job = ee.batch.Export.movie.toDrive(coll, description=name, region=self.bbox_ring(), framesPerSecond=fps)
         job.start()
         return job
 
+
 class Mueller(Loc, GEE):
 
+    path = Unicode('').tag(config=True)
     map_center = List([-66.8, -67.3, 10]).tag(config=True)
+    coastline_file = Unicode('').tag(config=True)
+    shelf_features = List([]).tag(config=True)
+    quanta_epsg = Integer().tag(config=True)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -161,3 +185,48 @@ class Mueller(Loc, GEE):
         self.ic = self.ic.filterBounds(ee.Geometry.Rectangle(self.bbox))
         self.meta()
 
+    @property
+    def shelf(self):
+        """returns Mueller ice shelf as :class:`shapely.geometry.Polygon` based on :attr:`coastline_file`"""
+        R = Reader(os.path.join(self.path, self.coastline_file))
+        recs = [r for r in R.records() if r.attributes['FID_Coastl'] in self.shelf_features]
+        # order is important
+        geoms = [[r.geometry for r in recs if r.attributes['FID_Coastl']==f][0] for f in self.shelf_features]
+        pts = np.hstack([np.r_['1,2', p.xy] for g in geoms for p in g.geoms]).T.tolist()
+        # important! planar geometry ('False')
+        # https://developers.google.com/earth-engine/geometries_planar_geodesic
+        return ee.Geometry.Polygon(pts, 'EPSG:{}'.format(self.quanta_epsg), False)
+
+
+def write_times_on_movie(filename, times, strings):
+    cv2 = import_module('cv2')
+    tqdm = import_module('tqdm')
+    cap = cv2.VideoCapture(filename)
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    out = cv2.VideoWriter(
+        os.path.join(os.path.split(filename)[0], 'out.mp4'),
+        int(cap.get(cv2.CAP_PROP_FOURCC)),
+        int(cap.get(cv2.CAP_PROP_FPS)),
+        (w, h)
+    )
+
+    frames = []
+    with tqdm.tqdm(total = 2*n) as prog:
+        for i in range(n):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(frame)
+            prog.update(1)
+
+        for i in np.argsort(times):
+            frame = frames[i]
+            s = str(times[i]) + '  ' + strings[i]
+            cv2.putText(frame, s, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1., (255, 255, 255), 2,cv2.LINE_AA)
+            out.write(frame)
+            prog.update(1)
+
+    out.release()
+    cap.release()
