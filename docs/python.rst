@@ -78,3 +78,8 @@ Müller Ice Shelf
 ================
 .. automodule:: Mueller
    :members:
+
+Zotero
+======
+.. automodule:: python.zotero
+   :members:

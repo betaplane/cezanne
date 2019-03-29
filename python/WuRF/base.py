@@ -8,7 +8,7 @@ There are two submodules with roughly identical APIs in this package, one using 
 Common interface options
 ========================
 
-All options to the interfaces are specified using the `traitlets.config  <https://traitlets.readthedocs.io/en/stable/config.html>`_ system. The appear in code as class attributes (:class:`traits <traitlets.TraitType>`) which will be populated with values once the class is instantiated. They can be specified as arguments to the class instantiation call (as keyword arguments with the same name as the traits), in a :attr:`config file <WuRFiles.config_file>`, and as `command line arguments <https://traitlets.readthedocs.io/en/stable/config.html#command-line-arguments>`_ when running a file as script.
+All options to the interfaces are specified using the :mod:`traitlets.config` system. The appear in code as class attributes (:class:`traits <traitlets.TraitType>`) which will be populated with values once the class is instantiated. They can be specified as arguments to the class instantiation call (as keyword arguments with the same name as the traits), in a :attr:`config file <WuRFiles.config_file>`, and as `command line arguments <https://traitlets.readthedocs.io/en/stable/config.html#command-line-arguments>`_ when running a file as script.
 
 The interface options common to both concatenators are in part those of the :class:`.WurFiles`:
     * :attr:`~.WuRFiles.paths`

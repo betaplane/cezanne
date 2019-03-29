@@ -50,7 +50,7 @@ class Mock(MagicMock):
         return MagicMock()
 
 # somehow the autodoc version doesn't work properly
-autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables', 'osgeo']
+autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables', 'osgeo', 'pyzotero']
 
 sys.modules.update((n, Mock()) for n in autodoc_mock_imports)
 
@@ -207,7 +207,8 @@ intersphinx_mapping = {
     'condor': ('https://betaplane.github.io/condor/', None),
     'tables': ('https://www.pytables.org/', None),
     'h5py': ('http://docs.h5py.org/en/stable/', None),
-    'shapely': ('https://shapely.readthedocs.io/en/stable/', None)
+    'shapely': ('https://shapely.readthedocs.io/en/stable/', None),
+    'pyzotero': ('https://pyzotero.readthedocs.io/en/stable', None)
 }
 
 js_source_path = ['../GEE/']
