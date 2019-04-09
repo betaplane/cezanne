@@ -1,0 +1,129 @@
+* Note: this is not the same as the hydro.ipynb (yet)
+* links
+** http://www.hidro-limari.info/
+** https://earth.boisestate.edu/drycreek/data/
+
+#+begin_src ipython :results silent :session
+  import requests, re
+  from bs4 import BeautifulSoup as soup
+  from io import StringIO
+  import pandas as pd
+
+  r = requests.get('https://earth.boisestate.edu/drycreek/data/lower-gage/')
+  r.raise_for_status()
+  s = soup(r.text, 'html.parser')
+  def f(a):
+      r = requests.get(a.attrs['href'])
+      r.raise_for_status()
+      return pd.read_csv(StringIO(r.text), skiprows=18, parse_dates=True, index_col='DateTime', na_values=-6999)
+
+  df = pd.concat([f(a) for a in s.find_all('a', {'href': re.compile('HrlySummary')})]).dropna('all', 1)
+#+end_src
+
+#+begin_src ipython :results silent :session
+  # df is in ~/Documents/data/hydro/DryCreekBoise.h5
+  df = df[df.index.notnull()].replace(-6934, np.nan).sort_index()
+  d = df['2003':'2016'].iloc[:, 1] # no duplicates etc
+  d = d['2011-08':'2014-04']       # no gaps
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  from statsmodels.tsa import ar_model
+
+  a = ar_model.AR(d).fit(1)
+
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  import numpy as np
+
+  N = 256
+  C = 16
+  s = 1
+  t = np.linspace(0, C, N)
+  y = np.sin(2* np.pi * t) + np.random.rand(N) * s
+
+  f = np.fft.fftfreq(N)
+  f = f[f>0]
+
+  x = 2 * np.pi * np.linspace(0, 1, N).reshape((-1, 1))
+  X = x / f
+  X = np.hstack((np.sin(X), np.cos(X)))
+  l = np.linalg.lstsq(X, y)
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  n = np.arange(N).reshape(-1, 1)
+  n1 = np.r_[n[:100], n[110:]]
+  k = np.arange(-N/8, N/8)
+  F = np.exp(-2j * np.pi * n1 * k / N)
+  G = np.exp(2j * np.pi * n * k / N)
+  yh = G.dot(np.r_[y[:100], y[110:]].dot(F)) / N
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  import tensorflow as tf
+
+  def grdesc(features, labels, learn, steps):
+      gr = tf.Graph()
+      with gr.as_default():
+          x = tf.placeholder(tf.float64)
+          targ = tf.placeholder(tf.float64)
+          a = tf.Variable(tf.random_normal([1], dtype=tf.float64), dtype=tf.float64)
+          b = tf.Variable(tf.random_normal([1], dtype=tf.float64), dtype=tf.float64)
+          y = a + b * x
+          z = y - tf.reduce_min(targ - y)
+          loss = tf.losses.mean_squared_error(targ, z)
+          opt = tf.train.GradientDescentOptimizer(learn).minimize(loss)
+      with tf.Session(graph=gr) as s:
+          tf.global_variables_initializer().run(session=s)
+          for i in range(steps):
+              r = s.run([opt, loss], {x: features, targ: labels})
+              if i % 100 == 0:
+                  print(i, r)
+          print(i, r)
+          return s.run([a, b])
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  import bayespy as bp
+  from statsmodels.tools import add_constant
+
+  class BayesLinReg(object):
+      def __init__(self, x, steps=1000):
+          self.B = bp.nodes.GaussianARD([0, 1], 1e-6, shape=(2,))
+          self.F = bp.nodes.Dot(self.B, add_constant(x[:-1]))
+          self.tau = bp.nodes.Gamma(1e-3, 1e-3)
+          self.Y = bp.nodes.GaussianARD(self.F, self.tau)
+          self.Y.observe(x[1:])
+          self.Q = bp.inference.VB(self.Y, self.B, self.tau)
+          self.Q.update(repeat=steps)
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  import edward as ed
+  import tensorflow as tf
+
+  class BLM(object):
+      def __init__(self, x, steps=500, K=2):
+          self.gr = tf.Graph()
+          tf.InteractiveSession(graph=self.gr)
+          with self.gr.as_default():
+              N = len(x) - 1
+              X = tf.placeholder(tf.float32, [N])
+              w = ed.models.Normal(loc=tf.ones([K, 1]), scale=tf.ones([K, 1]))
+              y = ed.models.Normal(loc=tf.matmul(w, tf.expand_dims(X, 0)), scale=tf.ones([K, N]))
+
+              self.qw = ed.models.Normal(loc=tf.get_variable("qw/loc", [K, 1]),
+                                    scale=tf.nn.softplus(tf.get_variable("qw/scale", [K, 1])))
+              self.infer = ed.KLqp({w: self.qw}, data={X:x[:-1], y:np.repeat(x[1:].reshape(1, -1), K, 0)})
+              self.infer.run(n_samples=5, n_iter=steps)
+#+end_src
+
+
