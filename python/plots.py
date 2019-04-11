@@ -256,3 +256,9 @@ class Coquimbo(Configurable):
 def axesColor(ax, color):
     for s in ['bottom', 'top', 'left', 'right']:
         ax.spines[s].set_color(color)
+
+def transparent(obj, **colors):
+    ax = obj.axes # works even if obj is an axes instance
+    ax.background_patch.set_color('none')
+    ax.outline_patch.set_edgecolor(colors.get('outline', 'w'))
+    return obj

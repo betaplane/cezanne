@@ -27,15 +27,12 @@
   d = d['2011-08':'2014-04']       # no gaps
 #+end_src
 
-
-#+begin_src ipython :results silent :session
-  from statsmodels.tsa import ar_model
-
-  a = ar_model.AR(d).fit(1)
-
-#+end_src
-
-
+* Fourier Transforms
+** idea was to test usefulness for gap filling
+** not very useful, although maybe lsq or MEM approaches might offer more
+*** part of the problem is the finite-length effect of the DFT (implied periodicity on the unit circle)
+*** wavelets probably a much better idea
+** attempt at a naive least-square implementation
 #+begin_src ipython :results silent :session
   import numpy as np
 
@@ -54,7 +51,8 @@
   l = np.linalg.lstsq(X, y)
 #+end_src
 
-
+** DFT by hand
+*** to compare to just setting missing values to 0 (not tested yet)
 #+begin_src ipython :results silent :session
   n = np.arange(N).reshape(-1, 1)
   n1 = np.r_[n[:100], n[110:]]
@@ -64,7 +62,8 @@
   yh = G.dot(np.r_[y[:100], y[110:]].dot(F)) / N
 #+end_src
 
-
+* regressions etc
+** tensorflow linear regression
 #+begin_src ipython :results silent :session
   import tensorflow as tf
 
@@ -89,7 +88,7 @@
           return s.run([a, b])
 #+end_src
 
-
+** BayesPy Bayesian linear regression
 #+begin_src ipython :results silent :session
   import bayespy as bp
   from statsmodels.tools import add_constant
@@ -105,25 +104,54 @@
           self.Q.update(repeat=steps)
 #+end_src
 
-
+** Edward Bayesian linear regression
 #+begin_src ipython :results silent :session
-  import edward as ed
-  import tensorflow as tf
+    import edward as ed
+    import tensorflow as tf
 
-  class BLM(object):
-      def __init__(self, x, steps=500, K=2):
-          self.gr = tf.Graph()
-          tf.InteractiveSession(graph=self.gr)
-          with self.gr.as_default():
-              N = len(x) - 1
-              X = tf.placeholder(tf.float32, [N])
-              w = ed.models.Normal(loc=tf.ones([K, 1]), scale=tf.ones([K, 1]))
-              y = ed.models.Normal(loc=tf.matmul(w, tf.expand_dims(X, 0)), scale=tf.ones([K, N]))
+    class BLM(object):
+        def __init__(self, x, steps=500, K=2):
+            self.gr = tf.Graph()
+            tf.InteractiveSession(graph=self.gr)
+            with self.gr.as_default():
+                N = len(x) - 1
+                X = tf.placeholder(tf.float32, [N])
+                w = ed.models.Normal(loc=tf.ones([K, 1]), scale=tf.ones([K, 1]))
 
-              self.qw = ed.models.Normal(loc=tf.get_variable("qw/loc", [K, 1]),
-                                    scale=tf.nn.softplus(tf.get_variable("qw/scale", [K, 1])))
-              self.infer = ed.KLqp({w: self.qw}, data={X:x[:-1], y:np.repeat(x[1:].reshape(1, -1), K, 0)})
-              self.infer.run(n_samples=5, n_iter=steps)
+                r = ed.models.Normal(loc=tf.matmul(w, tf.expand_dims(X, 0)), scale=tf.ones(1))
+                z = ed.models.Normal(loc=tf.ones((K, N)), scale=tf.ones(1))
+                y = ed.models.Normal(loc=tf.reduce_sum(r * z, 0), scale=tf.ones(1))
+
+                self.qw = ed.models.Normal(loc=tf.get_variable("qw/loc", [K, 1]),
+                                           scale=tf.nn.softplus(tf.get_variable("qw/scale", [K, 1])))
+                self.qz = ed.models.Normal(loc=tf.get_variable("qz/loc", [K, N]),
+                                           scale=tf.nn.softplus(tf.get_variable("qz/scale", [1])))
+                self.infer = ed.KLqp({w: self.qw, z: self.qz}, data={
+                    X: x[:-1],
+                    y: x[1:]
+                })
+                self.infer.run(n_samples=5, n_iter=steps)
 #+end_src
 
+
+* Ad-hoc analyses
+#+begin_src ipython :results silent :session
+  from data import GDAL
+  from cartopy.io.shapereader import Reader
+  DEM = GDAL.GeoTiff('/home/arno/Documents/data/hydro/DryCreek/DCEW-DEMclip.tif')
+  stream_vec = Reader('/home/arno/Documents/data/hydro/DryCreek/streamIDs1000.shp')
+  stream_raster = GDAL.GeoTiff('/home/arno/Documents/data/hydro/DryCreek/streamIDs1000.tif')
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig catchment.png
+  fig, ax = plt.subplots(subplot_kw={'projection': DEM.cartopy}, figsize=(8, 8))
+  DEM.pcolormesh(ax, background={}, cmap='terrain')
+  stream_raster.pcolormesh(ax, background={}, cmap='Dark2')
+  px, py = zip(*[(p.x, p.y) for p in stream_vec.geometries()])
+  ax.scatter(px, py, facecolor='r')
+#+end_src
+
+#+ATTR_ORG: :width 600
+#+RESULTS:
+[[/home/arno/Documents/code/notebooks/obipy-resources/hydro/catchment.png]]
 

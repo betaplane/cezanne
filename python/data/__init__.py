@@ -20,6 +20,9 @@
 .. automodule:: python.data.IceBridge
     :members:
 
+.. automodule:: python.data.GDAL
+    :members:
+
 .. _netCDF4: http://unidata.github.io/netcdf4-python/
 
 """
