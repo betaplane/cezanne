@@ -1,11 +1,19 @@
 """
-GDAL Wrappers
--------------
+Raster Datasets
+---------------
+
+.. _supported_rasters:
+
+Currently supported raster formats
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* `GDAL <https://www.gdal.org/>`_
+* :mod:`rasterio`
+* `pysheds <https://github.com/mdbartos/pysheds>`_ (uses rasterio internally, but its 'grid' class has slightly different attribute names from raw rasterio)
 
 """
-from osgeo import gdal, osr
-from pyproj import Proj
 from importlib import import_module
+from functools import singledispatch
 import numpy as np
 import re
 
@@ -34,7 +42,7 @@ def proj2cartopy(proj4):
 
     .. TODO::
 
-        * Works only for projections I have used so far
+        * Works only for the one projection I have used so far...
     """
     crs = import_module('cartopy.crs')
     d = dict(filter(lambda i: i is not None, map(proj4_parser, proj4.split())))
@@ -44,6 +52,7 @@ def wkt2proj(obj):
     """Map wkt string to Proj.4 string. Argument can be either the wkt string **or** a '.prj' filename.
 
     """
+    osr = import_module('osgeo.osr')
     try:
         with open(obj) as f:
             s = f.read()
@@ -51,6 +60,98 @@ def wkt2proj(obj):
         s = obj
     return osr.SpatialReference(s).ExportToProj4()
 
+def coords(raster, latlon=False):
+    """Return coordinate arrays constructed from a raster dataset's affine transform.
+
+    :param raster: GDAL or rasterio (including pysheds) raster dataset
+    :param latlon: If `True`, return lon, lat coordinates, otherwise projected coordinates
+    :returns: (lon, lat) or (i, j) coordinates corresponding to the raster dataset
+    :rtype: :obj:`tuple` of :class:`ndarrays <numpy.ndarray>`
+
+    """
+    shape, a, proj = _raster_info(raster, latlon)
+    i, j = [k+.5 for k in np.mgrid[:shape[0], :shape[1]]]
+    x = a[0] * j + a[1] * i + a[2]
+    y = a[3] * j + a[4] * i + a[5]
+    return (x, y) if proj is None else proj(x, y, inverse=True)
+
+@singledispatch
+def _raster_info(raster, latlon):
+    pass
+
+try:
+    gdal = import_module('osgeo.gdal')
+    @_raster_info.register(gdal.Dataset)
+    def _(ds, latlon):
+        b = ds.GetRasterBand(1)
+        # https://www.gdal.org/gdal_datamodel.html
+        # rasterio's affine is switched relative to GDAL's GeoTransform
+        a = np.array(ds.GetGeoTransform())[[1, 2, 0, 4, 5, 3]]
+        if latlon:
+            proj = import_module('pyproj')
+            p = proj.Proj(wkt2proj(ds.GetProjection()))
+        return ((b.YSize, b.XSize), a, p if latlon else None)
+except: pass
+
+try:
+    io = import_module('rasterio.io')
+    @_raster_info.register(io.DatasetReader)
+    def _(ds, latlon):
+        if latlon:
+            proj = import_module('pyproj')
+            p = proj.Proj(ds.crs.to_proj4())
+        return (ds.shape, ds.transform, p if latlon else None)
+except: pass
+
+try:
+    grid = import_module('pysheds.grid')
+    @_raster_info.register(grid.Grid)
+    def _(ds, latlon):
+        return (ds.shape, ds.affine, ds.crs if latlon else None)
+except: pass
+
+def mv2nan(data, value, copy=True):
+    if copy:
+        data = data.copy()
+    if value is not None:
+        try:
+            data[data==value] = np.NAN
+        except ValueError:
+            data = np.array(data, dtype='float')
+            data[data==value] = np.NAN
+    return data
+
+class Affine:
+    """Wrapper around the type of affine transformations used by raster datasets. Initialize with one of the :ref:`supported raster formats <supported_rasters>`.
+
+    .. TODO::
+
+        * merge with :func:`python.geo.affine`
+
+    """
+    def __init__(self, raster):
+        self.shape, a, self.proj = _raster_info(raster, latlon=True)
+        b = np.reshape(a[:6], (2, 3))
+        self.mult = b[:, :2]
+        self.add = b[:, 2:]
+
+    def ij(self, x, y, latlon=False):
+        """Invert the transform to get raster indexes ('i, j') from coordinates.
+
+        :param x: longitude / projected x-dimension
+        :type x: number or :class:`~numpy.ndarray`
+        :param y: latitude / projected y-dimension
+        :type y: number or :class:`~numpy.ndarray`
+        :param latlon: If ``True``, ``x`` and ``y`` are lon, lat coordinates, otherwise projected (in the raster's projection)
+        :returns: 'i, j' raster indexes corresponding to the coordinates ``x``, ``y``
+        :rtype: :obj:`tuple` of numbers or :class:`arrays <numpy.ndarray>`
+
+        """
+        s = np.array(x).shape
+        if not projected:
+            x, y = self.proj(x, y)
+        xy = np.vstack([np.array(i).flatten() for i in (x, y)]) - self.add
+        return [np.floor(i).reshape(s).astype(int) for i in np.linalg.inv(self.mult).dot(xy)]
 
 
 class GeoTiff(object):
@@ -66,24 +167,22 @@ class GeoTiff(object):
 
     """
     def __init__(self, filename, band=1):
+        gdal = import_module('osgeo.gdal')
+        osr = import_module('osgeo.osr')
+        proj = import_module('pyproj')
         self._ds = gdal.Open(filename)
-        self.proj = Proj(osr.SpatialReference(self.wkt).ExportToProj4())
+        self.proj = proj.Proj(osr.SpatialReference(self.wkt).ExportToProj4())
         self.band_no = band
 
-    def coords(self, projected=True):
+    def coords(self, latlon=False):
         """Return (lon, lat) tuple of the dataset's coordinates.
 
-        :param projected: if ``True``, return projected coordinates, otherwise lon/lat
+        :param latlon: if ``True``, return lon/lat coordinates, otherwise projected (as in the original raster)
         :returns: (lon, lat) or (i, j) in projected coordinates
         :rtype: :obj:`tuple`
 
         """
-        # https://www.gdal.org/gdal_datamodel.html
-        i, j = [k+.5 for k in np.mgrid[:self.band.YSize, :self.band.XSize]]
-        g = self.GetGeoTransform()
-        x = g[0] + g[1] * j + g[2] * i
-        y = g[3] + g[4] * j + g[5] * i
-        return (x, y) if projected else self.proj(x, y, inverse=True)
+        return coords(self._ds, latlon)
 
     @property
     def wkt(self):
@@ -106,15 +205,6 @@ class GeoTiff(object):
             self._band[self.band_no] = self._ds.GetRasterBand(self.band_no)
         return self._band[self.band_no]
 
-    @staticmethod
-    def _replace_no_data(data, value):
-        if value is not None:
-            try:
-                data[data==value] = np.NAN
-            except ValueError:
-                data = np.array(data, dtype='float')
-                data[data==value] = np.NAN
-        return data
 
     @property
     def data(self):
@@ -122,9 +212,9 @@ class GeoTiff(object):
         try:
             return self._data[self.band_no]
         except AttributeError:
-            self._data = {self.band_no: self._replace_no_data(self.band.ReadAsArray(), self.band.GetNoDataValue())}
+            self._data = {self.band_no: mv2nan(self.band.ReadAsArray(), self.band.GetNoDataValue())}
         except KeyError:
-            self._data[self.band_no] = self._replace_no_data(self.band.ReadAsArray(), self.band.GetNoDataValue())
+            self._data[self.band_no] = mv2nan(self.band.ReadAsArray(), self.band.GetNoDataValue())
         return self._data[self.band_no]
 
     @property

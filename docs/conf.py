@@ -208,7 +208,8 @@ intersphinx_mapping = {
     'tables': ('https://www.pytables.org/', None),
     'h5py': ('http://docs.h5py.org/en/stable/', None),
     'shapely': ('https://shapely.readthedocs.io/en/stable/', None),
-    'pyzotero': ('https://pyzotero.readthedocs.io/en/stable', None)
+    'pyzotero': ('https://pyzotero.readthedocs.io/en/stable', None),
+    'rasterio': ('https://rasterio.readthedocs.io/en/stable/', None)
 }
 
 js_source_path = ['../GEE/']

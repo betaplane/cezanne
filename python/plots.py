@@ -10,7 +10,6 @@ from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import List, Unicode
 from importlib import import_module
 from functools import singledispatch
-from helpers import stationize
 
 
 def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, **kwargs):
@@ -39,7 +38,9 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
     else:
         fig = ax.figure
 
-    try: df = stationize(df)
+    try:
+        hh = import_module('helpers')
+        df = hh.stationize(df)
     except: pass
     grid_color = kwargs.pop('grid_color', plt.rcParams['grid.color'])
     fig.subplots_adjust(bottom=bottom, top=top, **kwargs)

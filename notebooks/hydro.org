@@ -21,9 +21,12 @@
 #+end_src
 
 #+begin_src ipython :results silent :session
+  import pandas as pd
+  import numpy as np
   # df is in ~/Documents/data/hydro/DryCreekBoise.h5
+  df = pd.read_hdf('/home/arno/Documents/data/hydro/DryCreek/DryCreekBoise.h5', 'LG')
   df = df[df.index.notnull()].replace(-6934, np.nan).sort_index()
-  d = df['2003':'2016'].iloc[:, 1] # no duplicates etc
+  d = df['2003':'2016'].iloc[:, 0] # no duplicates etc
   d = d['2011-08':'2014-04']       # no gaps
 #+end_src
 
@@ -74,6 +77,8 @@
           targ = tf.placeholder(tf.float64)
           a = tf.Variable(tf.random_normal([1], dtype=tf.float64), dtype=tf.float64)
           b = tf.Variable(tf.random_normal([1], dtype=tf.float64), dtype=tf.float64)
+          # here I add a positivity constraint in a somewhat ad-hoc fashin
+          # (restoring positivity of innovations at every timestep)
           y = a + b * x
           z = y - tf.reduce_min(targ - y)
           loss = tf.losses.mean_squared_error(targ, z)
@@ -154,4 +159,141 @@
 #+ATTR_ORG: :width 600
 #+RESULTS:
 [[/home/arno/Documents/code/notebooks/obipy-resources/hydro/catchment.png]]
+
+#+begin_src ipython :results raw :session :savefig alpha_hist.png
+  x = d.values
+  z = x[1:] / x[:-1]
+  fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+  ax = axs[0]
+  h = ax.hist(z[(z>.98) & (z<1.02)], 1000, color='chartreuse')
+  ax.set_xlim(.98, 1.02)
+  ax.set_ylim(0, 50)
+
+  z = np.log(z)
+  z = 1 / z[z!=0]
+  ax = axs[1]
+  ax.hist(z[np.isfinite(z)], 1000, color='orangered')
+  ax.set_xlim(-150, 150)
+  # ax.set_ylim(0, 200)
+#+end_src
+
+
+#+CAPTION: Histograms of "local AR(1) coefficients": x_k / x_{k-1}, where x_k refers to any index in the discharge time series. Left: raw (count on 1 is 14691, ~60% of data). Right: transformed as 1 / log(alpha), which corresponds the e-folding time (in basic units of the timeseries, which is 1h) of an exponential growth/decay process.
+
+#+RESULTS:
+[[/home/arno/Documents/code/notebooks/obipy-resources/hydro/alpha_hist.png]]
+
+#+begin_src ipython :results raw :session
+  # count in bin centered on one (which is the max count)
+  np.max(h[0])
+#+end_src
+
+#+RESULTS:
+: 14691.0
+
+** Notes
+*** Computing the quotient timeseries $\alpha_k = q_{k+1} / q_k$ can be seen as computing a local autoregressive ($AR(1)$) coefficient. While the individual coefficients are not very informative, its distribution is.
+*** Furthermore, the inverse of the log of the quotient series ($ln \alpha_k^{-1}$) gives the corresponding e-folding time of a moving-average impulse response.
+*** The histograms clearly show 2-3 modes, corresponding to 2-3 major subbasins of the Dry Creek catchment.
+*** $\alpha_k < 1$ (or $ln \alpha_k^{-1}<0$) corresponds to the receeding limb of the hydrograph, whereas values >1 (>0) correspond to the ascending limb
+*** However, in terms of time series modeling, $\alpha_k>1$ are unphysical; this would imply water levels increasing by themselves rather than because of rainfall.
+*** Rainfall would correspond to the innovations of the AR / MA process, but with $\alpha_k$s below 1
+*** Note also that the quotient series is very unstable and has very large values at times of very low flow.
+**** Some form of regularization/smoothing is necessary for anything more informative.
+*** The e-folding time will be influenced by (???):
+**** the distance the water has to travel
+**** the intensity of the rain
+
+#+begin_src ipython :results silent :session
+  def grdesc(features, labels, learn, steps):
+      gr = tf.Graph()
+      with gr.as_default():
+          x = tf.constant(features, tf.float64)
+          targ = tf.constant(labels, tf.float64)
+          a = tf.Variable(tf.random_normal([1], dtype=tf.float64), dtype=tf.float64)
+          b = tf.Variable(tf.random_normal([1], dtype=tf.float64), dtype=tf.float64)
+          # here I add a positivity constraint in a somewhat ad-hoc fashin
+          # (restoring positivity of innovations at every timestep)
+          y = a * x
+          z = b * x
+          z = y - tf.reduce_min(targ - y)
+          loss = tf.losses.mean_squared_error(targ, z)
+          opt = tf.train.GradientDescentOptimizer(learn).minimize(loss)
+      with tf.Session(graph=gr) as s:
+          tf.global_variables_initializer().run(session=s)
+          for i in range(steps):
+              r = s.run([opt, loss])
+              if i % 100 == 0:
+                  print(i, r)
+          print(i, r)
+          return s.run([b])
+#+end_src
+** TODO pysheds
+https://github.com/mdbartos/pysheds
+
+#+begin_src ipython :results silent :session
+  from pysheds.grid import Grid
+
+  grid = Grid.from_raster('/home/arno/Documents/data/hydro/DryCreek/DCEW-DEMclip.tif', 'dem')
+
+  dirmap = (64, 128, 1, 2, 4, 8, 16, 32)
+  grid.fill_depressions('dem', out_name='flooded_dem')
+  grid.resolve_flats('flooded_dem', out_name='inflated_dem')
+  grid.flowdir(data='inflated_dem', out_name='dir', dirmap=dirmap)
+  grid.catchment(data='dir', x=2, y=702, dirmap=dirmap, out_name='catch', recursionlimit=15000)
+  grid.accumulation(data='catch', dirmap=dirmap, out_name='acc')
+  grid.flow_distance(data='catch', x=2, y=702, dirmap=dirmap, out_name='dist')
+#+end_src
+
+#+begin_src ipython :results raw :session
+  from cartopy.io.shapereader import Reader
+  streams = Reader('/home/arno/Documents/data/hydro/DryCreek/streamIDs1000.shp')
+  p = next(streams.geometries())
+  GDAL.Affine(grid).ij(p.x, p.y)
+#+end_src
+
+#+RESULTS:
+: [array(2), array(702)]
+  
+#+begin_src ipython :results raw :session :savefig phJ99M.png
+  # import sys
+  # sys.path.insert(1, '/home/arno/Documents/code/python/')
+  # from data import GDAL
+  # from plots import transparent as trnsp
+  i, j = GDAL.coords(grid)
+  proj = GDAL.proj2cartopy(grid.crs.srs)
+  fig, axs = plt.subplots(1, 2, figsize=(8, 6), subplot_kw={'projection': proj})
+  ax = axs[0]
+  trnsp(ax.pcolormesh(i, j, GDAL.mv2nan(grid.dem, grid.nodata), cmap='cubehelix'))
+  ax = axs[1]
+  trnsp(ax.pcolormesh(i, j, np.log(GDAL.mv2nan(grid.acc, 0)), cmap='cubehelix'))
+#+end_src
+
+#+RESULTS:
+[[/home/arno/Documents/code/notebooks/obipy-resources/hydro/phJ99M.png]]
+
+#+begin_src ipython :results silent :session
+  drainmap = np.array(list(dirmap))[(np.arange(8)+4) % 8]
+  d = np.array(grid.dir)
+  loc_acc = \
+  ( d[:-2, 1:-1] == drainmap[0] ).astype(int) + \
+  ( d[:-2, 2:]   == drainmap[1] ).astype(int) + \
+  ( d[1:-1, 2:]  == drainmap[2] ).astype(int) + \
+  ( d[2:, 2:]    == drainmap[3] ).astype(int) + \
+  ( d[2:, 1:-1]  == drainmap[4] ).astype(int) + \
+  ( d[2:, :-2]   == drainmap[5] ).astype(int) + \
+  ( d[1:-1, :-2] == drainmap[6] ).astype(int) + \
+  ( d[:-2, :-2]  == drainmap[7] ).astype(int)  
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig pkfoOd.png
+  proj = GDAL.proj2cartopy(grid.crs.srs)
+  fig, ax = plt.subplots(figsize=(6, 4), subplot_kw={'projection': proj})
+  pl = trnsp(ax.pcolormesh(i[1:-1, 1:-1], j[1:-1, 1:-1], loc_acc, cmap='cubehelix'))
+  plt.colorbar(pl, ax=ax)
+#+end_src
+
+#+ATTR_ORG: :width 600
+#+RESULTS:
+[[/home/arno/Documents/code/notebooks/obipy-resources/hydro/pkfoOd.png]]
 
