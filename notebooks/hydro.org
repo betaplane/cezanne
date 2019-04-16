@@ -4,6 +4,87 @@
 ** https://earth.boisestate.edu/drycreek/data/
 
 #+begin_src ipython :results silent :session
+  import requests
+  from io import StringIO
+  from functools import partial
+  from tqdm import tqdm
+
+
+  class DryCreek:
+      column_names = {
+          'T': ['AirTemperature-C', 'AirTemperature_C'],
+          'nrad': ['NetRadiation-Watts/m2','NetRadiation_W/m2', 'NetRadiation_watts/m2'],
+          'ppt': ['Precipitation-mm','Precipitation_mm'],
+          'rh': ['RelativeHumidity-%', 'RelativeHumidity_percent'],
+          'snwd': ['SnowDepth-cm', 'SnowDepth_cm'],
+          'rs': ['SolarRadiation-Watts/m2','SolarRadiation_W/m2', 'SolarRadiation_watts/m2'],
+          'dd': ['WindDirection-Degree', 'WindDirection_degree'],
+          'vv': ['WindSpeed-m/s','WindSpeed_m/s']
+      }
+      urls = {
+          'LDP': "http://icewater.boisestate.edu/boisefront-products/historical/dcew_ldp/Weather/Hourly%20Summary%20Data/LDP_HrlySummary_{:04d}.csv"
+      }
+      HDFStore = 
+
+      def __init__(self, station, years=range(2007, 2019), **kwargs):
+          f = partial(self._get_url, self.urls[station])
+          self.data = pd.concat([f(y, **kwargs) for y in tqdm(years)]).sort_index()
+          if len(self.data.columns.difference([i for j in self.column_names.values() for i in j])) > 0:
+              print("Data has columns not present in column_names")
+          else:
+              self.merge(station)
+
+      def merge(self, name):
+          df = pd.concat([self._merge(self.data, n, c)for n, c in self.column_names.items()]).dropna(0, 'all')
+          setattr(self, name, df.loc[df.index.notnull()])
+
+      def store(self, name):
+
+
+      @staticmethod
+      def _get_url(url, y, skiprows=19, parse_dates=True, index_col='DateTime', na_values=-6999):
+          r = requests.get(url.format(y))
+          r.raise_for_status()
+          return pd.read_csv(
+              StringIO(r.text),
+              skiprows=skiprows,
+              parse_dates=parse_dates,
+              index_col=index_col,
+              na_values=na_values).dropna(1, 'all')
+
+      @staticmethod
+      def _merge(df, name, cols):
+          c = df.columns.intersection(cols)
+          assert df[c].notnull().sum(1).max() == 1
+          return df[c].sum(1).to_frame(name)
+
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  column_names = {
+      'T': ['AirTemperature-C', 'AirTemperature_C'],
+      'nrad': ['NetRadiation-Watts/m2','NetRadiation_W/m2', 'NetRadiation_watts/m2'],
+      'ppt': ['Precipitation-mm','Precipitation_mm'],
+      'rh': ['RelativeHumidity-%', 'RelativeHumidity_percent'],
+      'snwd': ['SnowDepth-cm', 'SnowDepth_cm'],
+      'rs': ['SolarRadiation-Watts/m2','SolarRadiation_W/m2', 'SolarRadiation_watts/m2'],
+      'dd': ['WindDirection-Degree', 'WindDirection_degree'],
+      'vv': ['WindSpeed-m/s','WindSpeed_m/s']
+  }
+#+end_src
+
+#+begin_src ipython :results silent :session
+  def merge(df, name, cols):
+      c = df.columns.intersection(cols)
+      assert df[c].notnull().sum(1).max() == 1
+      return df[c].sum(1).to_frame(name)
+
+  ldp = pd.concat([merge(ldp, n, c)for n, c in column_names.items()]).dropna(0, 'all')
+  
+#+end_src
+
+#+begin_src ipython :results silent :session
   import requests, re
   from bs4 import BeautifulSoup as soup
   from io import StringIO

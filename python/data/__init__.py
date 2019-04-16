@@ -27,10 +27,8 @@
 
 """
 import os
-from traitlets.config import Application, Configurable, Config
-from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
-from traitlets import Unicode
 from glob import glob
+from cezanne import App, Conf
 
 class MixIn(object):
     def glob(self, pattern):
@@ -40,23 +38,8 @@ class MixIn(object):
         assert len(g) > 0, "No files matching the glob pattern found."
         return g
 
-class DataApp(MixIn, Application):
-    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
+class DataApp(MixIn, App):
     path = Unicode().tag(config=True)
-    def __init__(self, *args, config={}, **kwargs):
-        try:
-            cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
-            cfg.merge(config)
-        except ConfigFileNotFound:
-            cfg = Config(config)
-        super().__init__(config=cfg, **kwargs)
 
-class DataConf(MixIn, Configurable):
-    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
+class DataConf(MixIn, Conf):
     path = Unicode().tag(config=True)
-    def __init__(self, *args, **kwargs):
-        try:
-            cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
-            super().__init__(config=cfg, **kwargs)
-        except ConfigFileNotFound:
-            super().__init__(**kwargs)

@@ -59,6 +59,9 @@ Helpers
 .. automodule:: python.helpers
    :members:
 
+.. automodule:: python.cezanne
+   :members:
+
 Geo
 ===
 .. automodule:: python.geo
