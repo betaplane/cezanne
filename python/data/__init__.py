@@ -28,7 +28,7 @@
 """
 import os
 from glob import glob
-from cezanne import App, Conf
+from cezanne import App, Conf, Unicode
 
 class MixIn(object):
     def glob(self, pattern):
