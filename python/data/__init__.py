@@ -38,6 +38,10 @@ class MixIn(object):
         assert len(g) > 0, "No files matching the glob pattern found."
         return g
 
+    @property
+    def full_path(self):
+        return os.path.join(self.path, self.file_name)
+
 class DataApp(MixIn, App):
     path = Unicode().tag(config=True)
 

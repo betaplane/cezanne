@@ -5,10 +5,12 @@
 
 #+begin_src ipython :results silent :session
   import requests, os
+  import pandas as pd
+  import numpy as np
   from io import StringIO
   from functools import partial
-  from tqdm import tqdm
   from data import DataConf, Unicode
+  from dateutil.parser import parser as dparser
 
   class DryCreek(DataConf):
       file_name = Unicode().tag(config=True)
@@ -20,74 +22,149 @@
           'snwd': ['SnowDepth-cm', 'SnowDepth_cm'],
           'rs': ['SolarRadiation-Watts/m2','SolarRadiation_W/m2', 'SolarRadiation_watts/m2'],
           'dd': ['WindDirection-Degree', 'WindDirection_degree'],
-          'vv': ['WindSpeed-m/s','WindSpeed_m/s']
+          'vv': ['WindSpeed-m/s','WindSpeed_m/s'],
+          'q': ['Discharge-L/s'],
+          'ec': ['StreamEC-mS/cm'],
+          'st': ['StreamT-C', 'StreamTemp-C']
       }
+      base_url = 'http://icewater.boisestate.edu/boisefront-products/historical'
       urls = {
-          'LDP': 'http://icewater.boisestate.edu/boisefront-products/historical/dcew_ldp/Weather/Hourly%20Summary%20Data/LDP_HrlySummary_{:04d}.csv',
-          'SCR': 'http://icewater.boisestate.edu/boisefront-products/historical/dcew_scr/weather/hourly%20summary%20data/SCR_HrlySummary_{:04d}.csv',
-          'BRW': 'http://icewater.boisestate.edu/boisefront-products/historical/dcew_br/Weather/Hourly%20Summary%20Data/BRW_HrlySummary_{:04d}.csv',
-          'LW': 'http://icewater.boisestate.edu/boisefront-products/historical/dcew_lw/Weather/Hourly%20Summary%20Data/LowerWeather_HrlySummary_{:04d}.csv'
+          'LG': 'dcew_lg/StreamHourlyData/LG_StreamHrlySummary_{:04d}.csv',
+          'BSG': 'dcew_bsg/StreamHourlyData/BSG_StreamHrlySummary_{:04d}.csv',
+          'C1E': 'dcew_c1e/StreamHourlyData/C1e_StreamHrlySummary_{:04d}.csv',
+          'C1W': 'dcew_c1w/StreamHourlyData/C1W_StreamHrlySummary_{:04d}.csv',
+          'C2E': 'dcew_c2e/StreamHourlyData/C2E_StreamHrlySummary_{:04d}.csv',
+          'C2M': 'dcew_c2m/StreamHourlyData/C2M_StreamHrlySummary_{:04d}.csv',
+          'LDP': 'dcew_ldp/Weather/Hourly%20Summary%20Data/LDP_HrlySummary_{:04d}.csv',
+          'SCR': 'dcew_scr/weather/hourly%20summary%20data/SCR_HrlySummary_{:04d}.csv',
+          'BRW': 'dcew_br/Weather/Hourly%20Summary%20Data/BRW_HrlySummary_{:04d}.csv',
+          'LW': 'dcew_lw/Weather/Hourly%20Summary%20Data/LowerWeather_HrlySummary_{:04d}.csv',
+          'TLW': 'dcew_tl/Weather/Hourly%20Summary%20Data/Treeline_HrlySummary_{:04d}.csv',
+          'TLG': 'dcew_tl/Streamflow/TL_StreamHrlySummary_{:04d}.csv'
+      }
+      # (lat, lon, elev)
+      geo = {
+          'C2M': (43.7022778, -116.154095, 1143.),
+          'C2E': (43.7027903, -116.1527722, 1158.),
+          'C1W': (43.7184233, -116.1374192, 1347.),
+          'C1E': (43.7181614, -116.1372986, 1335.),
+          'BSG': (43.7407086, -116.0989983, 1680.),
+          'BRW': (43.75876, -116.090404, 2114.),
+          'LDP': (43.737078, -116.1221131, 1850.),
+          'SCR': (43.71105, -116.09912, 1720.),
+          'LW': (43.6885278, -116.16991, 1151.),
+          'TL': (43.73019, -116.140143, 1610.)
       }
 
-      def get(self, station, years, **kwargs):
-          f = partial(self._get_url, self.urls[station])
-          self.data = [f(y, **kwargs) for y in tqdm(years)]
+      def __init__(self, load=True, **kwargs):
+          super().__init__(**kwargs)
+          if load:
+              self.load()
+
+      @property
+      def stream(self):
+          pat = re.compile('stream', re.IGNORECASE)
+          return [k for k, v in self.urls.items() if pat.search(v)]
+
+      @property
+      def met(self):
+          pat = re.compile('weather', re.IGNORECASE)
+          return [k for k, v in self.urls.items() if pat.search(v)]
+
+      def get(self, station, years=range(1999, 2019), **kwargs):
+          url = os.path.join(self.base_url, self.urls[station])
+          f = partial(self._get_url, url, partial(self._parser, dparser()), **kwargs)
+          self.data = [f(y) for y in years]
           self.data = pd.concat(self.data)
           self.data = self.data.loc[self.data.index.notnull()].sort_index()
           if len(self.data.columns.difference([i for j in self.column_names.values() for i in j])) > 0:
-              print("Data has columns not present in column_names")
+              raise Exception("Data has columns not present in column_names")
           else:
               self.merge(station)
 
-      def merge(self, name):
-          df = pd.concat([self._merge(self.data, n, c)for n, c in self.column_names.items()]).dropna(0, 'all')
+      def get_all(self):
+          for k in self.urls.keys():
+              print("getting {}".format(k))
+              self.get(k)
+
+      def merge(self, name, data=None):
+          data = self.data if data is None else data
+          df = pd.concat([self._merge(data, n, c) for n, c in self.column_names.items()], 1).dropna(0, 'all')
           setattr(self, name, df.loc[df.index.notnull()])
 
       def store(self, name):
           getattr(self, name).to_hdf(os.path.join(self.path, self.file_name), name)
 
       @staticmethod
-      def _get_url(url, y, skiprows=19, parse_dates=True, index_col='DateTime', na_values=-6999):
-          r = requests.get(url.format(y))
-          r.raise_for_status()
-          s = StringIO(r.text)
+      def _get_url(url, date_parser, y, index_col='DateTime', na_values=[-6999, -6934, -7002.7, '#NUM!']):
+          try:
+              r = requests.get(url.format(y))
+              r.raise_for_status()
+          except:
+              print('no data for year {}'.format(y))
+              return
+          print('year {}'.format(y))
+          s = StringIO(r.text.replace('\r', '\n')) # some files had '\r' line endings
           while next(s)[:8] != index_col:
               p = s.seek(0, 1)
           s.seek(p)
-          return pd.read_csv(
-              s, parse_dates=parse_dates, index_col=index_col, na_values=na_values
-          ).dropna(1, 'all')
+          d = pd.read_csv(s, parse_dates=True, date_parser=date_parser, index_col=index_col, na_values=na_values)
+          return d.loc[d.index.notnull()].dropna(1, 'all')
+
+      @staticmethod
+      def _parser(parser, s):
+          try:
+              return parser.parse(s)
+          except:
+              return np.nan
 
       @staticmethod
       def _merge(df, name, cols):
           c = df.columns.intersection(cols)
-          assert df[c].notnull().sum(1).max() == 1
-          return df[c].sum(1).to_frame(name)
+          if len(c) > 0:
+              assert df[c].notnull().sum(1).max() == 1
+              return df[c].sum(1).to_frame(name)
 
-#+end_src
+      def load(self):
+          with pd.HDFStore(self.full_path) as S:
+              for k in S.keys():
+                  setattr(self, k[1:], S[k])
 
+      def plot(self, *args, **kwargs):
+          cm1 = plt.get_cmap('tab20b').colors
+          cm2 = plt.get_cmap('tab20').colors
+          colors = {
+              'BRW': cm1[2],
+              'BSG': cm1[3],
+              'C1E': cm1[4],
+              'LDP': cm1[5],
+              'C1W': cm1[6],
+              'SCR': cm1[9],
+              'C2E': cm1[10],
+              'C2M': cm1[14],
+              'TLG': cm2[12],
+              'TLW': cm2[13],
+              'LW' : cm1[18],
+              'LG' : cm1[19],
+          }
+          fig, ax = plt.subplots(*args, **kwargs)
+          for i, k in enumerate(self.stream):
+              try:
+                  df = getattr(self, k)
+              except: continue
+              x = df['q']
+              x.plot(ax=ax, label=k, color=colors[k])
+          ax.legend(loc=2)
 
-#+begin_src ipython :results silent :session
-  column_names = {
-      'T': ['AirTemperature-C', 'AirTemperature_C'],
-      'nrad': ['NetRadiation-Watts/m2','NetRadiation_W/m2', 'NetRadiation_watts/m2'],
-      'ppt': ['Precipitation-mm','Precipitation_mm'],
-      'rh': ['RelativeHumidity-%', 'RelativeHumidity_percent'],
-      'snwd': ['SnowDepth-cm', 'SnowDepth_cm'],
-      'rs': ['SolarRadiation-Watts/m2','SolarRadiation_W/m2', 'SolarRadiation_watts/m2'],
-      'dd': ['WindDirection-Degree', 'WindDirection_degree'],
-      'vv': ['WindSpeed-m/s','WindSpeed_m/s']
-  }
-#+end_src
-
-#+begin_src ipython :results silent :session
-  def merge(df, name, cols):
-      c = df.columns.intersection(cols)
-      assert df[c].notnull().sum(1).max() == 1
-      return df[c].sum(1).to_frame(name)
-
-  ldp = pd.concat([merge(ldp, n, c)for n, c in column_names.items()]).dropna(0, 'all')
-  
+          bx = ax.twinx()
+          for i, k in enumerate(self.met):
+              try:
+                  df = getattr(self, k)
+              except: continue
+              x = df['ppt'].dropna().diff()
+              x = x[x>=0]
+              x.plot(ax=bx, label=k, marker='*', ls='none', color=colors[k])
+          bx.legend(loc=1)
 #+end_src
 
 #+begin_src ipython :results silent :session
@@ -383,4 +460,109 @@ https://github.com/mdbartos/pysheds
 #+ATTR_ORG: :width 600
 #+RESULTS:
 [[/home/arno/Documents/code/notebooks/obipy-resources/hydro/pkfoOd.png]]
+#+begin_src ipython :results silent :session
+  import pandas as pd
+  import matplotlib.pyplot as plt
+
+  dc = DryCreek()
+#+end_src
+
+#+begin_src ipython :results silent :session
+  ldp = pd.read_hdf(dc.full_path, 'LDP')['ppt'] # Lower Deer Point (N basin)
+  scr = pd.read_hdf(dc.full_path, 'SCR')['ppt'] # Shingle Creek Ridge (S basin)
+
+  a = (lambda x: x[x>=0])(ldp.dropna().diff())
+  b = (lambda x: x[x>=0])(scr.dropna().diff())
+  anan = (lambda x: x.index[x.isnull()])(a.loc[b.index])
+  bnan = (lambda x: x.index[x.isnull()])(b.loc[a.index])
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  a1 = (lambda x: x>10)(a/b)
+  b1 = (lambda x: x>10)(b/a)
+  a10 = a[a1].sort_values(ascending=False)[:10]
+  b10 = b[b1].sort_values(ascending=False)[:10]
+#+end_src
+
+
+#+begin_src ipython :results raw :session
+a10
+#+end_src
+
+#+RESULTS:
+#+BEGIN_EXAMPLE
+  DateTime
+  2017-01-11 09:00:00    49.7
+  2018-01-05 15:00:00    31.8
+  2017-06-02 14:00:00    17.5
+  2012-04-26 04:00:00    10.2
+  2017-01-11 05:00:00     8.5
+  2018-02-27 11:00:00     7.1
+  2010-04-20 23:00:00     6.8
+  2014-02-10 10:00:00     6.7
+  2011-05-26 09:00:00     6.2
+  2010-06-04 09:00:00     5.6
+  Name: ppt, dtype: float64
+#+END_EXAMPLE
+
+#+begin_src ipython :results raw :session
+b10
+#+end_src
+
+#+RESULTS:
+#+BEGIN_EXAMPLE
+  DateTime
+  2016-03-30 14:00:00    97.0
+  2016-10-22 14:00:00    45.9
+  2017-11-01 17:00:00    25.6
+  2016-05-07 18:00:00    16.9
+  2015-12-20 12:00:00    15.3
+  2016-05-06 20:00:00    13.0
+  2016-02-22 13:00:00    11.9
+  2014-12-21 00:00:00    10.7
+  2017-03-30 07:00:00     7.6
+  2011-06-07 02:00:00     7.2
+  Name: ppt, dtype: float64
+#+END_EXAMPLE
+
+#+begin_src ipython :results silent :session
+  q = pd.read_hdf(dc.full_path, 'LG').iloc[:, 0]
+  c2m = pd.read_hdf(dc.full_path, 'C2M').iloc[:, 0]
+  c2e = pd.read_hdf(dc.full_path, 'C2E').iloc[:, 0]
+  c1w = pd.read_hdf(dc.full_path, 'C1W').iloc[:, 0]
+  c1e = pd.read_hdf(dc.full_path, 'C1E').iloc[:, 0]
+  bsg = pd.read_hdf(dc.full_path, 'BSG').iloc[:, 0]
+#+end_src
+
+
+
+#+begin_src ipython :results raw :session
+  import matplotlib.pyplot as plt
+  import cmocean as cmo
+
+  q_clrs = cmo.cm.deep(np.linspace(0, 1, 5))
+  r_clrs = plt.get_cmap('Paired').colors
+  # fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+  def plot(ax):
+      a.plot(color=r_clrs[1], ax=ax, label='LDP')
+      b.plot(ax=ax, color=r_clrs[6], label='SCR')
+      ax.plot(anan, b.loc[anan], '^', color=r_clrs[1])
+      ax.plot(bnan, a.loc[bnan], 'v', color=r_clrs[6])
+      ax.legend(loc=2)
+      bx = ax.twinx()
+      bx.plot(q, color='c', label='LG')
+      bx.plot(c1e, color=r_clrs[0], label='C1E')
+      bx.plot(c2m, color=r_clrs[5], label='C2M')
+      bx.plot(c2e, color=r_clrs[7], label='C2E')
+      bx.plot(bsg, color=r_clrs[2], label='BSG')
+      bx.legend(loc=1)
+  # for ax in axs:
+  #     plot(ax)
+  # axs[0].set_xlim('2017-01', '2017-02')
+  # axs[1].set_xlim('2016-10', '2016-12')
+#+end_src
+
+#+RESULTS:
+
 
