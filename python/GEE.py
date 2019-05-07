@@ -230,3 +230,7 @@ def write_times_on_movie(filename, times, strings):
 
     out.release()
     cap.release()
+
+# Local Variables:
+# eval: (switch-pyvenv "gee")
+# End:

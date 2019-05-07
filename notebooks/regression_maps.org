@@ -1,0 +1,116 @@
+* setup :noexport:
+#+begin_src ipython :results silent :session
+  import xarray as xr
+  import pandas as pd
+  import numpy as np
+  from cartopy import crs
+  import matplotlib.pyplot as plt
+  import statsmodels.api as sm
+#+end_src
+
+#+begin_src ipython :results silent :session
+  D = pd.HDFStore('../../data/analyses/indexes.h5')
+  era = xr.open_dataset('/home/arno/Documents/data/analyses/ERA/ERA-ep-SH.nc')
+  ncep = xr.open_dataset('/home/arno/Documents/data/analyses/NCEP2_T2_ppt_uv850.nc')
+#+end_src
+
+#+begin_src ipython :results silent :session
+  bbox = np.array([-75, -60, -17, -35])
+#+end_src
+
+#+begin_src ipython :results silent :session
+  from data.GSHHS import GSHHS
+  from shapely.geometry import Polygon, LinearRing
+
+  plate = crs.PlateCarree()
+  def clip(reader):
+      poly = Polygon(LinearRing(zip(bbox[[0, 1, 1, 0]], bbox[[2, 2, 3, 3]])))
+      return [g for g in reader.geometries() if poly.intersects(g)]
+
+  coast = clip(GSHHS('GSHHS_shp/i/GSHHS_i_L1'))
+  border = clip(GSHHS('WDBII_shp/i/WDBII_border_i_L1'))
+  rivers = clip(GSHHS('WDBII_shp/i/WDBII_river_i_L05'))
+#+end_src
+
+
+#+begin_src ipython :results silent :session
+  def reg(series, field):
+      t, y = xr.align(
+          xr.DataArray(series).rename({'dim_0': 'time'}),
+          field.stack(space=('lon', 'lat')) * 12
+      )
+      ols = sm.OLS(y.values, sm.tools.add_constant(t)).fit()
+      r = xr.DataArray(ols.params[1], coords=[y.space]).unstack('space')
+      return r
+
+  def plot(r, ax, clim=4):
+      def coord(x):
+          dx = np.diff(x).mean() / 2
+          return np.r_[x[:1]-dx, x+dx]
+      pl = ax.pcolormesh(coord(r.lon), coord(r.lat), r.T, transform=plate, vmin=-clim, vmax=clim, cmap='PiYG')
+      ax.add_geometries(coast, crs=plate, edgecolor='steelblue', facecolor='none', linewidth=1)
+      ax.add_geometries(border, crs=plate, edgecolor='lightslategray', facecolor='none', linewidth=1)
+      ax.set_extent(bbox)
+      return pl
+#+end_src
+
+#+begin_src ipython :results silent :session
+  ppt_era = p.sel(lon=slice(*bbox[:2]+[-2, 2]), lat=slice(*bbox[2:]+[2, -2]))
+  ppt_era = ppt_era.resample('MS', 'time', 'sum') * 12 # it's a total (m)
+#+end_src
+
+#+begin_src ipython :results silent :session
+  ppt_ncep = ncep['prate'].sel(lon=slice(*bbox[:2]+360+[-2, 2]), lat=slice(*bbox[2:]+[2, -2]))
+  ppt_ncep = ppt_ncep.resample('MS', 'time', 'mean') * 3.6 * 24 * 365 # it's a rate (mm)
+#+end_src
+
+* Intro
+- Meses de verano: 12, 1, 2
+- Datos que tengo:
+|         |   desde |   hasta | frecuencia |
+|---------+---------+---------+------------|
+| ERA     | 1979-01 | 2017-07 |            |
+| NCEP    | 1979-01 | 2016-12 |            |
+| Niño3.4 | 1950-01 | 2017-05 | mensual    |
+| SOI     | 1951-01 | 2017-05 | mensual    |
+
+* SOI
+
+#+begin_src ipython :results silent :session :exports none
+  ts = D['soi']
+  ts = ts.loc[np.vstack(ts.index.month==m for m in (12, 1, 2)).any(0)]
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig soi.png :exports results
+  fig, axs = plt.subplots(1, 2, figsize=(12, 7), subplot_kw={'projection': plate})
+  fig.subplots_adjust(wspace=.02)
+  plot(reg(ts, ppt_era), axs[0])
+  axs[0].set_title('ERA')
+  pl = plot(reg(ts, ppt_ncep), axs[1])
+  plots.cbar(pl, ax=axs[1], width=.02, space=.01)
+  axs[1].set_title('NCEP')
+#+end_src
+
+#+RESULTS:
+[[/home/arno/Documents/code/notebooks/obipy-resources/regression_maps/soi.png]]
+
+* Niño3.4
+
+#+begin_src ipython :results silent :session :exports none
+  ts = D['nino34']
+  ts = ts.loc[np.vstack(ts.index.month==m for m in (12, 1, 2)).any(0)]
+#+end_src
+
+#+begin_src ipython :results raw :session :savefig nino34.png :exports results
+  fig, axs = plt.subplots(1, 2, figsize=(12, 7), subplot_kw={'projection': plate})
+  fig.subplots_adjust(wspace=.02)
+  plot(reg(ts, ppt_era), axs[0])
+  axs[0].set_title('ERA')
+  pl = plot(reg(ts, ppt_ncep), axs[1])
+  plots.cbar(pl, ax=axs[1], width=.02, space=.01)
+  axs[1].set_title('NCEP')
+#+end_src
+
+#+RESULTS:
+[[/home/arno/Documents/code/notebooks/obipy-resources/regression_maps/nino34.png]]
+

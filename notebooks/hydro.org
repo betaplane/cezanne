@@ -2,9 +2,9 @@
 * links
 ** http://www.hidro-limari.info/
 ** https://earth.boisestate.edu/drycreek/data/
-
+* code
 #+begin_src ipython :results silent :session
-  import requests, os
+  import requests, os, re
   import pandas as pd
   import numpy as np
   from io import StringIO
@@ -62,7 +62,7 @@
               self.load()
 
       @property
-      def stream(self):
+      def stream(self, data=False):
           pat = re.compile('stream', re.IGNORECASE)
           return [k for k, v in self.urls.items() if pat.search(v)]
 
@@ -392,7 +392,7 @@
           print(i, r)
           return s.run([b])
 #+end_src
-** TODO pysheds
+** pysheds
 https://github.com/mdbartos/pysheds
 
 #+begin_src ipython :results silent :session
@@ -565,4 +565,65 @@ b10
 
 #+RESULTS:
 
+Local Variables:
+eval: (switch-pyvenv "hydro")
+End:
+** 04-30
+*** data preparation
+#+begin_src ipython :results silent :session
+  dc = DryCreek()
+  dc.load()
+
+  d = [getattr(dc, k)['q'] for k in dc.stream]
+  d[0] = d[0].loc['2003':] # duplicates in LG
+  df = pd.concat(d, 1)
+  df.columns = dc.stream
+#+end_src
+
+#+begin_src ipython :results silent :session
+  r = pd.concat([getattr(dc, k)['ppt'] for k in dc.met], 1)
+  r.columns = dc.met
+  r = r.diff()
+  r[r<0] = 0
+#+end_src
+*** K_means
+#+begin_src ipython :results silent :session
+  from sklearn import cluster
+  from scipy.stats import binned_statistic
+
+  q = x.AR.as_matrix()
+  idx = (1<q) & (q<1.02)
+  q = q[idx]
+  km = cluster.KMeans(n_clusters=6)
+  km.fit(q.reshape(-1, 1))
+  hq, bins, _ = binned_statistic(q, km.labels_, bins=1000)
+#+end_src
+*** histogram with colored bars
+#+begin_src ipython :results silent :session
+  def chist(q, hq, bins):
+      colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+      plt.figure()
+      _, _, patches = plt.hist(q, bins)
+      for p, h in zip(patches, hq):
+          p.set_facecolor(colors[int(round(h))])
+#+end_src
+*** now
+#+begin_src ipython :results silent :session
+  idx = (df.C2E>0) & (df.C2M>100)
+  ew = (df.C2E / df.C2M)[idx]
+  ar = (df.C2M / df.C2M.shift(1))[idx]
+#+end_src
+
+
+#+begin_src ipython :results raw :session :savefig quotient_vs_branch.png
+  fig, ax = plt.subplots(figsize=(8, 6))
+  ax.scatter(ew, ar, marker='.', color='orangered')
+  ax.set_xlabel('C2E / C2W')
+  ax.set_ylabel('q[t] / q[t-1]')
+#+end_src
+
+#+CAPTION: Quotient discharge at C2M vs quotient of C2E / C2M: higher x-axis value means more flow from eastern branch (C2E), whereas higher y-axis means higher AR(1) coefficient. Low flow values have been removed (<= 100).
+#+ATTR_ORG: :width 600 
+#+RESULTS:
+[[/home/arno/Documents/code/notebooks/obipy-resources/hydro/quotient_vs_branch.png]]
 
