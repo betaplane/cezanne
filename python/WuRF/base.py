@@ -82,13 +82,13 @@ There is one difference between the two modules: :class:`.threadWuRF.CC` has two
     * maybe data that needs to be shared can be loaded onto the class **before** initializing MPI????
 
 
-.. automodule:: python.WuRF.threadWuRF
+.. automodule:: WuRF.threadWuRF
     :members:
 
-.. automodule:: python.WuRF.mpiWuRF
+.. automodule:: WuRF.mpiWuRF
     :members:
 
-.. automodule:: python.WuRF.tests
+.. automodule:: WuRF.tests
     :members:
 
 """

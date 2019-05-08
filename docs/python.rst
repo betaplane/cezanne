@@ -37,44 +37,44 @@ Conda
 
 Data
 ====
-.. automodule:: python.data
+.. automodule:: data
    :members:
 
 WRF
 ===
-.. automodule:: python.WuRF
+.. automodule:: WuRF
    :members: 
   
 Spatial Regression
 ===================
-.. automodule:: python.laplace
+.. automodule:: laplace
    :members:
 
 Various linear stats
 ====================
-.. automodule:: python.linear
+.. automodule:: linear
 
 Helpers
 =======
-.. automodule:: python.helpers
+.. automodule:: helpers
    :members:
 
-.. automodule:: python.cezanne
+.. automodule:: cezanne
    :members:
 
 Geo
 ===
-.. automodule:: python.geo
+.. automodule:: geo
    :members:
 
 Plotting
 ========
-.. automodule:: python.plots
+.. automodule:: plots
    :members:
 
 Filtering
 =========
-.. automodule:: python.filters
+.. automodule:: filters
    :members:
 
 Müller Ice Shelf
@@ -84,5 +84,5 @@ Müller Ice Shelf
 
 Zotero
 ======
-.. automodule:: python.zotero
+.. automodule:: zotero
    :members:

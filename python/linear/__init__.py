@@ -4,10 +4,10 @@ Linear statistics functions organized by data structure to which the can be appl
 .. toctree::
     :maxdepth: 2
 
-.. automodule:: python.linear.numpy
+.. automodule:: linear.numpy
     :members:
 
-.. automodule:: python.linear.pandas
+.. automodule:: linear.pandas
     :members:
 
 """

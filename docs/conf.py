@@ -20,7 +20,7 @@
 import os
 import sys
 sys.path.insert(0, os.path.abspath('../python'))
-sys.path.insert(0, os.path.abspath('../'))
+# sys.path.insert(0, os.path.abspath('../'))
 sys.path.insert(0, os.path.expanduser('~/Dropbox/work/Antarctica'))
 
 # -- General configuration ------------------------------------------------
@@ -50,9 +50,9 @@ class Mock(MagicMock):
         return MagicMock()
 
 # somehow the autodoc version doesn't work properly
-autodoc_mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'matplotlib', 'matplotlib.pyplot', 'cartopy', 'cartopy.crs', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables', 'osgeo', 'pyzotero']
+mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'scipy.linalg', 'matplotlib', 'matplotlib.pyplot', 'matplotlib.ticker', 'matplotlib.gridspec', 'cartopy', 'cartopy.crs', 'cartopy.io', 'cartopy.io.shapereader', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables', 'osgeo', 'pyzotero', 'tqdm', 'pyproj', 'bs4', 'shapefile']
 
-sys.modules.update((n, Mock()) for n in autodoc_mock_imports)
+sys.modules.update((n, Mock()) for n in mock_imports)
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']

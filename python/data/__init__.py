@@ -1,26 +1,29 @@
 """
-.. automodule:: python.data.CEAZA
+.. automodule:: data.CEAZA
     :members:
 
-.. automodule:: python.data.compare
+.. automodule:: data.compare
     :members:
 
-.. automodule:: python.data.interpolate
+.. automodule:: data.interpolate
     :members:
 
-.. automodule:: python.data.IGRA
+.. automodule:: data.IGRA
     :members:
 
-.. automodule:: python.data.NCDC
+.. automodule:: data.NCDC
     :members:
 
-.. automodule:: python.data.EarthData
+.. automodule:: data.EarthData
     :members:
 
-.. automodule:: python.data.IceBridge
+.. automodule:: data.IceBridge
     :members:
 
-.. automodule:: python.data.GDAL
+.. automodule:: data.GDAL
+    :members:
+
+.. automodule:: data.GSHHS
     :members:
 
 .. _netCDF4: http://unidata.github.io/netcdf4-python/
