@@ -43,14 +43,19 @@ extensions = ['sphinx.ext.autodoc',
 ]
 
 # http://docs.readthedocs.io/en/latest/faq.html#i-get-import-errors-on-libraries-that-depend-on-c-modules
+
+# somehow the autodoc version doesn't work properly
+mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'scipy.linalg', 'matplotlib', 'matplotlib.pyplot', 'matplotlib.ticker', 'matplotlib.gridspec', 'cartopy', 'cartopy.crs', 'cartopy.io', 'cartopy.io.shapereader', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables', 'osgeo', 'pyzotero', 'tqdm', 'pyproj', 'bs4', 'shapefile']
+
+mock_classes = ['Dataset', 'DataArray']
+
 from unittest.mock import MagicMock
 class Mock(MagicMock):
     @classmethod
     def __getattr__(cls, name):
+        if name in mock_classes:
+            return MagicMock
         return MagicMock()
-
-# somehow the autodoc version doesn't work properly
-mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'scipy.linalg', 'matplotlib', 'matplotlib.pyplot', 'matplotlib.ticker', 'matplotlib.gridspec', 'cartopy', 'cartopy.crs', 'cartopy.io', 'cartopy.io.shapereader', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables', 'osgeo', 'pyzotero', 'tqdm', 'pyproj', 'bs4', 'shapefile']
 
 sys.modules.update((n, Mock()) for n in mock_imports)
 

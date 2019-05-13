@@ -37,11 +37,11 @@ import sys
 from importlib.util import find_spec
 from .base import *
 
-if find_spec('mpi4py'):
+try:
     MPI = import_module('mpi4py.MPI')
     WuRF = import_module('.mpiWuRF', 'WuRF')
     rank = MPI.COMM_WORLD.Get_rank()
-else:
+except:
     WuRF = import_module('.threadWuRF', 'WuRF')
     rank = -1
 

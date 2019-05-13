@@ -7,7 +7,15 @@ from functools import singledispatch
 from importlib import import_module
 import os, re
 
-config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+# config = PyFileConfigLoader(os.path.expanduser('~/Dropbox/work/config.py')).load_config()
+
+def __get_config():
+    import sys
+    sys.path.append(os.path.expanduser('~/Dropbox/work'))
+    import config_mod
+    return config_mod
+
+config = __get_config()
 sta = pd.read_hdf(config.Meta.file_name, 'stations')
 
 def read_hdf(filedict, key):

@@ -73,20 +73,20 @@ or to redirect to a file::
     * rework printed info (log?)
 
 """
-import requests, csv, os, sys
+import requests, csv, os, sys, re
 from io import StringIO
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from traitlets.config import Application, Config
 from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import Unicode, Instance, Dict, Integer, Bool
 from importlib import import_module
 from tqdm import tqdm
+from helpers import config
+from functools import partial
 
-class FetchError(Exception):
-    pass
 
 class NoNewStationError(Exception):
     pass
@@ -94,20 +94,8 @@ class NoNewStationError(Exception):
 class TrialsExhaustedError(Exception):
     pass
 
-class _Reader(StringIO):
-    def __init__(self, str):
-        super(_Reader, self).__init__(str)
-        p = 0
-        while True:
-            try:
-                l = next(self)
-            except StopIteration:
-                raise FetchError(str)
-            if l[0] != '#':
-                break
-            self.start = p + l.find(':') + 1
-            p = self.tell()
-        self.seek(self.start)
+class ServerMemoryError(Exception):
+    pass
 
 class base_app(Application):
     config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
@@ -118,38 +106,76 @@ class base_app(Application):
         except ConfigFileNotFound: cfd = Config(config)
         super().__init__(config=cfg, **kwargs)
 
-class Field(base_app):
-    raw_url = Unicode().tag(config = True)
-    user = Unicode().tag(config = True)
-    from_date = Instance(datetime, (2003, 1, 1))
-    var_code = Unicode('', help='Field to fetch, e.g. ta_c.').tag(config = True)
-    raw = Bool(False, help='Whether to fetch the raw (as opposed to database-aggregated) data.').tag(config=True)
-    file_name = Unicode('', help='Data file name.').tag(config = True)
+class Common:
+    max_workers = 10
+    earliest_date = datetime(2003, 1, 1)
+    timedelta = timedelta(hours=-4)
+    memory_err =  re.compile('allowed memory', re.IGNORECASE)
 
-    aliases = {'v': 'Field.var_code',
-               'f': 'Field.file_name',
-               'm': 'Meta.file_name',
-               'log_level': 'Application.log_level'}
-    flags = {'r': ({'Field': {'raw': True}}, "set raw=True")}
+    def from_date(self, date):
+        try:
+            return date.strftime('%Y-%m-%d')
+        except:
+            return self.earliest_date.strftime('%Y-%m-%d')
 
-    def start(self, fields_table=None, from_date=None):
+    def to_date(self, to_date=None):
+        try:
+            return to_date.strftime('%Y-%m-%d')
+        except:
+            return (datetime.utcnow() + self.timedelta).strftime('%Y-%m-%d')
+
+    def read(self, url, params, cols, n_trials=10, prog=None, **kwargs):
+        params.update(kwargs)
+        for trial in range(n_trials):
+            req = requests.get(url, params=params)
+            req.raise_for_status()
+            self.memory_check(req.text)
+            # self.log.debug(req.text)
+            with StringIO(req.text) as sio:
+                try:
+                    df = pd.read_csv(sio, index_col=0, comment='#', header=None).dropna(1, 'all')
+                    df.columns = cols[1:]
+                    df.index.name = cols[0]
+                    df.sort_index(inplace=True)
+                except:
+                    print('attempt #{}'.format(trial))
+                else:
+                    if prog is not None:
+                        prog.update(1)
+                return df.sort_index()
+
+        raise TrialsExhaustedError()
+
+    @classmethod
+    def memory_check(cls, s):
+        try:
+            assert not cls.memory_err.search(s)
+        except:
+            raise ServerMemoryError()
+
+
+class Field(Common):
+    cols = ['s_cod', 'datetime', 'min', 'ave', 'max', 'data_pc']
+
+    def start(self, var_code, fields_table=None, from_date=None, raw=False):
         if fields_table is None:
-            print('Using field table from file {}'.format(self.config.Meta.file_name))
-            fields_table = pd.read_hdf(self.config.Meta.file_name, 'fields').xs(self.var_code, 0, 'field', False)
+            print('Using field table from file {}'.format(config.Meta.file_name))
+            fields_table = pd.read_hdf(config.Meta.file_name, 'fields')
+        table = fields_table.xs(var_code, 0, 'field', False)
+
         # NOTE: I'm not sure if tqdm is thread-safe
-        with tqdm(total = fields_table.shape[0]) as prog:
-            with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
-                self.parent.data = [exe.submit(self._get, c, prog, from_date) for c in fields_table.iterrows()]
+        with tqdm(total = table.shape[0]) as prog:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
+                self.data = exe.map(partial(self._get, prog=prog, from_date=from_date, raw=raw), table.iterrows())
 
-            data = dict([d.result() for d in as_completed(self.parent.data) if d.result() is not None])
-            self.parent.data = data
+            data = dict([d for d in self.data if d is not None])
 
-        if not self.raw:
-            data = pd.concat(data.values(), 1).sort_index(axis=1)
+        self.data = data if raw else pd.concat(data.values(), 1).sort_index(axis=1)
+
 
         # this tests whether the class is called as a command-line app, in which case the data is saved to file
         # EXCEPT if the command line app is "Update"
-        if self.cli_config != {}:
+        if False: # I'm moving away from traitlets
             with pd.HDFStore(self.file_name, 'a') as S:
                 if self.raw:
                     for k, v in data.items():
@@ -161,186 +187,128 @@ class Field(base_app):
                 else:
                     S[self.var_code] = data
             print('Field {} fetched and saved in file {}'.format(self.var_code, self.file_name))
-        else:
-            return data
 
-    def _get(self, f, prog=None, from_date=None):
+    def _get(self, fields_row, prog=None, from_date=None, raw=False):
+        (station, field), row = fields_row
         try:
-            from_date = from_date[f[0][0]] # updating: field exists in old data
+            from_date = from_date[station] # updating: field exists in old data
         except: pass
         if from_date is None or from_date != from_date: # if Nat
-            from_date = pd.Timestamp(f[1]['first']) # updating: earliest record from meta
-        try:
-            v = from_date.strftime('%Y-%m-%d')
-        except:
-            v = self.from_date.strftime('%Y-%m-%d') # last resort: global Field.from_date
+            from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
 
-        try:
-            df = self.fetch_raw(f[0][2], v) if self.raw else self.fetch_aggr(f[0][2], v)
-        except FetchError as fe:
-            print(fe)
-        else:
-            i = df.columns.size
-            df.columns = pd.MultiIndex.from_arrays(
-                np.r_[
-                    np.repeat([f[0][0], f[0][1], f[0][2], f[1]['elev']], i),
-                    df.columns
-                ].reshape((-1, i)),
-                names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
-            )
-            self.log.info('fetched {} from {}'.format(f[0][2], f[0][0]))
-            if prog is not None:
-                prog.update(1)
-            return f[0][2], df.sort_index(1)
-
-    def fetch_aggr(self, code, from_date):
-        cols = ['ultima_lectura', 'min', 'prom', 'max', 'data_pc']
-        params = {
-            'fn': 'GetSerieSensor',
-            'interv': 'hora',
-            'valor_nan': 'nan',
-            'user': self.user,
-            's_cod': code,
-            'fecha_inicio': from_date,
-            'fecha_fin': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
-        }
-        for trial in range(self.parent.trials):
-            r = requests.get(self.parent.url, params=params)
-            if not r.ok:
-                continue
-            self.log.debug(r.text)
-            reader = _Reader(r.text)
-            try:
-                d = pd.read_csv(reader, index_col=0, parse_dates=True, usecols=cols)
-                reader.close()
-            except:
-                raise FetchError(r.url)
-            else:
-                return d.astype(float) # important
-
-        raise TrialsExhaustedError()
-
-    def fetch_raw(self, code, from_date):
-        params = {'fi': from_date,
-                  'ff': (datetime.utcnow() - timedelta(hours=4)).strftime('%Y-%m-%d'),
-                  's_cod': code}
-        for trial in range(self.parent.trials):
-            r = requests.get(self.raw_url, params=params)
-            if not r.ok:
-                continue
-            self.log.debug(r.text)
-            reader = _Reader(r.text)
-            try:
-                d = pd.read_csv(
-                    reader,
-                    index_col = 1,
-                    parse_dates = True
-                )
-                reader.close()
-            except:
-                raise FetchError(r.url)
-            else:
-                # hack for lines from webservice ending in comma - pandas adds additional column
-                # and messes up names
-                cols = [x.lstrip() for x in d.columns][-3:]
-                d = d.iloc[:,1:4]
-                d.columns = cols
-                return d.astype(float) # important
-
-        raise TrialsExhaustedError()
-
-class Meta(base_app):
-    field = Dict().tag(config = True)
-    field_index = Instance(slice, (0, 2))
-    field_data = Instance(slice, (2, 6))
-    station = Dict().tag(config = True)
-    file_name = Unicode().tag(config = True)
-    get_fields = Bool(True).tag(config = True)
-
-    aliases = Dict({'f': 'Meta.file_name', 'log_level': 'Application.log_level'})
-    flags = Dict({'n': ({'Meta': {'get_fields': False}}, "do not fetch field metadata")})
-
-    def start(self):
-        self.parent.data = None
-        params = {k: v[0] for k, v in self.station.items()}
-        for trial in range(self.parent.trials):
-            req = requests.get(self.parent.url, params = params)
-            if not req.ok:
-                continue
-            self.log.debug(req.text)
-            with StringIO(req.text) as sio:
-                try:
-                    self.parent.data = [(l[0], l[1: 7]) for l in csv.reader(sio) if l[0][0] != '#']
-                except:
-                    print('attempt #{}'.format(trial))
-                else:
-                    break
-
-        if self.parent.data is None:
-            raise TrialsExhaustedError()
-
-        cols = [v[1] for k, v in sorted(self.station.items(), key=lambda k: k[0]) if k[0]=='c']
-        meta = pd.DataFrame.from_items(
-            self.parent.data,
-            columns = cols[1:], # 0 is index
-            orient='index'
+        df = self.fetch(row['sensor_code'], from_date, raw=raw)
+        i = df.columns.size
+        df.columns = pd.MultiIndex.from_arrays(
+            np.r_[
+                np.repeat([station, field, row['sensor_code'], row['elev']], i),
+                df.columns
+            ].reshape((-1, i)),
+            names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
         )
-        meta.index.name = cols[0]
-        meta.sort_index(inplace=True)
+        # self.log.info('fetched {} from {}'.format(f[0][2], f[0][0]))
+        if prog is not None:
+            prog.update(1)
+        return row['sensor_code'], df.sort_index(1)
 
-        if self.get_fields:
-            with tqdm(total = meta.shape[0]) as prog:
+    def fetch(self, code, from_date, to_date=None, raw=False):
+        params = {
+            False: {
+                'fn': 'GetSerieSensor',
+                'interv': 'hora',
+                'valor_nan': 'nan',
+                'user': config.CEAZAMet.user,
+                's_cod': code,
+                'fecha_inicio': self.from_date(from_date),
+                'fecha_fin': self.to_date(to_date)
+            },
+            True: {
+                'fi': self.from_date(from_date),
+                'ff': self.to_date(to_date),
+                's_cod': code
+            }
+        }[raw]
+        print(params)
+        url = {True: config.CEAZAMet.raw_url, False: config.CEAZAMet.url}[raw]
+        cols = self.cols[:-1] if raw else self.cols
+        try:
+            return self.read(url, params, cols).set_index('datetime')
+
+        # for too long data series, the server throws an error, see Common.memory_check
+        except ServerMemoryError:
+            from_date = from_date if isinstance(from_date, datetime) else self.earliest_date
+            to_date = datetime.utcnow() + self.timedelta if to_date is None else to_date
+            dt = (to_date - from_date) / 2
+            assert dt > timedelta(days=365)
+            mid = from_date + dt
+            df1 = self.fetch(code, from_date, mid, raw)
+            df2 = self.fetch(code, mid, to_date, raw)
+            return pd.concat((df1, df2)).dropna('all')
+        except:
+            print('Possibly no data for {}: from {} to {}'.format(code, from_date, to_date))
+            return None
+
+
+class Meta(Common):
+    field = [
+        ('tm_cod', 'field'),
+        ('s_cod', 'sensor_code'),
+        ('tf_nombre', 'full'),
+        ('um_notacion', 'unit'),
+        ('s_altura', 'elev'),
+        ('s_primera_lectura', 'first'),
+        ('s_ultima_lectura', 'last')
+    ]
+
+    station = [
+        ('e_cod', 'station'),
+        ('e_nombre', 'full'),
+        ('e_lon', 'lon'),
+        ('e_lat', 'lat'),
+        ('e_altitud', 'elev'),
+        ('e_primera_lectura', 'first'),
+        ('e_ultima_lectura', 'last')
+    ]
+    def __init__(self, **kwargs):
+        self.__dict__.update({'_'+k: v for k, v in kwargs.items()})
+
+    @property
+    def stations(self):
+        if not hasattr(self, '_stations'):
+            params, cols = zip(*self.station)
+            params = {'c{:d}'.format(i): v for i, v in enumerate(params)}
+            self._stations = self.read(
+                config.CEAZAMet.url, params, cols, fn='GetListaEstaciones', p_cod='ceazamet')
+
+        return self._stations
+
+    @property
+    def fields(self):
+        if not hasattr(self, '_fields'):
+            with tqdm(total = self.stations.shape[0]) as prog:
                 def get(st):
-                    params = {k: v[0] for k, v in self.field.items()}
-                    params['e_cod'] = st[0]
-                    for trial in range(self.parent.trials):
-                        self.log.info(st[1].full)
-                        req = requests.get(self.parent.url, params = params)
-                        if not req.ok:
-                            continue
-                        self.log.debug(req.text)
-                        with StringIO(req.text) as sio:
-                            try:
-                                out = [(tuple(np.r_[st[:1], l[self.field_index]]), l[self.field_data])
-                                          for l in csv.reader(sio) if l[0][0] != '#']
-                            except:
-                                print('attempt #{}'.format(trial))
-                            else:
-                                prog.update(1)
-                                return out
+                    params, cols = zip(*self.field)
+                    params = {'c{:d}'.format(i): v for i, v in enumerate(params)}
+                    return self.read(
+                        config.CEAZAMet.url, params, cols,
+                        fn='GetListaSensores', e_cod=st, p_cod='ceazamet', prog=prog)
 
-                    raise TrialsExhaustedError()
+                with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
+                    field_meta = exe.map(get, self.stations.index)
 
-                with ThreadPoolExecutor(max_workers=self.parent.max_workers) as exe:
-                    field_meta = [exe.submit(get, s) for s in meta.iterrows()]
+                self._fields = pd.concat(field_meta, 0, keys=self.stations.index)
 
-                self.parent.data = [f for g in as_completed(field_meta) for f in g.result()]
+        return self._fields
 
-            cols = [v[1] for k, v in sorted(self.field.items(), key=lambda k: k[0]) if k[0]=='c']
-            field_meta = pd.DataFrame.from_items(
-                self.parent.data,
-                columns = cols[self.field_data],
-                orient = 'index'
-            )
-            field_meta.index = pd.MultiIndex.from_tuples(
-                field_meta.index.tolist(),
-                names = np.r_[['station'], cols[self.field_index]]
-            )
-            field_meta.sort_index(inplace=True)
-
-            if self.cli_config == {}:
-                return meta, field_meta
-        else:
-            if self.cli_config == {}:
-                return meta
-
-        with pd.HDFStore(self.file_name, mode='w') as S:
-            S['stations'] = meta
-            if self.get_fields:
-                S['fields'] = field_meta
+    def store(self):
+        with pd.HDFStore(config.Meta.file_name, mode='w') as S:
+            if hasattr(self, 'meta'):
+                S['stations'] = self.meta
+            if hasattr(self, 'fields'):
+                S['fields'] = self.fields
         print("CEAZAMet station metadata saved in file {}.".format(self.file_name))
 
-    def model_elevation(self, meta, dem, var_name, column_name):
+    @staticmethod
+    def model_elevation(meta, dem, var_name, column_name):
         """Interpolate a gridded elevation dataset (e.g. the DEM used by WRF internally) to station locations and append the model elevations to the metadata DataFrame.
 
         :param meta: the metadata DataFrame

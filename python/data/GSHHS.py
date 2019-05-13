@@ -13,6 +13,7 @@ import os
 
 # there's a problem with newer sphinx and multiple imports. apparently solved only for python 3.7
 # https://github.com/sphinx-doc/sphinx/pull/5998
+# https://github.com/ederag/geoptics/pull/2
 class GSHHS(Configurable, Reader):
     """Loader for the Global Self-consistent, Hierarchical, High-resolution Geography Database (GSHHG). Works from directly from the downloaded zipfile. For use examples, see :class:`plots.Coquimbo`.
 
