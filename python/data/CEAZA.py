@@ -73,20 +73,30 @@ or to redirect to a file::
     * rework printed info (log?)
 
 """
-import requests, csv, os, sys, re
+import requests as reqs
+import csv, os, sys, re
 from io import StringIO
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from traitlets.config import Application, Config
 from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import Unicode, Instance, Dict, Integer, Bool
 from importlib import import_module
 from tqdm import tqdm
 from helpers import config
-from functools import partial
+from functools import reduce
 
+
+class requests:
+    url = ''
+    @classmethod
+    def get(cls, *args, **kwargs):
+        r = reqs.get(*args, **kwargs)
+        r.raise_for_status()
+        cls.url = r.url
+        return r
 
 class NoNewStationError(Exception):
     pass
@@ -112,23 +122,23 @@ class Common:
     timedelta = timedelta(hours=-4)
     memory_err =  re.compile('allowed memory', re.IGNORECASE)
 
-    def from_date(self, date):
+    def dates(self, from_date, to_date):
         try:
-            return date.strftime('%Y-%m-%d')
+            from_str = from_date.strftime('%Y-%m-%d')
         except:
-            return self.earliest_date.strftime('%Y-%m-%d')
-
-    def to_date(self, to_date=None):
+            from_date = self.earliest_date
+            from_str = from_date.strftime('%Y-%m-%d')
         try:
-            return to_date.strftime('%Y-%m-%d')
+            to_str = to_date.strftime('%Y-%m-%d')
         except:
-            return (datetime.utcnow() + self.timedelta).strftime('%Y-%m-%d')
+            to_date = (datetime.utcnow() + self.timedelta)
+            to_str = to_date.strftime('%Y-%m-%d')
+        return from_date, to_date, from_str, to_str
 
     def read(self, url, params, cols, n_trials=10, prog=None, **kwargs):
         params.update(kwargs)
         for trial in range(n_trials):
             req = requests.get(url, params=params)
-            req.raise_for_status()
             self.memory_check(req.text)
             # self.log.debug(req.text)
             with StringIO(req.text) as sio:
@@ -157,7 +167,7 @@ class Common:
 class Field(Common):
     cols = ['s_cod', 'datetime', 'min', 'ave', 'max', 'data_pc']
 
-    def start(self, var_code, fields_table=None, from_date=None, raw=False):
+    def get_all(self, var_code, fields_table=None, from_date=None, raw=False):
         if fields_table is None:
             print('Using field table from file {}'.format(config.Meta.file_name))
             fields_table = pd.read_hdf(config.Meta.file_name, 'fields')
@@ -166,12 +176,11 @@ class Field(Common):
         # NOTE: I'm not sure if tqdm is thread-safe
         with tqdm(total = table.shape[0]) as prog:
             with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
-                self.data = exe.map(partial(self._get, prog=prog, from_date=from_date, raw=raw), table.iterrows())
-
-            data = dict([d for d in self.data if d is not None])
-
-        self.data = data if raw else pd.concat(data.values(), 1).sort_index(axis=1)
-
+                self.data = [exe.submit(self._get, r, prog=prog, from_date=from_date, raw=raw)
+                             for r in table.iterrows()]
+            data = dict([d.result() for d in as_completed(self.data)])
+            print('Errors in {}'.format([k for k, v in data.items() if v is None]))
+        self.data = data if raw else pd.concat(data.values(), 1, sort=True).sort_index(axis=1)
 
         # this tests whether the class is called as a command-line app, in which case the data is saved to file
         # EXCEPT if the command line app is "Update"
@@ -190,13 +199,17 @@ class Field(Common):
 
     def _get(self, fields_row, prog=None, from_date=None, raw=False):
         (station, field), row = fields_row
-        try:
-            from_date = from_date[station] # updating: field exists in old data
+        try: from_date = from_date[station] # updating: field exists in old data
         except: pass
         if from_date is None or from_date != from_date: # if Nat
-            from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
+            try: from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
+            except: pass
 
         df = self.fetch(row['sensor_code'], from_date, raw=raw)
+        if df is None:
+            return row['sensor_code'], None
+        df.index = pd.DatetimeIndex(df.index)
+
         i = df.columns.size
         df.columns = pd.MultiIndex.from_arrays(
             np.r_[
@@ -210,7 +223,8 @@ class Field(Common):
             prog.update(1)
         return row['sensor_code'], df.sort_index(1)
 
-    def fetch(self, code, from_date, to_date=None, raw=False):
+    def fetch(self, code, from_date=None, to_date=None, raw=False, show_params=False):
+        from_date, to_date, from_str, to_str = self.dates(from_date, to_date)
         params = {
             False: {
                 'fn': 'GetSerieSensor',
@@ -218,31 +232,34 @@ class Field(Common):
                 'valor_nan': 'nan',
                 'user': config.CEAZAMet.user,
                 's_cod': code,
-                'fecha_inicio': self.from_date(from_date),
-                'fecha_fin': self.to_date(to_date)
+                'fecha_inicio': from_str,
+                'fecha_fin': to_str
             },
             True: {
-                'fi': self.from_date(from_date),
-                'ff': self.to_date(to_date),
+                'fi': from_str,
+                'ff': to_str,
                 's_cod': code
             }
         }[raw]
-        print(params)
+        if show_params: print(params)
         url = {True: config.CEAZAMet.raw_url, False: config.CEAZAMet.url}[raw]
         cols = self.cols[:-1] if raw else self.cols
         try:
-            return self.read(url, params, cols).set_index('datetime')
+            return self.read(url, params, cols, parse_dates=True).set_index('datetime')
 
         # for too long data series, the server throws an error, see Common.memory_check
         except ServerMemoryError:
-            from_date = from_date if isinstance(from_date, datetime) else self.earliest_date
-            to_date = datetime.utcnow() + self.timedelta if to_date is None else to_date
             dt = (to_date - from_date) / 2
-            assert dt > timedelta(days=365)
+            # break if the interval-halving runs away
+            assert dt > timedelta(days=365), code
             mid = from_date + dt
-            df1 = self.fetch(code, from_date, mid, raw)
-            df2 = self.fetch(code, mid, to_date, raw)
-            return pd.concat((df1, df2)).dropna('all')
+            dfs = [d for d in
+                   (self.fetch(code, from_date, mid, raw, True), self.fetch(code, mid, to_date, raw, True))
+                   if d is not None]
+            try: return dfs[0].combine_first(dfs[1])
+            except:
+                try: return dfs[0]
+                except: return None
         except:
             print('Possibly no data for {}: from {} to {}'.format(code, from_date, to_date))
             return None
@@ -299,13 +316,15 @@ class Meta(Common):
 
         return self._fields
 
-    def store(self):
-        with pd.HDFStore(config.Meta.file_name, mode='w') as S:
-            if hasattr(self, 'meta'):
-                S['stations'] = self.meta
-            if hasattr(self, 'fields'):
-                S['fields'] = self.fields
-        print("CEAZAMet station metadata saved in file {}.".format(self.file_name))
+    def store(self, **kwargs):
+        with pd.HDFStore(config.Meta.file_name, mode='a') as S:
+            change_key = datetime.now().strftime('%Y%m%d')
+            for k in ['stations', 'fields']:
+                S[os.path.join(change_key, k)] = S[k]
+                S[k] = kwargs.get(k, getattr(self, k))
+
+        print('CEAZAMet station metadata saved in file {}.'.format(config.Meta.file_name))
+        print('Old contents moved to node {}.'.format(change_key))
 
     @staticmethod
     def model_elevation(meta, dem, var_name, column_name):
@@ -325,6 +344,44 @@ class Meta(Common):
         intp = ip.GridInterpolator(dem)
         z = intp.xarray(dem[var_name]).squeeze()
         return pd.concat((meta, pd.DataFrame(z, index=z.stations, columns=[column_name])), 1)
+
+    def update(self, **kwargs):
+        sta = kwargs.get('stations', pd.read_hdf(config.Meta.file_name, 'stations'))
+        flds = kwargs.get('fields', pd.read_hdf(config.Meta.file_name, 'fields'))
+
+        flds['elev'] = flds['elev'].astype(float)
+        flds.reset_index('sensor_code', inplace=True)
+
+        self._stations = self.stations.combine_first(sta)
+        self._fields = self.update_fields(flds)
+
+    def update_fields(self, flds):
+        outer = self.fields.merge(flds, how='outer')
+        left = self.fields.merge(flds, how='left')
+        for s in [k for k, c in np.vstack(np.unique(outer.sensor_code, return_counts=True)).T if c>1]:
+            o = outer[outer.sensor_code==s]
+            l = left[left.sensor_code==s].copy()
+            try:
+                # check if everything other than first, last is the same
+                assert (lambda x: np.all(x.iloc[0]==x.iloc[1]))(o.drop(['first', 'last'], 1))
+            except:
+                # some soil temp elevations were mislabeled as positive in older versions of the db
+                assert o['elev'].sum() == 0, o['elev']
+                l['elev'] = o['elev'].dropna().min()
+
+            # use the widest date range for first, last
+            try: l['first'] = o['first'].dropna().min()
+            except: pass
+            try: l['last'] = o['last'].dropna().min()
+            except: pass
+            outer.drop(o.index, 0, inplace=True)
+            outer = outer.append(l)
+
+        cc = pd.concat((self.fields, flds), 0, sort=True)
+        outer.index = reduce(lambda a, b: a.append(b),
+                             [cc.index[cc['sensor_code']==c].unique() for c in outer['sensor_code']])
+        return outer.sort_index()
+
 
 class Update(base_app):
     overlap = Instance(timedelta, kw={'days': 30}).tag(config = True)
@@ -435,14 +492,14 @@ class Compare(object):
 
     """
     def __init__(self, a, b):
-        ft = import_module('functools')
         # just checking that data_pc is all 0 or 100
         assert(not any([(lambda c: np.any((c==c) & (c!=0) & (c!=100)))(c.xs('data_pc', 1, 'aggr')) for c in [a, b]]))
 
-        self.a, self.b = [c.drop('data_pc', 1, 'aggr') for c in [a, b]]
+        self.a, self.b = [c.drop('data_pc', 1, level='aggr').rename({'prom': 'ave'}, axis=1, level='aggr')
+                          for c in [a, b]]
         x = (lambda d: (d == d) & (d != 0))(self.a - self.b)
         # locations where any of the non-data_pc aggr levels are not equal to old data
-        self.x = ft.reduce(np.add, [x.xs(a, 1, 'aggr') for a in x.columns.get_level_values('aggr').unique()])
+        self.x = reduce(np.add, [x.xs(i, 1, 'aggr') for i in x.columns.get_level_values('aggr').unique()])
 
         # stations where not only the last timestamp of old data differs from new data
         z = self.x.apply(lambda c: c.index[c].max() - c.index[c].min(), 0)
@@ -471,6 +528,7 @@ class Compare(object):
                 pl = ax.plot(c.loc[a: b], label=idx[-1])[0]
                 ax.plot(x.xs(idx[-1], 1, 'aggr').loc[d], 'x', color=pl.get_color())
                 ax.vlines(d, *ax.get_ylim(), color='r', label='_')
+            ax.set_ylabel(i[0])
         plt.legend()
 
 if __name__ == '__main__':

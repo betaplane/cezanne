@@ -25,7 +25,7 @@ In the x-direction, two interpolations are performed on the lines denoted *x0* a
 
 Usage
 =====
-All classes (:class:`GridInterpolator`, :class:`BilinearInterpolator`) inherit from a the :class:`Interpolator` base class, all of whose keyword arguments can be set on the subclasses too. It is furthermore configurable via the :mod:`traitlets.config` module.
+All classes (:class:`GridInterpolator`, :class:`BilinearInterpolator`) inherit from a the :class:`Interpolator` base class, all of whose keyword arguments can be set on the subclasses too.
 
 Interpolation is carried out by calling either of the two methods :meth:`xarray` or :meth:`netcdf` on the instantiated class, depending on whether the dataset being interpolated is an :class:`xarray.Dataset` or a `netCDF4`_ dataset::
 
@@ -52,8 +52,6 @@ import unittest, os
 from pyproj import Proj
 from geo import proj_params
 from importlib import import_module
-from traitlets.config import Application
-from traitlets import List, Unicode
 from timeit import default_timer as timer
 
 
@@ -61,7 +59,7 @@ def g2d(v):
     m, n = v.shape[-2:]
     return np.array(v[:]).flatten()[-m * n:].reshape((m, n))
 
-class Interpolator(Application):
+class Interpolator:
     """Base class for the interpolators in this module. The parameters common to all routines are described here.
 
     :param ds: netCDF Dataset from which to interpolate (and which contains projection parameters as attributes).
@@ -77,19 +75,14 @@ class Interpolator(Application):
         None of the keyword arguments are necessary; if none are given, the default list of stations is loaded according to the values specified in the config file (see :mod:`data`). Alternatively, ``lon``, ``lat`` and ``names`` can be specified directly (but ``names``) is currently not used if ``ds`` is a `netCDF4`_ Dataset.
 
     """
-    spatial_dims = List(['south_north', 'west_east'])
+    spatial_dims = ['south_north', 'west_east']
     """The names of the latitude / longitude dimensions"""
 
-    spatial_vars = List([['XLONG', 'XLAT'], ['XLONG_M', 'XLAT_M']]).tag(config=True)
+    spatial_vars = [['XLONG', 'XLAT'], ['XLONG_M', 'XLAT_M']]
 
-    time_dim_coord = Unicode('XTIME').tag(config=True)
-
-    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
+    time_dim_coord = 'XTIME'
 
     def __init__(self, ds, *args, stations=None, lon=None, lat=None, names=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.load_config_file(os.path.expanduser(self.config_file))
-
         proj = Proj(**proj_params(ds))
         for V in self.spatial_vars:
             try:
@@ -104,7 +97,7 @@ class Interpolator(Application):
             if (stations is None):
                 stations = pd.read_hdf(self.config.Meta.file_name, 'stations')
             self.index = stations.index
-            self.ij = proj(*stations[['lon', 'lat']].as_matrix().T)
+            self.ij = proj(*stations[['lon', 'lat']].values.T)
 
         self.start_time = timer()
 
@@ -162,7 +155,7 @@ class GridInterpolator(Interpolator):
         else:
             y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
             ds = xr.DataArray(y, coords=[('station', self.index)])
-        self.log.info('Time taken: %s', timer() - self.start_time)
+        print('Time taken: %s', timer() - self.start_time)
         return ds
 
     def netcdf(self, x):
@@ -173,7 +166,7 @@ class GridInterpolator(Interpolator):
                 np.r_[['station'], other_dims])
         else:
             y = self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
-        self.log.info('Time taken: %s', timer() - self.start_time)
+        print('Time taken: %s', timer() - self.start_time)
         return y
 
 class BilinearInterpolator(Interpolator):
@@ -198,7 +191,8 @@ class BilinearInterpolator(Interpolator):
         if len(dims) > 0:
             X = x.stack(s=self.spatial_dims, t=dims)
             y = xr.DataArray(self.W.dot(X), coords=[self.index, X.coords['t']]).unstack('t')
-            y.coords['XTIME'] = x.coords['XTIME']
+            if hasattr(x, self.time_dim_coord):
+                y.coords[self.time_dim_coord] = x.coords[self.time_dim_coord]
         else:
             X = x.stack(s=self.spatial_dims)
             y = xr.DataArray(self.W.dot(X), coords=[self.index])

@@ -290,7 +290,7 @@ def affine(x, y):
 
     C = np.linalg.lstsq(
         np.r_[[x.flatten()], [y.flatten()], np.ones((1, m * n))].T,
-        np.r_[[i.flatten()], [j.flatten()], np.ones((1, m * n))].T)[0].T
+        np.r_[[i.flatten()], [j.flatten()], np.ones((1, m * n))].T, rcond=None)[0].T
     b = C[:2, 2]
     A = C[:2, :2]
 
