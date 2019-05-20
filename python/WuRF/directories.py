@@ -88,6 +88,40 @@ def raw_bin(df, times, wrf_freq=pd.Timedelta(1, 'h'), label='center', tol=None):
     d = pd.concat(d, 1, keys=range(len(d)))
     return d
 
+class Hbin:
+    @staticmethod
+    def weights(minutes, split_min):
+        m = sorted(np.r_[minutes, split_min])
+        d = np.diff(np.r_[m[-1], m]) % 60
+        i = m.index(split_min)
+        return dict(zip(m, d)), {m[(i+1) % len(m)]: d[i]}
+
+    @staticmethod
+    def ave(df, weights):
+        w = [weights.get(m, 0) for m in df.index.minute]
+        x = df.values.flatten()
+        d, n = (np.vstack((x, np.isfinite(x))) * w).sum(1)
+        return pd.Series([d, n], index=['sum', 'weight'])
+
+    @classmethod
+    def bin(cls, df, label='center'):
+        kwargs = {'rule': '60T', 'closed': 'right', 'label': 'right'}
+        base = {'center': 30, 'right': 0}[label]
+        kwargs.update(base=base)
+        loffs = pd.offsets.Minute(-base)
+        ave = df.xs('ave', 1, 'aggr')
+
+        w, e = cls.weights(np.unique(df.index.minute), {'center': 30, 'right': 0}[label])
+        a = ave.resample(loffset=loffs, **kwargs).apply(cls.ave, weights=w)
+        b = ave.resample(loffset=loffs - pd.offsets.Hour(1), **kwargs).apply(cls.ave, weights=e)
+        d = a.add(b, fill_value=0)
+        ave = d['sum'] / d['weight']
+        # apparently, reusing a resampler leads to unpredictble results
+        mi = df.xs('min', 1, 'aggr').resample(loffset=loffs, **kwargs).min().iloc[:, 0]
+        ma = df.xs('max', 1, 'aggr').resample(loffset=loffs, **kwargs).max().iloc[:, 0]
+        return pd.concat((ave, mi, ma), 1, keys=['ave', 'min', 'max'])
+
+
 def raw_stats(df):
     w = df.xs('weights', 1, 'station')
 
@@ -181,7 +215,7 @@ class WRFR(config.WRFop):
     time_dim_coord = 'XTIME'
     K = 273.15
 
-    def __init__(self, data, dir_pat='c01'):
+    def __init__(self, data, dir_pat='c01', copy=None):
         dirpat = re.compile(dir_pat)
         self.wrfout_re, self.wrfxtrm_re = re.compile(self.wrfout_re), re.compile(self.wrfxtrm_re)
 
@@ -229,6 +263,10 @@ class WRFR(config.WRFop):
                 self.dirs.remove(s)
             except: pass
 
+        if copy is not None:
+            self.wrf = copy.wrf
+            self.xtrm = copy.xtrm
+
     def wrf_files(self, wrfout_vars, wrfxtrm_vars=None, stations=sta):
         out = [f for f in os.listdir(self.dirs[0]) if self.wrfout_re.search(f)]
         with xr.open_dataset(os.path.join(self.dirs[0], out[0])) as ds:
@@ -266,24 +304,24 @@ class WRFR(config.WRFop):
                 xi.coords['start'] = t.min()
                 x.append(xi)
 
-        if wrfxtrm_vars is None:
-            return xr.concat(o, 'start')
-        return xr.concat(o, 'start'), xr.concat(x, 'start')
+        self.wrf = xr.concat(o, 'start')
+        if wrfxtrm_vars is not None:
+            self.xtrm = xr.concat(x, 'start')
 
 
     def stats(self):
-        wrf, xtr = self.wrf_files(['T2'], ['T2MEAN', 'T2MIN', 'T2MAX'])
+        # self.wrf_files(['T2'], ['T2MEAN', 'T2MIN', 'T2MAX'])
 
         sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
-        t = np.unique(wrf[self.time_dim_coord])
+        t = np.unique(self.wrf[self.time_dim_coord])
         X, self.D = {}, {}
-        for s, df in self.data.items():
-            d_mid = raw_stats(raw_bin(df, t, label='center'))
-            dm = align_times(wrf, d_mid).sel(column='ave') + self.K
+        for s, df in tqdm(self.data.items()):
+            d_mid = Hbin.bin(df, label='center')
+            dm = align_times(self.wrf, d_mid).sel(column='ave') + self.K
             dm['column'] = 'point'
-            d_end = align_times(xtr, raw_stats(raw_bin(df, t, label='right'))) + self.K
-            w = wrf.sel(station=sta[s])
-            x = xtr.sel(station=sta[s])
+            d_end = align_times(self.xtrm, Hbin.bin(df, label='right')) + self.K
+            w = self.wrf.sel(station=sta[s])
+            x = self.xtrm.sel(station=sta[s])
             X[sta[s]] = xr.concat((
                 x['T2MEAN'] - d_end.sel(column='ave'),
                 x['T2MAX'] - d_end.sel(column='max'),
@@ -301,7 +339,7 @@ class WRFR(config.WRFop):
             'Time': 0,
         }
         x[tuple([d[c] for c in x.dims])] = np.nan
-        self.wrf = x.to_dataset(name='T2')
+        self.wrf_err = x.to_dataset(name='T2')
 
     def store(self):
         names = ['station', 'field', 'sensor_code', 'elev']

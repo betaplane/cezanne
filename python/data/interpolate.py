@@ -52,7 +52,7 @@ import unittest, os
 from pyproj import Proj
 from geo import proj_params
 from importlib import import_module
-from timeit import default_timer as timer
+# from timeit import default_timer as timer
 
 
 def g2d(v):
@@ -99,7 +99,7 @@ class Interpolator:
             self.index = stations.index
             self.ij = proj(*stations[['lon', 'lat']].values.T)
 
-        self.start_time = timer()
+        # self.start_time = timer()
 
     def netcdf_dims(self, var):
         dims = var.dimensions
@@ -155,7 +155,7 @@ class GridInterpolator(Interpolator):
         else:
             y = self.intp.interpn(self.mn, x.values, self.coords, self.method, bounds_error=False)
             ds = xr.DataArray(y, coords=[('station', self.index)])
-        print('Time taken: %s', timer() - self.start_time)
+        # print('Time taken: %s', timer() - self.start_time)
         return ds
 
     def netcdf(self, x):
@@ -166,7 +166,7 @@ class GridInterpolator(Interpolator):
                 np.r_[['station'], other_dims])
         else:
             y = self.intp.interpn(self.mn, x, self.coords, self.method, bounds_error=False)
-        print('Time taken: %s', timer() - self.start_time)
+        # print('Time taken: %s', timer() - self.start_time)
         return y
 
 class BilinearInterpolator(Interpolator):
@@ -196,7 +196,7 @@ class BilinearInterpolator(Interpolator):
         else:
             X = x.stack(s=self.spatial_dims)
             y = xr.DataArray(self.W.dot(X), coords=[self.index])
-        print('Time taken: %s', timer() - self.start_time)
+        # print('Time taken: %s', timer() - self.start_time)
         return y
 
     # this appears to be returning a tuple of data, dims

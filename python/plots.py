@@ -10,6 +10,7 @@ from traitlets.config.loader import PyFileConfigLoader, ConfigFileNotFound
 from traitlets import List, Unicode
 from importlib import import_module
 from functools import singledispatch
+from helpers import config
 
 
 def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, **kwargs):
@@ -145,7 +146,7 @@ def cbar(plot, loc='right', ax=None, center=False, width=.01, space=.01, label=N
 
     return cb
 
-class Coquimbo(Configurable):
+class Coquimbo(config.Coquimbo):
     """Add map features for Coquimbo region to a given :class:`~cartopy.mpl.geoaxes.GeoAxes` instance. Usage::
 
         from cartopy import crs
@@ -157,23 +158,8 @@ class Coquimbo(Configurable):
         * **lines_only** - only draw coasline and country border without area fill
         * **colors** - :obj:`iterable` of one or two colors to be used for (coast, border)
 
-    ..NOTE:
-        The bounding box of the plot is set via the :attr:`bbox` class attribute, which is a :class:`traitlets.List` configurable and can also be set in a configuration file.
-
     """
-
-    bbox = List([-72.2, -69.8, -32.5, -28.2]).tag(config=True)
-    """configurable bounding box (minx, maxx, miny, maxy) of the region"""
-
-    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
-
-    def __init__(self, *args, config={}, **kwargs):
-        try:
-            cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
-            cfg.merge(config)
-        except ConfigFileNotFound: pass
-        super().__init__(config=cfg, **kwargs)
-
+    def __init__(self):
         gshhs = import_module('data.GSHHS')
         self.coast = self.clip(gshhs.GSHHS('GSHHS_shp/i/GSHHS_i_L1'))
         self.border = self.clip(gshhs.GSHHS('WDBII_shp/i/WDBII_border_i_L1'))
@@ -219,7 +205,7 @@ class Coquimbo(Configurable):
         try:
             lonlat = kwargs['lonlat']
         except KeyError:
-            sta = pd.read_hdf(self.config.Meta.file_name, 'stations').loc[df.index]
+            sta = pd.read_hdf(config.Meta.file_name, 'stations').loc[df.index]
             lonlat = sta[['lon', 'lat']].astype(float).as_matrix().T
         vmin = kwargs.get('vmin', np.nanmin(df))
         vmax = kwargs.get('vmax', np.nanmax(df))
@@ -240,10 +226,11 @@ class Coquimbo(Configurable):
             gl.ylocator = ticker.FixedLocator(range(-33, -27))
             gl.xlabels_top = False
             gl.ylabels_right = False
-            if kwargs.get('title', True) and (geom[3] < geom[1]):
+            if kwargs.get('title', True) and ((geom[3] is None) or (geom[3] < geom[1])):
                 ax.set_title(n)
-            if not kwargs.get('xlabels', True) or (geom[3] < (geom[0] - 1) * geom[1]):
-                gl.xlabels_bottom = False
+            if geom[3] is not None:
+                if not kwargs.get('xlabels', True) or (geom[3] < (geom[0] - 1) * geom[1]):
+                    gl.xlabels_bottom = False
             if not kwargs.get('ylabels', True) or (i > 0):
                 gl.ylabels_left = False
             gls.append(gl)
