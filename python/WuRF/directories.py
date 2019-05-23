@@ -2,6 +2,7 @@ from helpers import config, sta
 from glob import glob
 from datetime import datetime, timedelta
 from data.interpolate import BilinearInterpolator
+from importlib import import_module
 from tqdm import tqdm
 import xarray as xr
 import pandas as pd
@@ -88,40 +89,6 @@ def raw_bin(df, times, wrf_freq=pd.Timedelta(1, 'h'), label='center', tol=None):
     d = pd.concat(d, 1, keys=range(len(d)))
     return d
 
-class Hbin:
-    @staticmethod
-    def weights(minutes, split_min):
-        m = sorted(np.r_[minutes, split_min])
-        d = np.diff(np.r_[m[-1], m]) % 60
-        i = m.index(split_min)
-        return dict(zip(m, d)), {m[(i+1) % len(m)]: d[i]}
-
-    @staticmethod
-    def ave(df, weights):
-        w = [weights.get(m, 0) for m in df.index.minute]
-        x = df.values.flatten()
-        d, n = (np.vstack((x, np.isfinite(x))) * w).sum(1)
-        return pd.Series([d, n], index=['sum', 'weight'])
-
-    @classmethod
-    def bin(cls, df, label='center'):
-        kwargs = {'rule': '60T', 'closed': 'right', 'label': 'right'}
-        base = {'center': 30, 'right': 0}[label]
-        kwargs.update(base=base)
-        loffs = pd.offsets.Minute(-base)
-        ave = df.xs('ave', 1, 'aggr')
-
-        w, e = cls.weights(np.unique(df.index.minute), {'center': 30, 'right': 0}[label])
-        a = ave.resample(loffset=loffs, **kwargs).apply(cls.ave, weights=w)
-        b = ave.resample(loffset=loffs - pd.offsets.Hour(1), **kwargs).apply(cls.ave, weights=e)
-        d = a.add(b, fill_value=0)
-        ave = d['sum'] / d['weight']
-        # apparently, reusing a resampler leads to unpredictble results
-        mi = df.xs('min', 1, 'aggr').resample(loffset=loffs, **kwargs).min().iloc[:, 0]
-        ma = df.xs('max', 1, 'aggr').resample(loffset=loffs, **kwargs).max().iloc[:, 0]
-        return pd.concat((ave, mi, ma), 1, keys=['ave', 'min', 'max'])
-
-
 def raw_stats(df):
     w = df.xs('weights', 1, 'station')
 
@@ -160,6 +127,48 @@ def raw_stats(df):
         df.xs('max', 1, 'aggr').values.max(1)
     ))
     return pd.DataFrame(x.T, index=df.index, columns=['ave', 'min', 'max'])
+
+
+class Hbin:
+    """Hourly binning of raw station data."""
+    @staticmethod
+    def weights(minutes, split_min):
+        m = sorted(np.r_[minutes, split_min])
+        d = np.diff(np.r_[m[-1], m]) % 60
+        i = m.index(split_min)
+        return dict(zip(m, d)), {m[(i+1) % len(m)]: d[i]}
+
+    @staticmethod
+    def ave(df, weights):
+        w = [weights.get(m, 0) for m in df.index.minute]
+        x = df.values.flatten()
+        d, n = (np.vstack((x, np.isfinite(x))) * w).sum(1)
+        return pd.Series([d, n], index=['sum', 'weight'])
+
+    @classmethod
+    def bin(cls, df, label='center'):
+        kwargs = {'rule': '60T', 'closed': 'right', 'label': 'right'}
+        base = {'center': 30, 'right': 0}[label]
+        kwargs.update(base=base)
+        loffs = pd.offsets.Minute(-base)
+        ave = df.xs('ave', 1, 'aggr')
+
+        m = np.unique(df.index.minute)
+        if len(m)==1:
+            if (label=='right' and m[0]==0) or (label=='center' and m[0]==30):
+                df = df.copy()
+                df.columns = df.columns.get_level_values('aggr')
+                return df
+        w, e = cls.weights(m, {'center': 30, 'right': 0}[label])
+        a = ave.resample(loffset=loffs, **kwargs).apply(cls.ave, weights=w)
+        b = ave.resample(loffset=loffs - pd.offsets.Hour(1), **kwargs).apply(cls.ave, weights=e)
+        d = a.add(b, fill_value=0)
+        ave = d['sum'] / d['weight']
+        # apparently, reusing a resampler leads to unpredictble results
+        mi = df.xs('min', 1, 'aggr').resample(loffset=loffs, **kwargs).min().iloc[:, 0]
+        ma = df.xs('max', 1, 'aggr').resample(loffset=loffs, **kwargs).max().iloc[:, 0]
+        return pd.concat((ave, mi, ma), 1, keys=['ave', 'min', 'max'])
+
 
 
 class WRFD(config.WRFop):
@@ -218,15 +227,17 @@ class WRFR(config.WRFop):
     def __init__(self, data, dir_pat='c01', copy=None):
         dirpat = re.compile(dir_pat)
         self.wrfout_re, self.wrfxtrm_re = re.compile(self.wrfout_re), re.compile(self.wrfxtrm_re)
+        data = {k: v for k, v in data.items() if v.shape[0]>0}
 
-        if isinstance(data, pd.DataFrame):
-            start, end = self._x.index[[0, -1]] - self.utc_delta
-            self.sta = data.columns.get_level_values('station')
-        else:
-            start = min([df.index[0] for df in data.values()])
-            end = max([df.index[-1] for df in data.values()])
+        with pd.HDFStore(config.Meta.file_name) as S:
+            sta = S['stations']
+            self.flds = S['fields']
+
+        mi, ma = zip(*[df.index[[0, -1]] for df in data.values()])
+        self.start, end = min(mi), max(ma)
+        s = {k: v for (v, _), k in self.flds['sensor_code'].items()}
+        self.sta = sta.loc[[s[k] for k in data.keys()]]
         self.data = data
-        self.flds = pd.read_hdf(config.Meta.file_name, 'fields')
 
         dirs = []
         for p in self.paths:
@@ -239,7 +250,7 @@ class WRFR(config.WRFop):
             t = datetime.strptime(d[-10:],'%Y%m%d%H')
             try:
                 assert os.path.isdir(d)
-                assert t >= start
+                assert t >= self.start
                 assert t <= end
             except: return False
             else: return True
@@ -251,7 +262,7 @@ class WRFR(config.WRFop):
             try:
                 out = [os.path.join(d, f) for f in os.listdir(d) if self.wrfout_re.search(f)]
                 ds = xr.open_dataset(sorted(out)[-1])
-                if ds[self.time_dim_coord].values.max() >= start.asm8:
+                if ds[self.time_dim_coord].values.max() >= self.start.asm8:
                     self.dirs.insert(0, d)
                 else:
                     break
@@ -265,12 +276,12 @@ class WRFR(config.WRFop):
 
         if copy is not None:
             self.wrf = copy.wrf
-            self.xtrm = copy.xtrm
+            self.D = copy.D
 
-    def wrf_files(self, wrfout_vars, wrfxtrm_vars=None, stations=sta):
+    def wrf_files(self, wrfout_vars, wrfxtrm_vars=None):
         out = [f for f in os.listdir(self.dirs[0]) if self.wrfout_re.search(f)]
         with xr.open_dataset(os.path.join(self.dirs[0], out[0])) as ds:
-            itp = BilinearInterpolator(ds, stations=stations)
+            itp = BilinearInterpolator(ds, stations=self.sta)
 
         o, x = [], []
         for d in tqdm(self.dirs):
@@ -301,37 +312,37 @@ class WRFR(config.WRFop):
                         xi = ds[wrfxtrm_vars].apply(itp.xarray)
 
                 xi.coords[self.time_dim_coord] = t
-                xi.coords['start'] = t.min()
+                xi.coords['start'] = oi.coords['start']
                 x.append(xi)
 
-        self.wrf = xr.concat(o, 'start')
-        if wrfxtrm_vars is not None:
-            self.xtrm = xr.concat(x, 'start')
-
+        wrf = xr.concat(o, 'start')
+        self.wrf = xr.merge((wrf, xr.concat(x, 'start'))) if wrfxtrm_vars is not None else wrf
 
     def stats(self):
         # self.wrf_files(['T2'], ['T2MEAN', 'T2MIN', 'T2MAX'])
 
         sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
         t = np.unique(self.wrf[self.time_dim_coord])
-        X, self.D = {}, {}
+        X, D = {}, {}
         for s, df in tqdm(self.data.items()):
+            x = self.wrf.sel(station=sta[s])
             d_mid = Hbin.bin(df, label='center')
-            dm = align_times(self.wrf, d_mid).sel(column='ave') + self.K
+            dm = align_times(x, d_mid).sel(column='ave') + self.K
             dm['column'] = 'point'
-            d_end = align_times(self.xtrm, Hbin.bin(df, label='right')) + self.K
-            w = self.wrf.sel(station=sta[s])
-            x = self.xtrm.sel(station=sta[s])
+            d_end = Hbin.bin(df, label='right')
+            de = align_times(x, d_end) + self.K
             X[sta[s]] = xr.concat((
-                x['T2MEAN'] - d_end.sel(column='ave'),
-                x['T2MAX'] - d_end.sel(column='max'),
-                x['T2MIN'] - d_end.sel(column='min'),
-                w['T2'] - dm
+                x['T2MEAN'] - de.sel(column='ave'),
+                x['T2MAX'] - de.sel(column='max'),
+                x['T2MIN'] - de.sel(column='min'),
+                x['T2'] - dm
             ), 'column')
-            self.D[s] = d_mid
-        x = xr.concat(X.values(), 'station')
+            D[s] = d_end
+        self.D = self.dict2frame(D)
+
         # NOTE: In the wrfxtrm files, the first data point of a simulation run is always 0!
         # nan it out here
+        x = xr.concat(X.values(), 'station')
         d = {
             'station': slice(None),
             'column': x.indexes['column'].get_indexer(['ave', 'max', 'min']),
@@ -339,24 +350,27 @@ class WRFR(config.WRFop):
             'Time': 0,
         }
         x[tuple([d[c] for c in x.dims])] = np.nan
-        self.wrf_err = x.to_dataset(name='T2')
+        self.wrf = xr.merge((self.wrf, x.to_dataset('column')))
 
-    def store(self):
-        names = ['station', 'field', 'sensor_code', 'elev']
-        sta = pd.read_hdf(config.Meta.file_name, 'stations')
-        d = self.flds['sensor_code'].reset_index().join(sta, on='station')
+    def dict2frame(self, D):
+        names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
+        d = self.flds['sensor_code'].reset_index().join(self.sta, on='station')
         def df(k, v):
             df = v.copy()
-            s = d[d['sensor_code']==k][names].values[0]
+            s = d[d['sensor_code']==k][names[:-1]].values[0]
             df.columns = pd.MultiIndex.from_tuples([np.r_[s, [c]] for c in v.columns])
+            df.columns.names = names
             return df
-        D = pd.concat([df(k, v) for k, v in self.D.items()])
+        return pd.concat([df(k, v) for k, v in D.items()], 1)
+
+    def store(self):
         with pd.HDFStore(config.Field.raw_data) as S:
             try:
-                d = S['raw/binned/T2']
-                D = D.combine_first(d)
-            except: pass
-            S['raw/binned/T2'] = D
+                d = S['raw/binned/end/T2']
+                D = self.D.combine_first(d)
+            except:
+                D = self.D
+            S['raw/binned/end/T2'] = D
 
         try:
             with xr.open_dataset(self.file_name) as ds:
@@ -366,9 +380,92 @@ class WRFR(config.WRFop):
 
         wrf.to_netcdf(self.file_name)
 
+    def load(self, time=None):
+        D = pd.read_hdf(config.Field.raw_data, 'raw/binned/end/T2')
+        nc = xr.open_dataset(self.file_name)
+        if time is not None:
+            return D, self.dataframe(time, nc=nc)
+        return D, nc
+
+    def map_plot(self, coq):
+        cpl = import_module('plots')
+        plt = import_module('matplotlib.pyplot')
+        gs = import_module('matplotlib.gridspec')
+        # coq = cpl.Coquimbo()
+        fig = plt.figure(figsize=(15, 4))
+        g = gs.GridSpec(1, 32, left=.05, right=.95)
+
+        x = self.wrf.isel(Time=slice(24, 48))
+        dims = ('Time', 'start')
+        def f(col, func):
+            return pd.DataFrame(getattr(x[col], func)(dims).values, index=x.station, columns=[col])
+        df = pd.concat((f('ave', 'mean'), f('point', 'mean'), f('min', 'min'), f('max', 'max')), 1)
+        lonlat = self.sta[['lon', 'lat']].values.T
+
+        plt.set_cmap('seismic')
+        coq.plotrow(df[['ave', 'point']], g[0, 1:11], cbar='left', ylabels=False, cbar_kw={'center': True, 'cax': g[0, 0]})
+        plt.set_cmap('Blues_r')
+        coq.plotrow(df[['min']], g[0, 13:18], cbar='left', ylabels=False, cbar_kw={'cax': g[0, 12]})
+        plt.set_cmap('Reds')
+        coq.plotrow(df[['max']], g[0, 20:25], cbar='left', ylabels=False, cbar_kw={'cax': g[0, 19]})
+        plt.set_cmap('plasma')
+        c = f('ave', 'count')
+        c.columns = ['count']
+        coq.plotrow(c, g[0, 26:31], cbar_kw={'cax': g[0, 31]})
+
+    def plot_station(self, sensor_code, time):
+        plt = import_module('matplotlib.pyplot')
+        gs = import_module('matplotlib.gridspec')
+        sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
+        colrs = plt.get_cmap('Set2').colors
+        fig = plt.figure()
+        g = gs.GridSpec(3, 1)
+
+        d = self.D.xs(sensor_code, 1, 'sensor_code').dropna().resample('h').asfreq()
+        df = self.dataframe(time)[sta[sensor_code]].resample('h').asfreq()
+
+        ax = fig.add_subplot(g[:2, 0])
+        ax.set_title(sta[sensor_code])
+        bx = fig.add_subplot(g[2, 0], sharex=ax)
+        for i, (a, b) in enumerate([('ave', 'T2MEAN'), ('max', 'T2MAX'), ('min', 'T2MIN')]):
+            ax.plot(d.xs(a, 1, 'aggr'), color=colrs[i], label='obs {}'.format(a))
+            ax.plot(df[b] - self.K, color=colrs[i+3], label='WRF {}'.format(a))
+            bx.plot(df[a], color=colrs[i+3], label='err {}'.format(a))
+
+        try:
+            D, Df = self.load(time)
+        except: pass
+        else:
+            x = D.xs(sensor_code, 1, 'sensor_code').xs('ave', 1, 'aggr')
+            ax.plot(x, color=colrs[6], label='obs old')
+
+        ax.axvline(self.start, color='r')
+        plt.setp(ax.get_xticklabels(), visible=False)
+        ax.grid(axis='x')
+        ax.legend()
+
+        bx.axvline(self.start, color='r')
+        bx.grid(axis='x')
+        bx.legend()
+
+    def dataframe(self, time, nc=None):
+        def nat(df):
+            return df[df['XTIME']==df['XTIME']]
+        x = self.wrf if nc is None else nc
+        wrf = nat(x.isel(Time=time).to_dataframe())
+        wrf = wrf.reset_index().pivot('XTIME', 'station', list(self.wrf.data_vars))
+        return wrf.sort_index(1).swaplevel(axis=1)
+
+    def check_overlap(self, other, aggr='ave'):
+        a = other.xs(aggr, 1, 'aggr')
+        b = self.D.xs(aggr, 1, 'aggr')
+        c = a.columns.get_level_values(0).intersection(b.columns.get_level_values(0))
+        return pd.concat([(a[s] - b[s]).dropna() for s in c], 1, keys=c).T
+
+
 def update(overlap=1):
     from data import CEAZA
-    data = pd.read_hdf(config.Field.raw_data, 'raw/binned/T2')
+    data = pd.read_hdf(config.Field.raw_data, 'raw/binned/end/T2')
     start = (data.index[-1] - pd.Timedelta(overlap, 'd')).date()
     f = CEAZA.Field()
     f.get_all('ta_c', from_date=start, raw=True)

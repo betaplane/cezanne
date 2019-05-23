@@ -113,7 +113,7 @@ def row_label(obj, label, rotation=0, size=12, labelpad=40, **kwargs):
 def _(obj, *args, **kwargs):
     return row_label(add_axes(obj), *args, **kwargs)
 
-def cbar(plot, loc='right', ax=None, center=False, width=.01, space=.01, label=None, label_kw={}):
+def cbar(plot, loc='right', cax=None, center=False, width=.01, space=.01, label=None, label_kw={}):
     """Wrapper to attach colorbar on either side of a :class:`~matplotlib.axes.Axes.plot` and to add coastlines and grids.
 
     :param plot: Plot to attach the colorbar to.
@@ -127,14 +127,17 @@ def cbar(plot, loc='right', ax=None, center=False, width=.01, space=.01, label=N
     :param label_kw: :obj:`dict` of additional keyword arguments for the label text.
 
     """
-    if ax is None:
+    if cax is None:
         try:
             ax = plot.ax
         except AttributeError:
             ax = plot.axes
-    bb = ax.get_position()
-    x = bb.x0 - space - width if loc=='left' else bb.x1 + space
-    cax = ax.figure.add_axes([x, bb.y0, width, bb.y1-bb.y0])
+        bb = ax.get_position()
+        x = bb.x0 - space - width if loc=='left' else bb.x1 + space
+        cax = ax.figure.add_axes([x, bb.y0, width, bb.y1-bb.y0])
+    elif isinstance(cax, gs.SubplotSpec):
+        cax = plot.figure.add_subplot(cax)
+
     cb = plt.colorbar(plot, cax=cax)
     cax.yaxis.set_ticks_position(loc)
     if center is not False:
@@ -199,7 +202,7 @@ class Coquimbo(config.Coquimbo):
             * **cbar** - Colorbar location (see :func:`matplotlib.pyplot.colorbar`) or ``None`` if none is desired (default 'right').
             * **cbar_kw** - keywords for :func:`cbar`
             * **subplot_kw** - keywords for the constructor of :class:`~matplotlib.gridspec.GridSpecFromSubplotSpec`
-            * **norm** - a :class:`~matplotlib.cm.ScalarMappanle` (optional, e.g. for categorical data)
+            * **norm** - a :class:`~matplotlib.cm.ScalarMappable` (optional, e.g. for categorical data)
 
         """
         try:
@@ -238,7 +241,7 @@ class Coquimbo(config.Coquimbo):
         if (cb is not None):
             cbar_kw.setdefault('space', 0.02)
             cbar_kw.setdefault('width', 0.02)
-            cbar(pl[-1], loc=cb, **cbar_kw)
+            cbar(pl[{'left': 0, 'right':-1}[cb]], loc=cb, **cbar_kw)
         return pl, gls
 
 def axesColor(ax, color):
