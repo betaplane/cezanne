@@ -3,6 +3,7 @@ from glob import glob
 from datetime import datetime, timedelta
 from data.interpolate import BilinearInterpolator
 from importlib import import_module
+from collections import namedtuple
 from tqdm import tqdm
 import xarray as xr
 import pandas as pd
@@ -224,10 +225,11 @@ class WRFR(config.WRFop):
     time_dim_coord = 'XTIME'
     K = 273.15
 
-    def __init__(self, data, dir_pat='c01', copy=None):
+    def __init__(self, data, dir_pat='c01', prev=None, copy=None):
         dirpat = re.compile(dir_pat)
         self.wrfout_re, self.wrfxtrm_re = re.compile(self.wrfout_re), re.compile(self.wrfxtrm_re)
-        data = {k: v for k, v in data.items() if v.shape[0]>0}
+        data = {k: v for k, v in data.items() if (v is not None and v.shape[0]>0)}
+        print('data with length > 0: {}'.format(len(data)))
 
         with pd.HDFStore(config.Meta.file_name) as S:
             sta = S['stations']
@@ -274,9 +276,18 @@ class WRFR(config.WRFop):
                 self.dirs.remove(s)
             except: pass
 
+        if prev is not None:
+            self._prev = prev
+
         if copy is not None:
             self.wrf = copy.wrf
             self.D = copy.D
+
+    @property
+    def prev(self):
+        if not hasattr(self, '_prev'):
+            self._prev = self.load()
+        return self._prev
 
     def wrf_files(self, wrfout_vars, wrfxtrm_vars=None):
         out = [f for f in os.listdir(self.dirs[0]) if self.wrfout_re.search(f)]
@@ -319,7 +330,7 @@ class WRFR(config.WRFop):
         self.wrf = xr.merge((wrf, xr.concat(x, 'start'))) if wrfxtrm_vars is not None else wrf
 
     def stats(self):
-        # self.wrf_files(['T2'], ['T2MEAN', 'T2MIN', 'T2MAX'])
+        self.wrf_files(['T2'], ['T2MEAN', 'T2MIN', 'T2MAX'])
 
         sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
         t = np.unique(self.wrf[self.time_dim_coord])
@@ -364,28 +375,27 @@ class WRFR(config.WRFop):
         return pd.concat([df(k, v) for k, v in D.items()], 1)
 
     def store(self):
-        with pd.HDFStore(config.Field.raw_data) as S:
-            try:
-                d = S['raw/binned/end/T2']
-                D = self.D.combine_first(d)
-            except:
-                D = self.D
-            S['raw/binned/end/T2'] = D
+        try:
+            dt = pd.Timedelta(12, 'h')
+            D = self.D.loc[self.start+dt:].combine_first(self.prev.D)
+        except:
+            D = self.D
+        finally:
+            D.to_hdf(config.Field.raw_data, 'raw/binned/end/T2')
 
         try:
             with xr.open_dataset(self.file_name) as ds:
                 wrf = self.wrf.combine_first(ds)
         except:
             wrf = self.wrf
+        finally:
+            wrf.to_netcdf(self.file_name)
 
-        wrf.to_netcdf(self.file_name)
-
-    def load(self, time=None):
-        D = pd.read_hdf(config.Field.raw_data, 'raw/binned/end/T2')
-        nc = xr.open_dataset(self.file_name)
-        if time is not None:
-            return D, self.dataframe(time, nc=nc)
-        return D, nc
+    @classmethod
+    def load(cls):
+        nt = namedtuple('prev', ['D', 'wrf'])
+        nc = xr.open_dataset(cls.file_name)
+        return nt(pd.read_hdf(config.Field.raw_data, 'raw/binned/end/T2'), nc)
 
     def map_plot(self, coq):
         cpl = import_module('plots')
@@ -413,7 +423,7 @@ class WRFR(config.WRFop):
         c.columns = ['count']
         coq.plotrow(c, g[0, 26:31], cbar_kw={'cax': g[0, 31]})
 
-    def plot_station(self, sensor_code, time):
+    def plot_station(self, sensor_code, time, prev=None):
         plt = import_module('matplotlib.pyplot')
         gs = import_module('matplotlib.gridspec')
         sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
@@ -421,8 +431,9 @@ class WRFR(config.WRFop):
         fig = plt.figure()
         g = gs.GridSpec(3, 1)
 
-        d = self.D.xs(sensor_code, 1, 'sensor_code').dropna().resample('h').asfreq()
-        df = self.dataframe(time)[sta[sensor_code]].resample('h').asfreq()
+        obj = self if prev is None else prev
+        d = obj.D.xs(sensor_code, 1, 'sensor_code').dropna().resample('h').asfreq()
+        df = self.dataframe(obj.wrf, time)[sta[sensor_code]].resample('h').asfreq()
 
         ax = fig.add_subplot(g[:2, 0])
         ax.set_title(sta[sensor_code])
@@ -432,12 +443,14 @@ class WRFR(config.WRFop):
             ax.plot(df[b] - self.K, color=colrs[i+3], label='WRF {}'.format(a))
             bx.plot(df[a], color=colrs[i+3], label='err {}'.format(a))
 
-        try:
-            D, Df = self.load(time)
-        except: pass
-        else:
-            x = D.xs(sensor_code, 1, 'sensor_code').xs('ave', 1, 'aggr')
-            ax.plot(x, color=colrs[6], label='obs old')
+        if prev is None:
+            try:
+                D, Df = self.prev.D, self.dataframe(self.prev.wrf, time)
+            except: pass
+            else:
+                dt = pd.Timedelta(2, 'd')
+                x = D.xs(sensor_code, 1, 'sensor_code').xs('ave', 1, 'aggr')
+                ax.plot(x.loc[self.start-dt:], color=colrs[6], label='obs old')
 
         ax.axvline(self.start, color='r')
         plt.setp(ax.get_xticklabels(), visible=False)
@@ -448,12 +461,12 @@ class WRFR(config.WRFop):
         bx.grid(axis='x')
         bx.legend()
 
-    def dataframe(self, time, nc=None):
+    @staticmethod
+    def dataframe(nc, time):
         def nat(df):
             return df[df['XTIME']==df['XTIME']]
-        x = self.wrf if nc is None else nc
-        wrf = nat(x.isel(Time=time).to_dataframe())
-        wrf = wrf.reset_index().pivot('XTIME', 'station', list(self.wrf.data_vars))
+        wrf = nat(nc.isel(Time=time).to_dataframe())
+        wrf = wrf.reset_index().pivot('XTIME', 'station', list(nc.data_vars))
         return wrf.sort_index(1).swaplevel(axis=1)
 
     def check_overlap(self, other, aggr='ave'):
@@ -466,10 +479,15 @@ class WRFR(config.WRFop):
 def update(overlap=1):
     from data import CEAZA
     data = pd.read_hdf(config.Field.raw_data, 'raw/binned/end/T2')
-    start = (data.index[-1] - pd.Timedelta(overlap, 'd')).date()
+    prev = WRFR.load()
+    start = (prev.D.index[-1] - pd.Timedelta(overlap, 'd')).date()
+
+    print('start: {}'.format(start))
     f = CEAZA.Field()
     f.get_all('ta_c', from_date=start, raw=True)
 
-    w = WRFR(f.data)
+    print('data length: {}'.format(len([d for d in f.data.values() if d is not None])))
+    w = WRFR(f.data, prev=prev)
     w.stats()
-    w.store()
+    return w
+    # w.store()

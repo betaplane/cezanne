@@ -265,6 +265,8 @@ class Field(Common):
             return None
 
 
+    def update(self):
+
 class Meta(Common):
     field = [
         ('tm_cod', 'field'),
@@ -532,6 +534,4 @@ class Compare(object):
         plt.legend()
 
 if __name__ == '__main__':
-    app = CEAZAMet()
-    app.initialize()
-    app.subapp.start()
+    pass
