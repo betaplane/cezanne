@@ -433,15 +433,19 @@ class WRFR(config.WRFop):
 
         obj = self if prev is None else prev
         d = obj.D.xs(sensor_code, 1, 'sensor_code').dropna().resample('h').asfreq()
-        df = self.dataframe(obj.wrf, time)[sta[sensor_code]].resample('h').asfreq()
+        try:
+            df = self.dataframe(obj.wrf, time)[sta[sensor_code]].resample('h').asfreq()
+        except: pass
 
         ax = fig.add_subplot(g[:2, 0])
         ax.set_title(sta[sensor_code])
         bx = fig.add_subplot(g[2, 0], sharex=ax)
         for i, (a, b) in enumerate([('ave', 'T2MEAN'), ('max', 'T2MAX'), ('min', 'T2MIN')]):
             ax.plot(d.xs(a, 1, 'aggr'), color=colrs[i], label='obs {}'.format(a))
-            ax.plot(df[b] - self.K, color=colrs[i+3], label='WRF {}'.format(a))
-            bx.plot(df[a], color=colrs[i+3], label='err {}'.format(a))
+            try:
+                ax.plot(df[b] - self.K, color=colrs[i+3], label='WRF {}'.format(a))
+                bx.plot(df[a], color=colrs[i+3], label='err {}'.format(a))
+            except: pass
 
         if prev is None:
             try:

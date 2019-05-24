@@ -74,7 +74,7 @@ or to redirect to a file::
 
 """
 import requests as reqs
-import csv, os, sys, re
+import csv, os, sys, re, logging
 from io import StringIO
 from datetime import datetime, timedelta
 import pandas as pd
@@ -88,6 +88,38 @@ from tqdm import tqdm
 from helpers import config
 from functools import reduce
 
+class compare:
+    def load(self, var_code, raw=True):
+        with pd.HDFStore({True: config.Field.raw_data, False: config.Field.file_name}[raw]) as S:
+            node = S.get_node('raw/{}'.format(var_code))
+            self.data = {k: S[v._v_pathname] for k, v in node._v_children.items()}
+
+    @classmethod
+    def compare_dicts(cls, a, b):
+        d = {}
+        keys = set(a.keys()).union(b.keys())
+        df = pd.DataFrame(np.zeros((len(keys), 2)) * np.nan, index=keys, columns=['a', 'b'])
+        for k in keys:
+            try:
+                assert a[k] is not None
+                assert b[k] is not None
+            except:
+                df.loc[k, 'a'] = 1 if a.get(k, None) is not None else 0
+                df.loc[k, 'b'] = 1 if b.get(k, None) is not None else 0
+            else:
+                e = cls.compare_dataframes(a[k], b[k])
+                if e == {}:
+                    df.drop(k, inplace=True)
+                else:
+                    d[k] = e
+        return d, df
+
+    @staticmethod
+    def compare_dataframes(a, b):
+        idx = a.index.intersection(b.index)
+        c = (a.loc[idx].fillna(-9999) == b.loc[idx].fillna(-9999))
+        d = {k: np.where(v==False)[0] for k, v in c.iteritems() if not v.all()}
+        return d
 
 class requests:
     url = ''
@@ -119,8 +151,13 @@ class base_app(Application):
 class Common:
     max_workers = 10
     earliest_date = datetime(2003, 1, 1)
-    timedelta = timedelta(hours=-4)
+    timedelta = pd.Timedelta(-4, 'h')
+    update_overlap = pd.Timedelta(1, 'd')
+    update_drop = pd.Timedelta(180, 'd')
     memory_err =  re.compile('allowed memory', re.IGNORECASE)
+
+    def __init__(self):
+        logging.basicConfig(filename=config.CEAZAMet.log_file, level=logging.DEBUG)
 
     def dates(self, from_date, to_date):
         try:
@@ -131,14 +168,14 @@ class Common:
         try:
             to_str = to_date.strftime('%Y-%m-%d')
         except:
-            to_date = (datetime.utcnow() + self.timedelta)
+            to_date = datetime.utcnow() + self.timedelta
             to_str = to_date.strftime('%Y-%m-%d')
         return from_date, to_date, from_str, to_str
 
     def read(self, url, params, cols, n_trials=10, prog=None, **kwargs):
-        params.update(kwargs)
         for trial in range(n_trials):
             req = requests.get(url, params=params)
+            logging.debug('fetching {}'.format(req.url))
             self.memory_check(req.text)
             # self.log.debug(req.text)
             with StringIO(req.text) as sio:
@@ -148,7 +185,7 @@ class Common:
                     df.index.name = cols[0]
                     df.sort_index(inplace=True)
                 except:
-                    print('attempt #{}'.format(trial))
+                    logging.warning('attempt #{}'.format(trial))
                 else:
                     if prog is not None:
                         prog.update(1)
@@ -167,45 +204,30 @@ class Common:
 class Field(Common):
     cols = ['s_cod', 'datetime', 'min', 'ave', 'max', 'data_pc']
 
-    def get_all(self, var_code, fields_table=None, from_date=None, raw=False):
+    def get_all(self, var_code, fields_table=None, from_date=None, to_date=None, raw=False):
         if fields_table is None:
-            print('Using field table from file {}'.format(config.Meta.file_name))
+            logging.info('Using field table from file {}'.format(config.Meta.file_name))
             fields_table = pd.read_hdf(config.Meta.file_name, 'fields')
         table = fields_table.xs(var_code, 0, 'field', False)
 
         # NOTE: I'm not sure if tqdm is thread-safe
         with tqdm(total = table.shape[0]) as prog:
             with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
-                self.data = [exe.submit(self._get, r, prog=prog, from_date=from_date, raw=raw)
+                self.data = [exe.submit(self._get, r, prog, from_date=from_date, to_date=to_date, raw=raw)
                              for r in table.iterrows()]
             data = dict([d.result() for d in as_completed(self.data)])
-            print('Errors in {}'.format([k for k, v in data.items() if v is None]))
+            logging.warning('Errors in {}'.format([k for k, v in data.items() if v is None]))
         self.data = data if raw else pd.concat(data.values(), 1, sort=True).sort_index(axis=1)
 
-        # this tests whether the class is called as a command-line app, in which case the data is saved to file
-        # EXCEPT if the command line app is "Update"
-        if False: # I'm moving away from traitlets
-            with pd.HDFStore(self.file_name, 'a') as S:
-                if self.raw:
-                    for k, v in data.items():
-                        st = fields_table.xs(k, 0, 'sensor_code').index.item()[0]
-                        try:
-                            S[st] = v.update(S[st])
-                        except:
-                            S[st] = v
-                else:
-                    S[self.var_code] = data
-            print('Field {} fetched and saved in file {}'.format(self.var_code, self.file_name))
-
-    def _get(self, fields_row, prog=None, from_date=None, raw=False):
+    def _get(self, fields_row, prog=None, from_date=None, **kwargs):
         (station, field), row = fields_row
-        try: from_date = from_date[station] # updating: field exists in old data
+        try: from_date = from_date[row['sensor_code']] # updating: field exists in old data
         except: pass
         if from_date is None or from_date != from_date: # if Nat
             try: from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
             except: pass
 
-        df = self.fetch(row['sensor_code'], from_date, raw=raw)
+        df = self.fetch(row['sensor_code'], from_date, **kwargs)
         if df is None:
             return row['sensor_code'], None
         df.index = pd.DatetimeIndex(df.index)
@@ -223,7 +245,7 @@ class Field(Common):
             prog.update(1)
         return row['sensor_code'], df.sort_index(1)
 
-    def fetch(self, code, from_date=None, to_date=None, raw=False, show_params=False):
+    def fetch(self, code, from_date=None, to_date=None, raw=False):
         from_date, to_date, from_str, to_str = self.dates(from_date, to_date)
         params = {
             False: {
@@ -241,11 +263,10 @@ class Field(Common):
                 's_cod': code
             }
         }[raw]
-        if show_params: print(params)
         url = {True: config.CEAZAMet.raw_url, False: config.CEAZAMet.url}[raw]
         cols = self.cols[:-1] if raw else self.cols
         try:
-            return self.read(url, params, cols, parse_dates=True).set_index('datetime')
+            return self.read(url, params, cols).set_index('datetime')
 
         # for too long data series, the server throws an error, see Common.memory_check
         except ServerMemoryError:
@@ -254,18 +275,63 @@ class Field(Common):
             assert dt > timedelta(days=365), code
             mid = from_date + dt
             dfs = [d for d in
-                   (self.fetch(code, from_date, mid, raw, True), self.fetch(code, mid, to_date, raw, True))
+                   (self.fetch(code, from_date, mid, raw), self.fetch(code, mid, to_date, raw))
                    if d is not None]
             try: return dfs[0].combine_first(dfs[1])
             except:
                 try: return dfs[0]
                 except: return None
         except:
-            print('Possibly no data for {}: from {} to {}'.format(code, from_date, to_date))
+            logging.info('Possibly no data for {}: from {} to {}'.format(code, from_date, to_date))
             return None
 
 
-    def update(self):
+    def update(self, var_code, raw=True, **kwargs):
+        assert raw, "Currently only raw updating implemented"
+        with pd.HDFStore(config.Meta.file_name) as M:
+            flds = M['fields'].xs(var_code, 0, 'field', drop_level=False)
+            last = flds[['sensor_code', 'last']]
+            try:
+                last_update = datetime.strptime(max([m.group() for m in
+                                                     [re.search('\d{8}', k) for k in
+                                                      M.keys()] if m is not None]),
+                                                '%Y%m%d')
+            except:
+                logging.warning('Not an updatable metadata file: {}'.format(config.Meta.file_name))
+            else:
+                # drop all rows which have a 'last' date longer than `update_drop` before the last meta-update
+                flds = flds[last_update - last['last'].astype('datetime64') < self.update_drop]
+
+        filename = {
+            True: config.Field.raw_data,
+            False: config.Field.file_name
+        }[raw]
+
+        with pd.HDFStore(filename, 'a') as S:
+            try:
+                node = S.get_node('raw/{}'.format(var_code))
+                data = {k: S[v._v_pathname] for k, v in node._v_children.items()}
+                from_date = {k: v.dropna().index.max()-self.update_overlap for k, v in data.items()}
+                self.get_all(var_code, from_date=from_date, raw=raw, **kwargs)
+                start = pd.Series({k: v.dropna().index.min() for k, v in self.data.items() if v is not None})
+                # this is a diagnostic for checking
+                self.update_times = pd.concat((start, pd.Series(from_date), last.set_index('sensor_code')), 1,
+                                              keys=['start', 'from_date', 'last'])
+                d = {}
+                for k in set(data.keys()).union(self.data.keys()):
+                    if k in data and data[k] is not None:
+                        d[k] = data[k]
+                        if k in self.data and self.data[k] is not None:
+                            d[k] = self.data[k].combine_first(d[k])
+                    elif self.data[k] is not None:
+                        d[k] = self.data[k]
+            except:
+                self.get_all(var_code, raw=raw, **kwargs)
+                d = {k: v for k, v in self.data.items() if v is not None and v.shape[0]>0}
+            finally:
+                for k, v in d.items():
+                    S['/'.join((node, k))] = v
+
 
 class Meta(Common):
     field = [
@@ -288,6 +354,7 @@ class Meta(Common):
         ('e_ultima_lectura', 'last')
     ]
     def __init__(self, **kwargs):
+        super().__init__()
         self.__dict__.update({'_'+k: v for k, v in kwargs.items()})
 
     @property

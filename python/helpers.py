@@ -16,7 +16,9 @@ def __get_config():
     return config_mod
 
 config = __get_config()
-sta = pd.read_hdf(config.Meta.file_name, 'stations')
+with pd.HDFStore(config.Meta.file_name) as S:
+    sta = S['stations']
+    flds = S['fields']
 
 def read_hdf(filedict, key):
     return pd.read_hdf(filedict[config.hostname], key)
