@@ -3,74 +3,33 @@
 CEAZAMet stations webservice
 ----------------------------
 
-This module can be imported and used as a standalone command-line app. The use as module is documented in the class :class:`CEAZAMet`.
+This module contains classes to interact with the CEAZAMet webservice. The two main classes are:
+
+    * :class:`Meta` - for downloading station meta data
+    * :class:`Field` - for downloading data corresponding to a particular sensor type
+
+Furthermore, there are some utility classes, e.g. :class:`compare` to compare datasets.
 
 Command-line use
 ================
 
-There are three subcommands, ``meta``, ``data`` and ``update``, with the first two corresponding to the methods :meth:`get_meta` and :meth:`get_data`. They can be supplied with command-line arguments in the `IPython  <https://ipython.readthedocs.io/en/stable/config/index.html>`_ / `Jupyter <https://jupyter.readthedocs.io/en/latest/projects/config.html>`_ config style. This means that help is also available in the same style, e.g.::
-
-    ./CEAZA.py data --help
-
-or::
-
-    ./CEAZA.py data --help-all
-
-To fetch the CEAZAMet station metadata and save it in the file specified in the :attr:`CEAZAMet.station_meta` configurable, do::
-
-    ./CEAZA.py meta
-
-To save it in a different file, pass the file name as an command-line argument::
-
-    ./CEAZA.py meta --Meta.file_name=filename
-
-or with alias::
-
-    ./CEAZA.py meta -f filename
-
-To fetch a particular field (e.g. 'ta_c') from all stations, do::
-
-    ./CEAZA.py data --Field.var_name=ta_c
-
-or with the alias::
-
-    ./CEAZA.py data -v ta_c
-
-To change the file in which the results are save, pass the file name to :attr:`CEAZAMet.station_data`::
-
-    ./CEAZA.py data -v ta_c -f filename
+Work in progress.
 
 Updating
 ========
 
-When the ``update`` subcommand to the command-line program is used, only 'new' data will be downloaded from the stations. 'New' is defined by extracting the table named :attr:`.Field.var_code` from the file given in :attr:`.Field.file_name` and taking the timestamp from the last record in this table. ``Update`` will download data that overlaps with the existing one by the amount of time specified as :attr:`.Update.overlap` and compare it to the existing data by using :class:`.Compare` (which prints a summary dataframe with differences if such are found). If :attr:`.Update.overwrite` is ``True`` **and** no differences are found, the existing data is replaced, otherwise it is written to the file specified as :attr:`.Update.file_name`.
+Various classes feature an 'update' method: :meth:`Meta.update`, :meth:`Field.update`.
 
 Logging
 =======
 
-The built-in log handler for :mod:`traitlets.config` is :class:`logging.StreamHandler`. So to see logging info on the command line, do::
-
-    ./CEAZA.py [...] --log_level=INFO 2>&1
-
-or to redirect to a file::
-
-    ./CEAZA.py [...] --log_level=INFO 2>logfile
-
-.. NOTE::
-
-    One hyphen can only be used with one-letter flags. The following are equivalent::
-
-        ./CEAZA.py meta --Meta.filename=filename
-        ./CEAZA.py meta --f=filename
-        ./CEAZA.py meta -f filename
-
-    Note that in the one-hyphen case, the **equal** sign is not needed.
+There's some rudimentary logging to the file specified as :attr:`Common.log_file`
 
 .. TODO::
 
     * DEM interpolation in :class:`.Update`
-    * save raw data (filename = field_code, tablename = station_code)
-    * rework printed info (log?)
+    * updating hourly data (?)
+    * work through meta data update
 
 """
 import requests as reqs
@@ -88,15 +47,47 @@ from tqdm import tqdm
 from helpers import config
 from functools import reduce
 
-class compare:
+class compare(config.CEAZAMet):
+    """Helper to spot differences between datasets. Currently mainly focused on :obj:`dicts <dict>` with 'raw' :class:`DataFrames <pandas.DataFrame>`.
+
+    .. attribute:: overlap
+
+        Test
+
+    .. attribute:: indexes
+
+        Test
+
+    """
+    def __init__(self, **kwargs):
+        if kwargs != {}:
+            self.load(**kwargs)
+
     def load(self, var_code, raw=True):
-        with pd.HDFStore({True: config.Field.raw_data, False: config.Field.file_name}[raw]) as S:
+        self.var_code = var_code
+        with pd.HDFStore({True: self.raw_data, False: self.hourly_data}[raw]) as S:
             node = S.get_node('raw/{}'.format(var_code))
             self.data = {k: S[v._v_pathname] for k, v in node._v_children.items()}
 
-    @classmethod
-    def compare_dicts(cls, a, b):
-        d = {}
+    @property
+    def last(self):
+        return pd.Series({k: v.dropna().index.max() for k, v in self.data.items()}, name='data')
+
+    @property
+    def meta(self):
+        if not hasattr(self, '_meta'):
+            m = self.fields.xs(self.var_code, 0, level='field').set_index('sensor_code')
+            self._meta = pd.Series(m['last'], name='last')
+        return self._meta
+
+    @property
+    def fields(self):
+        if not hasattr(self, '_flds'):
+            self._flds = pd.read_hdf(self.meta_data, 'fields')
+        return self._flds
+
+    def compare_dicts(self, a, b):
+        self.indexes, self.overlap = {}, pd.DataFrame()
         keys = set(a.keys()).union(b.keys())
         df = pd.DataFrame(np.zeros((len(keys), 2)) * np.nan, index=keys, columns=['a', 'b'])
         for k in keys:
@@ -107,19 +98,21 @@ class compare:
                 df.loc[k, 'a'] = 1 if a.get(k, None) is not None else 0
                 df.loc[k, 'b'] = 1 if b.get(k, None) is not None else 0
             else:
-                e = cls.compare_dataframes(a[k], b[k])
+                e, n = self.compare_dataframes(a[k], b[k])
+                self.overlap = self.overlap.append(pd.Series(n, name=k))
                 if e == {}:
                     df.drop(k, inplace=True)
                 else:
-                    d[k] = e
-        return d, df
+                    self.indexes[k] = e
+        df = pd.concat((df, self.last, self.meta), 1)
+        return df[df.a.notnull()]
 
     @staticmethod
     def compare_dataframes(a, b):
         idx = a.index.intersection(b.index)
         c = (a.loc[idx].fillna(-9999) == b.loc[idx].fillna(-9999))
         d = {k: np.where(v==False)[0] for k, v in c.iteritems() if not v.all()}
-        return d
+        return d, {'start':idx.min(), 'end':idx.max()}
 
 class requests:
     url = ''
@@ -139,6 +132,9 @@ class TrialsExhaustedError(Exception):
 class ServerMemoryError(Exception):
     pass
 
+class FieldsUpToDate(Exception):
+    pass
+
 class base_app(Application):
     config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
     def __init__(self, *args, config={}, **kwargs):
@@ -148,7 +144,8 @@ class base_app(Application):
         except ConfigFileNotFound: cfd = Config(config)
         super().__init__(config=cfg, **kwargs)
 
-class Common:
+class Common(config.CEAZAMet):
+    """Common functionality and config values."""
     max_workers = 10
     earliest_date = datetime(2003, 1, 1)
     timedelta = pd.Timedelta(-4, 'h')
@@ -157,7 +154,7 @@ class Common:
     memory_err =  re.compile('allowed memory', re.IGNORECASE)
 
     def __init__(self):
-        logging.basicConfig(filename=config.CEAZAMet.log_file, level=logging.DEBUG)
+        logging.basicConfig(filename=self.log_file, level=logging.DEBUG)
 
     def dates(self, from_date, to_date):
         try:
@@ -205,9 +202,10 @@ class Field(Common):
     cols = ['s_cod', 'datetime', 'min', 'ave', 'max', 'data_pc']
 
     def get_all(self, var_code, fields_table=None, from_date=None, to_date=None, raw=False):
+        self.var_code = var_code
         if fields_table is None:
-            logging.info('Using field table from file {}'.format(config.Meta.file_name))
-            fields_table = pd.read_hdf(config.Meta.file_name, 'fields')
+            logging.info('Using field table from file {}'.format(self.meta_data))
+            fields_table = pd.read_hdf(self.meta_data, 'fields')
         table = fields_table.xs(var_code, 0, 'field', False)
 
         # NOTE: I'm not sure if tqdm is thread-safe
@@ -216,16 +214,28 @@ class Field(Common):
                 self.data = [exe.submit(self._get, r, prog, from_date=from_date, to_date=to_date, raw=raw)
                              for r in table.iterrows()]
             data = dict([d.result() for d in as_completed(self.data)])
-            logging.warning('Errors in {}'.format([k for k, v in data.items() if v is None]))
-        self.data = data if raw else pd.concat(data.values(), 1, sort=True).sort_index(axis=1)
+        if raw:
+            self.no_data = [k for k, v in data.items() if v is None]
+            last = table.set_index('sensor_code').loc[self.no_data]['last'].astype('datetime64')
+            logging.warning('No data retrieved from {}'.format(self.no_data))
+            logging.warning('Last data within {} of now: {}'.format(
+                self.update_drop, last[datetime.utcnow() - last < self.update_drop]
+            ))
+            self.data = {k: v for k, v in data.items() if v is not None}
+        else:
+            self.data = pd.concat(data.values(), 1, sort=True).sort_index(axis=1)
 
     def _get(self, fields_row, prog=None, from_date=None, **kwargs):
         (station, field), row = fields_row
-        try: from_date = from_date[row['sensor_code']] # updating: field exists in old data
+        try:
+            # updating: field exists in old data
+            from_date = row['update'] - self.update_overlap
         except: pass
-        if from_date is None or from_date != from_date: # if Nat
+        if from_date is None or from_date != from_date: # if NaT
             try: from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
             except: pass
+        if hasattr(self, 'update_times'):
+            self.update_times.loc[row['sensor_code'], 'from_date'] = from_date
 
         df = self.fetch(row['sensor_code'], from_date, **kwargs)
         if df is None:
@@ -252,7 +262,7 @@ class Field(Common):
                 'fn': 'GetSerieSensor',
                 'interv': 'hora',
                 'valor_nan': 'nan',
-                'user': config.CEAZAMet.user,
+                'user': self.user,
                 's_cod': code,
                 'fecha_inicio': from_str,
                 'fecha_fin': to_str
@@ -263,7 +273,7 @@ class Field(Common):
                 's_cod': code
             }
         }[raw]
-        url = {True: config.CEAZAMet.raw_url, False: config.CEAZAMet.url}[raw]
+        url = {True: self.raw_url, False: self.url}[raw]
         cols = self.cols[:-1] if raw else self.cols
         try:
             return self.read(url, params, cols).set_index('datetime')
@@ -287,51 +297,58 @@ class Field(Common):
 
 
     def update(self, var_code, raw=True, **kwargs):
-        assert raw, "Currently only raw updating implemented"
-        with pd.HDFStore(config.Meta.file_name) as M:
+        assert raw, "Currently only raw updating is implemented"
+        self.var_code = var_code
+        with pd.HDFStore(self.meta_data) as M:
             flds = M['fields'].xs(var_code, 0, 'field', drop_level=False)
-            last = flds[['sensor_code', 'last']]
-            try:
-                last_update = datetime.strptime(max([m.group() for m in
-                                                     [re.search('\d{8}', k) for k in
-                                                      M.keys()] if m is not None]),
-                                                '%Y%m%d')
-            except:
-                logging.warning('Not an updatable metadata file: {}'.format(config.Meta.file_name))
-            else:
-                # drop all rows which have a 'last' date longer than `update_drop` before the last meta-update
-                flds = flds[last_update - last['last'].astype('datetime64') < self.update_drop]
+            last = flds[['sensor_code', 'last']].set_index('sensor_code').squeeze()
 
         filename = {
-            True: config.Field.raw_data,
-            False: config.Field.file_name
+            True: self.raw_data,
+            False: self.hourly_data
         }[raw]
 
         with pd.HDFStore(filename, 'a') as S:
+            node = S.get_node('raw/{}'.format(var_code))
+            data = {k: S[v._v_pathname] for k, v in node._v_children.items()}
+            update = pd.Series({k: v.dropna().index.max() for k, v in data.items()}).astype('datetime64')
+            table = flds.merge(
+                update.to_frame('update'),
+                how='left',
+                left_on='sensor_code',
+                right_index=True
+            )
+            delta = flds.merge(
+                (datetime.utcnow() - update.combine_first(last)).to_frame('delta'),
+                how='left',
+                left_on='sensor_code',
+                right_index=True
+            )['delta']
             try:
-                node = S.get_node('raw/{}'.format(var_code))
-                data = {k: S[v._v_pathname] for k, v in node._v_children.items()}
-                from_date = {k: v.dropna().index.max()-self.update_overlap for k, v in data.items()}
-                self.get_all(var_code, from_date=from_date, raw=raw, **kwargs)
-                start = pd.Series({k: v.dropna().index.min() for k, v in self.data.items() if v is not None})
-                # this is a diagnostic for checking
-                self.update_times = pd.concat((start, pd.Series(from_date), last.set_index('sensor_code')), 1,
-                                              keys=['start', 'from_date', 'last'])
-                d = {}
-                for k in set(data.keys()).union(self.data.keys()):
-                    if k in data and data[k] is not None:
-                        d[k] = data[k]
-                        if k in self.data and self.data[k] is not None:
-                            d[k] = self.data[k].combine_first(d[k])
-                    elif self.data[k] is not None:
-                        d[k] = self.data[k]
+                # this should avoid problems with NaNs in delta, but will probably break if they're all NaNs
+                assert delta.min() > self.update_overlap
             except:
-                self.get_all(var_code, raw=raw, **kwargs)
-                d = {k: v for k, v in self.data.items() if v is not None and v.shape[0]>0}
-            finally:
-                for k, v in d.items():
-                    S['/'.join((node, k))] = v
+                raise FieldsUpToDate()
+            self.get_all(var_code, fields_table=table[delta < self.update_drop], raw=raw, **kwargs)
+            start = pd.Series({k: v.dropna().index.min() for k, v in self.data.items() if v is not None})
+            # this is a diagnostic for checks
+            self.update_times = pd.concat((last, update, start), 1, keys=['last', 'update', 'start'])
+            d = {}
+            for k in set(data.keys()).union(self.data.keys()):
+                if k in data and data[k] is not None:
+                    d[k] = data[k]
+                    if k in self.data and self.data[k] is not None:
+                        d[k] = self.data[k].combine_first(d[k])
+                elif self.data[k] is not None:
+                    d[k] = self.data[k]
+            for k, v in d.items():
+                S['/'.join(('raw', var_code, k))] = v
 
+    def store_raw(self, filename):
+        with pd.HDFStore(filename, 'w') as S:
+            for k, v in self.data.items():
+                if v is not None and v.shape[0] > 0:
+                    S['raw/{}/{}'.format(self.var_code, k)] = v
 
 class Meta(Common):
     field = [
@@ -362,9 +379,7 @@ class Meta(Common):
         if not hasattr(self, '_stations'):
             params, cols = zip(*self.station)
             params = {'c{:d}'.format(i): v for i, v in enumerate(params)}
-            self._stations = self.read(
-                config.CEAZAMet.url, params, cols, fn='GetListaEstaciones', p_cod='ceazamet')
-
+            self._stations = self.read(self.url, params, cols, fn='GetListaEstaciones', p_cod='ceazamet')
         return self._stations
 
     @property
@@ -375,7 +390,7 @@ class Meta(Common):
                     params, cols = zip(*self.field)
                     params = {'c{:d}'.format(i): v for i, v in enumerate(params)}
                     return self.read(
-                        config.CEAZAMet.url, params, cols,
+                        self.url, params, cols,
                         fn='GetListaSensores', e_cod=st, p_cod='ceazamet', prog=prog)
 
                 with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
@@ -386,13 +401,13 @@ class Meta(Common):
         return self._fields
 
     def store(self, **kwargs):
-        with pd.HDFStore(config.Meta.file_name, mode='a') as S:
+        with pd.HDFStore(self.meta_data, mode='a') as S:
             change_key = datetime.now().strftime('%Y%m%d')
             for k in ['stations', 'fields']:
                 S[os.path.join(change_key, k)] = S[k]
                 S[k] = kwargs.get(k, getattr(self, k))
 
-        print('CEAZAMet station metadata saved in file {}.'.format(config.Meta.file_name))
+        print('CEAZAMet station metadata saved in file {}.'.format(self.meta_data))
         print('Old contents moved to node {}.'.format(change_key))
 
     @staticmethod
@@ -415,8 +430,8 @@ class Meta(Common):
         return pd.concat((meta, pd.DataFrame(z, index=z.stations, columns=[column_name])), 1)
 
     def update(self, **kwargs):
-        sta = kwargs.get('stations', pd.read_hdf(config.Meta.file_name, 'stations'))
-        flds = kwargs.get('fields', pd.read_hdf(config.Meta.file_name, 'fields'))
+        sta = kwargs.get('stations', pd.read_hdf(self.meta_data, 'stations'))
+        flds = kwargs.get('fields', pd.read_hdf(self.meta_data, 'fields'))
 
         flds['elev'] = flds['elev'].astype(float)
         flds.reset_index('sensor_code', inplace=True)
@@ -601,4 +616,5 @@ class Compare(object):
         plt.legend()
 
 if __name__ == '__main__':
-    pass
+    f = Field()
+    f.update('ta_c')

@@ -16,7 +16,7 @@ def __get_config():
     return config_mod
 
 config = __get_config()
-with pd.HDFStore(config.Meta.file_name) as S:
+with pd.HDFStore(config.CEAZAMet.meta_data) as S:
     sta = S['stations']
     flds = S['fields']
 

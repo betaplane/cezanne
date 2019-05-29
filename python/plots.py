@@ -208,7 +208,7 @@ class Coquimbo(config.Coquimbo):
         try:
             lonlat = kwargs['lonlat']
         except KeyError:
-            sta = pd.read_hdf(config.Meta.file_name, 'stations').loc[df.index]
+            sta = pd.read_hdf(config.CEAZAMet.meta_data, 'stations').loc[df.index]
             lonlat = sta[['lon', 'lat']].astype(float).as_matrix().T
         vmin = kwargs.get('vmin', np.nanmin(df))
         vmax = kwargs.get('vmax', np.nanmax(df))

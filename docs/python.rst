@@ -28,12 +28,9 @@ or for Antarctica::
 * http://www.paulwhippconsulting.com/blog/splitting-a-git-repository-into-two-projects-and-reintegrating-them/
 * https://www.atlassian.com/blog/git/alternatives-to-git-submodule-git-subtree
 
-.. include:: ../python/pca/docs/index.rst
-
 Conda
 -----
-[environment variables](https://conda.io/docs/user-guide/tasks/manage-environments.html#macos-and-linux)
-
+`environment variables <https://conda.io/docs/user-guide/tasks/manage-environments.html#macos-and-linux>`_
 
 Data
 ====
@@ -86,3 +83,5 @@ Zotero
 ======
 .. automodule:: zotero
    :members:
+
+.. include:: ../python/pca/docs/index.rst
