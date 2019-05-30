@@ -1,4 +1,4 @@
-from helpers import config, sta
+from helpers import config
 from glob import glob
 from datetime import datetime, timedelta
 from data.interpolate import BilinearInterpolator
@@ -12,28 +12,12 @@ import os, re
 
 
 def align_times(wrf, df):
-    """Align :class:`~pandas.DataFrame` with station data (as produced by :class:`.CEAZA.CEAZAMet`) with a concatenated (and interpolated to station locations) netCDF file as produced by this packages concatenators (:class:`threadWuRF.CC`, :class:`mpiWuRF.CC`). For now, works with a single field.
-
-    :param wrf: The DataArray or Dataset containing the concatenated and interpolated (to station locations) WRF simulations (only dimensions ``start`` and ``Time`` and coordinate ``XTIME`` are used).
-    :type wrf: :class:`~xarray.DataArray` or :class:`~xarray.Dataset`
-    :param df: The DataFrame containing the station data (of the shape returned by :meth:`.CEAZA.Downloader.get_field`).
-    :type df: :class:`~pandas.DataFrame`
-    :returns: DataArray with ``start`` and ``Time`` dimensions aligned with **wrf**.
-    :rtype: :class:`~xarray.DataArray`
-
-    """
-    xt = wrf.XTIME.stack(t=('start', 'Time'))
     # necessary because some timestamps seem to be slightly off-round hours
+    xt = wrf.XTIME.stack(t=('start', 'Time'))
     xt = xr.DataArray(pd.Series(xt.values).dt.round('h'), coords=xt.coords).unstack('t')
     idx = np.vstack(df.index.get_indexer(xt.sel(start=s)) for s in wrf.start)
-    try:
-        cols = df.columns.get_level_values('station').intersection(wrf.station)
-        cols_name = 'station'
-    except:
-        cols = df.columns
-        cols_name = 'column'
-    return xr.DataArray(np.stack([np.where(idx>=0, df[c].values[idx].squeeze(), np.nan) for c in cols], 2),
-                     coords = [wrf.coords['start'], wrf.coords['Time'], (cols_name, cols)])
+    return xr.DataArray(np.stack([np.where(idx>=0, df[c].values[idx].squeeze(), np.nan) for c in df.columns], 2),
+                     coords = [wrf.coords['start'], wrf.coords['Time'], ('column', df.columns)])
 
 
 # NOTE: if the 'exact' match to a wrfout timestamp is needed, use the 'time' columns on the resulting DataFrame
@@ -147,7 +131,7 @@ class Hbin:
         return pd.Series([d, n], index=['sum', 'weight'])
 
     @classmethod
-    def bin(cls, df, label='center'):
+    def bin(cls, df, label='center', start=None):
         kwargs = {'rule': '60T', 'closed': 'right', 'label': 'right'}
         base = {'center': 30, 'right': 0}[label]
         kwargs.update(base=base)
@@ -168,80 +152,48 @@ class Hbin:
         # apparently, reusing a resampler leads to unpredictble results
         mi = df.xs('min', 1, 'aggr').resample(loffset=loffs, **kwargs).min().iloc[:, 0]
         ma = df.xs('max', 1, 'aggr').resample(loffset=loffs, **kwargs).max().iloc[:, 0]
-        return pd.concat((ave, mi, ma), 1, keys=['ave', 'min', 'max'])
-
-class WRFD(config.WRFop):
-    utc_delta = pd.Timedelta(-4, 'h')
-    time_dim_coord = 'XTIME'
-    K = 273.15
-
-    def __init__(self, dir_pat='c01'):
-        dirpat = re.compile(dir_pat)
-        dirs = []
-        for p in self.paths:
-            try:
-                dirs.extend([os.path.join(p, d) for d in os.listdir(p)])
-            except: pass
-
-        self.dirs = sorted([d for d in dirs if os.path.isdir(d) and dirpat.search(d)], key=lambda s:s[-10:])
-        # there's a list with simulations with errors in config_mod
-        for s in self.skip:
-            self.dirs.remove(s)
-
-    def files(self, file_pat='wrfout_d03', lead=None):
-        self.filepat = re.compile(file_pat)
-        files = []
-        for d in self.dirs:
-            flist = [os.path.join(d, f) for f in os.listdir(d) if self.filepat.search(f)]
-            if len(flist) == 1 or lead is None:
-                files.extend(flist)
-            else:
-                t = datetime.strptime(d[-10:],'%Y%m%d%H')
-                s = (t + timedelta(days=lead)).strftime('%Y-%m-%d')
-                files.extend([f for f in flist if re.search(s, f)])
-
-        return sorted(files, key=os.path.basename)
-
-    # NOTE: not corrected for GMT diffs yet
-    def normal(self, var_list, stations=sta, **kwargs):
-        files = self.files(**kwargs)
-        with xr.open_dataset(files[0]) as ds:
-            itp = BilinearInterpolator(ds, stations=stations)
-        x = []
-        for f in tqdm(files):
-            with xr.open_dataset(f) as ds:
-                x.append(ds[var_list].apply(itp.xarray))
-        return xr.concat(x, 'start')
-
-    def dask(self, var_list, stations=sta, **kwargs):
-        ds = xr.open_mfdataset(self.files(**kwargs))
-        itp = BilinearInterpolator(ds, stations=stations)
-        x = ds[var_list].apply(itp.xarray)
+        x = pd.concat((ave, mi, ma), 1, keys=['ave', 'min', 'max'])
+        return x if start is None else x.loc[start:]
 
 class WRFR(config.WRFop):
     utc_delta = pd.Timedelta(-4, 'h')
+    update_overlap = pd.Timedelta(1, 'd')
     time_dim_coord = 'XTIME'
     K = 273.15
 
-    def __init__(self, data=None, dir_pat='c01', loaded=None, copy=None):
+    def __init__(self, data=None, loaded=None, dir_pat=None, copy=None):
+        assert (data is not None) or (copy is not None) or (loaded is not None), "One of 'data', 'loaded' or 'copy' needs to be specified"
         if copy is not None:
             self.__dict__ = copy.__dict__
             return
-        dirpat = re.compile(dir_pat)
+
+        dirpat = re.compile(self.directory_re if dir_pat is None else dir_pat)
         self.wrfout_re, self.wrfxtrm_re = re.compile(self.wrfout_re), re.compile(self.wrfxtrm_re)
-        data = {k: v for k, v in data.items() if (v is not None and v.shape[0]>0)}
-        print('data with length > 0: {}'.format(len(data)))
 
         with pd.HDFStore(config.CEAZAMet.meta_data) as S:
             sta = S['stations']
             self.flds = S['fields']
 
-        mi, ma = zip(*[(lambda x: (x.min(), x.max()))(df.dropna().index) for df in data.values()])
-        self.start, end = min(mi), max(ma)
-        s = {k: v for (v, _), k in self.flds['sensor_code'].items()}
-        self.sta = sta.loc[[s[k] for k in data.keys()]]
-        self.raw = data
-        self.loaded = loaded
+        if data is not None:
+            data = {k: v for k, v in data.items() if (v is not None and v.shape[0]>0)}
+            print('data with length > 0: {}'.format(len(data)))
+            mi, ma = zip(*[(lambda x: (x.min(), x.max()))(df.dropna().index) for df in data.values()])
+            start, end = min(mi), max(ma)
+            s = {k: v for (v, _), k in self.flds['sensor_code'].items()}
+            self.sta = sta.loc[[s[k] for k in data.keys()]]
+            self.raw = data
+        else:
+            self.sta = sta # use a combined df of all station locations ever here in the future
+            self.loaded = loaded
+            # when updating, we use two different starting points for station data and WRF files
+            # (b/c WRF files are not subject to changes once written out, unlike the stations db)
+            # NOTE: my binning will cause typically 2 hourly timesteps at the end/beginning to be sensitive to new data
+            st = loaded.binned.dropna(0, 'all').index.max() - self.update_overlap
+            raw = {k: v.loc[st:] for k, v in loaded.raw.items() if v is not None}
+            self.raw = {k: v for k, v in raw.items() if v.shape[0]>0}
+            start = pd.Timestamp(loaded.wrf['start'].max().item()) + pd.Timedelta(1, 'd')
+            end = max([df.dropna().index.max() for df in self.raw.values()])
+            print('start-wrf: {}; end-wrf: {}; start-binning: {}'.format(start, end, st))
 
         dirs = []
         for p in self.paths:
@@ -254,24 +206,25 @@ class WRFR(config.WRFop):
             t = datetime.strptime(d[-10:],'%Y%m%d%H')
             try:
                 assert os.path.isdir(d)
-                assert t >= self.start
+                assert t >= start
                 assert t <= end
             except: return False
             else: return True
 
-        self.dirs = sorted([d for d in dirs if test(d)], key=lambda s:s[-10:])
+        self.dirs = [d for d in dirs if test(d)]
 
-        # insert additional directories in front whose simulations overlap with data
-        for d in dirs[dirs.index(self.dirs[0])-1::-1]:
-            try:
-                out = [os.path.join(d, f) for f in os.listdir(d) if self.wrfout_re.search(f)]
-                ds = xr.open_dataset(sorted(out)[-1])
-                if ds[self.time_dim_coord].values.max() >= self.start.asm8:
-                    self.dirs.insert(0, d)
-                else:
-                    break
-            except: pass
-            finally: ds.close()
+        if data is not None:
+            # insert additional directories in front whose simulations overlap with data
+            for d in dirs[dirs.index(self.dirs[0])-1::-1]:
+                try:
+                    out = [os.path.join(d, f) for f in os.listdir(d) if self.wrfout_re.search(f)]
+                    ds = xr.open_dataset(sorted(out)[-1])
+                    if ds[self.time_dim_coord].values.max() >= start.asm8:
+                        self.dirs.insert(0, d)
+                    else:
+                        break
+                except: pass
+                finally: ds.close()
 
         # there's a list with simulations with errors in config_mod
         for s in self.skip:
@@ -317,21 +270,37 @@ class WRFR(config.WRFop):
                 xi.coords['start'] = oi.coords['start']
                 x.append(xi)
 
-        wrf = xr.concat(o, 'start')
-        self.wrf = xr.merge((wrf, xr.concat(x, 'start'))) if wrfxtrm_vars is not None else wrf
+        self.wrf = xr.concat(o, 'start')
+        if wrfxtrm_vars is not None:
+            self.wrf = xr.merge((self.wrf, xr.concat(x, 'start')))
+
+    @staticmethod
+    def combine_first(a, b):
+        c = a.combine_first(b)
+        c.coords['XTIME'] = a['XTIME'].combine_first(b['XTIME'])
+        return c
 
     def stats(self, wrfout, wrfxtrm, ceazamet):
-        self.wrf_files([wrfout], list(wrfxtrm.keys()))
+        # self.wrf_files([wrfout], list(wrfxtrm.keys()))
 
+        try:
+            # if updating
+            st = self.loaded.binned.dropna(0, 'all').index.max() - self.update_overlap / 2
+        except:
+            st = None
         sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
-        t = np.unique(self.wrf[self.time_dim_coord])
         X, B = {}, {}
         for s, df in tqdm(self.raw.items()):
+            d_mid = Hbin.bin(df, label='center', start=st).dropna(0, 'all')
+            d_end = Hbin.bin(df, label='right', start=st).dropna(0, 'all')
             x = self.wrf.sel(station=sta[s])
-            d_mid = Hbin.bin(df, label='center')
+            try: # when updating, we might need some earlier wrf-interpolations
+                t = min(d_mid.index.min(), d_end.index.min()).asm8
+                i = min(np.where(self.loaded.wrf['XTIME'] > t)[x['XTIME'].dims.index('start')])
+                x = self.combine_first(x, self.loaded.wrf.sel(station=sta[s]).isel(start=slice(i, None)))
+            except: pass
             dm = align_times(x, d_mid).sel(column='ave') + self.K
             dm['column'] = 'point'
-            d_end = Hbin.bin(df, label='right')
             de = align_times(x, d_end) + self.K
             X[sta[s]] = xr.concat((
                 xr.concat([x[k] - de.sel(column=v) for k, v in wrfxtrm.items()], 'column'),
@@ -350,7 +319,9 @@ class WRFR(config.WRFop):
             'Time': 0,
         }
         x[tuple([d[c] for c in x.dims])] = np.nan
-        self.wrf = xr.merge((self.wrf, x.to_dataset('column')))
+        order = ('start', 'station', 'Time')
+        # TODO: merge separately for wrf & errors
+        self.wrf = xr.merge((self.wrf.transpose(*order), x.to_dataset('column').transpose(*order)))
 
     def dict2frame(self, B):
         names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
@@ -365,13 +336,14 @@ class WRFR(config.WRFop):
 
     def store(self):
         try:
-            dt = pd.Timedelta(12, 'h')
-            B = self.binned.loc[self.start+dt:].combine_first(self.loaded.binned)
+            st = self.binned.dropna(0, 'all').index.min() + self.update_overlap / 2
+            B = self.binned.loc[st:].combine_first(self.loaded.binned)
         except:
             print('no loaded.binned')
             B = self.binned
         finally:
-            B.to_hdf(config.CEAZAMet.raw_data, 'raw/binned/end/T2')
+            var_code = self.binned.columns.get_level_values('field').unique().item()
+            B.to_hdf(config.CEAZAMet.raw_data, 'raw/binned/end/{}'.format(var_code))
 
         try:
             wrf = self.wrf.combine_first(self.loaded.wrf)
@@ -381,17 +353,23 @@ class WRFR(config.WRFop):
             print('no loaded.wrf')
             wrf = self.wrf
         finally:
-            wrf.to_netcdf(self.file_name, mode='w')
+            # There's some weird issue with overwriting a previously-opened file in xarray / netCDF4
+            # (no matter how much I try to close the dataset or use a 'with' context).
+            # I can't reproduce it reliably, except *this* piece of code without the renaming shenanigans
+            # *always* fails. Hence the renaming shenanigans.
+            fn = '{}_w.nc'.format(os.path.splitext(self.file_name)[0])
+            wrf.to_netcdf(fn, mode='w')
+            os.rename(fn, self.file_name)
 
     @classmethod
     def load(cls, var_code):
         nt = namedtuple('data', ['binned', 'raw', 'wrf'])
-        nc = xr.open_dataset(cls.file_name)
-        nc.close()
+        with xr.open_dataset(cls.file_name) as ds:
+            nc = ds.copy()
         with pd.HDFStore(config.CEAZAMet.raw_data) as S:
             node = S.get_node('raw/{}'.format(var_code))
             raw = {k: S[v._v_pathname] for k, v in node._v_children.items()}
-            binned = S['raw/binned/end/T2']
+            binned = S['raw/binned/end/{}'.format(var_code)]
         return nt(binned, raw, nc)
 
     def map_plot(self, coq):
@@ -476,27 +454,21 @@ class WRFR(config.WRFop):
         return pd.concat([(a[s] - b[s]).dropna() for s in c], 1, keys=c).T
 
 
-def update(overlap=1):
+def update(var_code):
     from data import CEAZA
+    # the CEAZA module takes care of updating *its* data (hopefully)
     f = CEAZA.Field()
     try:
-        f.update('ta_c', raw=True)
+        f.update(var_code, raw=True)
     except CEAZA.FieldsUpToDate:
         print('CEAZAMet data are up to date')
 
-    D = WRFR.load('ta_c')
-    start = (D.binned.index[-1] - pd.Timedelta(overlap, 'd')).date()
-    print('start: {}'.format(start))
-
-    data = {k: v.loc[start:] for k, v in D.raw.items()}
-    print('data length: {}'.format(len([d for d in data.values() if d is not None])))
-
-    w = WRFR(data, loaded=D)
+    D = WRFR.load(var_code)
+    w = WRFR(loaded=D)
     for kwargs in config.WRFop.variables:
         w.stats(**kwargs)
     return w
     # w.store()
-
 
 def compare_xr(a, b):
     a, b = xr.align(a.dropna('station', 'all'), b.dropna('station', 'all'))
@@ -523,4 +495,14 @@ def compare_df(a, b):
             'b': b[k].index.difference(a[k].index)
         }.items() if len(v) > 0}
         d[k].update(idx=ij if len(ij) > 0 else None)
+    ab = np.unique(np.hstack([list(v['idx'].keys()) for k, v in d.items() if v['idx'] is not None]))
+    try:
+        c = ab.item()
+        idx = np.unique(np.hstack([v['idx'][c].values for k, v in d.items() if v['idx'] is not None]))
+        return d, idx
+    except: pass
     return d
+
+def ex(x, var, station, day):
+    x = x[var].sel(station=station, Time=slice(day*24, (day+1)*24)).stack(t=('Time', 'start')).sortby('XTIME')
+    return x.XTIME, x
