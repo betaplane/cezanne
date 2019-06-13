@@ -2,6 +2,9 @@
 .. automodule:: data.CEAZA
     :members:
 
+.. automodule:: data.WRF
+    :members:
+
 .. automodule:: data.compare
     :members:
 

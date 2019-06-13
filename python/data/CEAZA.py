@@ -227,17 +227,20 @@ class Field(Common):
 
     def _get(self, fields_row, prog=None, from_date=None, **kwargs):
         (station, field), row = fields_row
-        try:
-            # updating: field exists in old data
-            from_date = row['update'] - self.update_overlap
-        except: pass
-        if from_date is None or from_date != from_date: # if NaT
-            try: from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
+        if from_date is None:
+            try:
+                # updating: field exists in old data
+                from_date = row['update'] - self.update_overlap
             except: pass
-        if hasattr(self, 'update_times'):
-            self.update_times.loc[row['sensor_code'], 'from_date'] = from_date
+            if from_date is None or from_date != from_date: # if NaT
+                try: from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
+                except: pass
+            if hasattr(self, 'update_times'):
+                self.update_times.loc[row['sensor_code'], 'from_date'] = from_date
 
         df = self.fetch(row['sensor_code'], from_date, **kwargs)
+        if prog is not None:
+            prog.update(1)
         if df is None:
             return row['sensor_code'], None
         df.index = pd.DatetimeIndex(df.index)
@@ -251,8 +254,6 @@ class Field(Common):
             names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
         )
         # self.log.info('fetched {} from {}'.format(f[0][2], f[0][0]))
-        if prog is not None:
-            prog.update(1)
         return row['sensor_code'], df.sort_index(1)
 
     def fetch(self, code, from_date=None, to_date=None, raw=False):
@@ -311,44 +312,45 @@ class Field(Common):
         with pd.HDFStore(filename, 'a') as S:
             node = S.get_node('raw/{}'.format(var_code))
             data = {k: S[v._v_pathname] for k, v in node._v_children.items()}
-            update = pd.Series({k: v.dropna().index.max() for k, v in data.items()}).astype('datetime64')
-            table = flds.merge(
-                update.to_frame('update'),
-                how='left',
-                left_on='sensor_code',
-                right_index=True
-            )
-            delta = flds.merge(
-                (datetime.utcnow() - update.combine_first(last)).to_frame('delta'),
-                how='left',
-                left_on='sensor_code',
-                right_index=True
-            )['delta']
-            try:
-                # this should avoid problems with NaNs in delta, but will probably break if they're all NaNs
-                assert delta.min() > self.update_overlap
-            except:
-                raise FieldsUpToDate()
-            self.get_all(var_code, fields_table=table[delta < self.update_drop], raw=raw, **kwargs)
-            start = pd.Series({k: v.dropna().index.min() for k, v in self.data.items() if v is not None})
-            # this is a diagnostic for checks
-            self.update_times = pd.concat((last, update, start), 1, keys=['last', 'update', 'start'])
-            d = {}
-            for k in set(data.keys()).union(self.data.keys()):
-                if k in data and data[k] is not None:
-                    d[k] = data[k]
-                    if k in self.data and self.data[k] is not None:
-                        d[k] = self.data[k].combine_first(d[k])
-                elif self.data[k] is not None:
-                    d[k] = self.data[k]
-            for k, v in d.items():
-                S['/'.join(('raw', var_code, k))] = v
 
-    def store_raw(self, filename):
-        with pd.HDFStore(filename, 'w') as S:
-            for k, v in self.data.items():
-                if v is not None and v.shape[0] > 0:
-                    S['raw/{}/{}'.format(self.var_code, k)] = v
+        update = pd.Series({k: v.dropna().index.max() for k, v in data.items()}).astype('datetime64')
+        table = flds.merge(
+            update.to_frame('update'),
+            how='left',
+            left_on='sensor_code',
+            right_index=True
+        )
+        delta = flds.merge(
+            (datetime.utcnow() - update.combine_first(last)).to_frame('delta'),
+            how='left',
+            left_on='sensor_code',
+            right_index=True
+        )['delta']
+        try:
+            # this should avoid problems with NaNs in delta, but will probably break if they're all NaNs
+            assert delta.min() > self.update_overlap
+        except:
+            raise FieldsUpToDate()
+        self.get_all(var_code, fields_table=table[delta < self.update_drop], raw=raw, **kwargs)
+        start = pd.Series({k: v.dropna().index.min() for k, v in self.data.items() if v is not None})
+        # this is a diagnostic for checks
+        self.update_times = pd.concat((last, update, start), 1, keys=['last', 'update', 'start'])
+        d = {}
+        for k in set(data.keys()).union(self.data.keys()):
+            if k in data and data[k] is not None:
+                d[k] = data[k]
+                if k in self.data and self.data[k] is not None:
+                    d[k] = self.data[k].combine_first(d[k])
+            elif self.data[k] is not None:
+                d[k] = self.data[k]
+
+        for k, v in d.items():
+            v.to_hdf(filename, key='/'.join(('raw', var_code, k)), mode='a', format='table')
+
+    def store_raw(self):
+        for k, v in self.data.items():
+            if v is not None and v.shape[0] > 0:
+                v.to_hdf(self.raw_data, key='raw/{}/{}'.format(self.var_code, k), mode='a', format='table')
 
 class Meta(Common):
     field = [
