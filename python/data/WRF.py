@@ -20,9 +20,15 @@ The direct use case consists of calling :meth:`Validate.data` with a data :obj:`
     w.stats(raw_dict=f.data)
     w.store() # or not, depending on needs
 
+
 .. NOTE::
 
-    No data is saved to file unless the method :meth:`Validate.store` is called. Existing data at the locations specified via :class:`Validate's <Validate>` class attributes (e.g. :attr:`Validate.wrf_intp`), however, is used and unnecessary repeats of computations are avoided.
+    # explain the binning in the middle as well, and the structure of the 'variables' list
+    Interpolated WRF data (as produced by :meth:`Validate.wrf_files`) is **always** first written to file (with name given by :attr:`Validate.wrf_intp`) and then loaded again. If the data needed exists at that file location, it is **never** recreated in order to save computations.
+
+    The other products of :class:`Validate` are not written to file unless the method :meth:`Validate.store` is called. These are:
+    1) The binned CEAZAMet station data, which is written to the HDF file :attr:`data.CEAZA.Field.raw_data` under the key ``raw/binned/end`` (since only the data labeled at the end of the binning interval is currently saved).
+    2) The computed errors of the WRF simulation w.r.t. the station data (i.e. WRF minus station), which is written to the netCDF file :attr:`Validate.wrf_err` with the main WRF variable name appended (i.e. the name given as key 'wrfout_var' in the :obj:`dicts <dict>` in :attr:`Validate.variables`. One file is written per item in the :attr:`Validate.variables` list.
 
 .. WARNING::
 
@@ -48,10 +54,10 @@ from copy import deepcopy
 import xarray as xr
 import pandas as pd
 import numpy as np
-import os, re
+import os, re, logging
 
 
-def align_times(wrf, df):
+def align_times(wrf, df, level=None):
     """Align CEAZAMet weather station data in the form of a :class:`~pandas.DataFrame` with WRF output concatenated along 2 temporal dimensions and interpolated in space to the station locations.
 
     The specific WRF output concatenation format is described in more detail in the docstring of :class:`Validate`; in short, one dimension named ``start`` refers to the start time of a simulation, whereas a second dimension ``Time`` refers to the (integer) write-out time step of the simulation. The write-out interval is assumed to be one hour. The station data will be appropriately multiplicated and folded in order to allow the subsequent extraction of various 'forecast lead times'. The :class:`~pandas.DataFrame` containing station data is expected to be of the shape and column structure returned by :class:`Hbin`.
@@ -62,6 +68,7 @@ def align_times(wrf, df):
     :type wrf: :class:`xarray.Dataset`
     :param df: CEAZAMet single-station dataset binned to hourly intervals by :class:`Hbin`
     :type df: :class:`pandas.DataFrame`
+    :param level: If not ``None``, return a DataArray with only this level from ``df`` as index 'columns' - otherwise, copy the columns from ``df``.
     :returns: station data aligned in 2 temporal dimensions with the input ``wrf`` dataset
     :rtype: :class:`xarray.DataArray`
 
@@ -70,8 +77,9 @@ def align_times(wrf, df):
     xt = wrf.XTIME.stack(t=('start', 'Time'))
     xt = xr.DataArray(pd.Series(xt.values).dt.round('h'), coords=xt.coords).unstack('t')
     idx = np.vstack(df.index.get_indexer(xt.sel(start=s)) for s in wrf.start)
+    columns = df.columns if level is None else df.columns.get_level_values(level)
     return xr.DataArray(np.stack([np.where(idx>=0, df[c].values[idx].squeeze(), np.nan) for c in df.columns], 2),
-                        coords = [wrf.coords['start'], wrf.coords['Time'], ('column', df.columns)])
+                        coords = [wrf.coords['start'], wrf.coords['Time'], ('columns', columns)])
 
 
 
@@ -96,6 +104,16 @@ class Hbin:
 
     @classmethod
     def bin(cls, df, label='center', start=None):
+        """FIXME! briefly describe function
+
+        :param cls: 
+        :param df: 
+        :param label: 
+        :param start: 
+        :returns: 
+        :rtype: 
+
+        """
         kwargs = {'rule': '60T', 'closed': 'right', 'label': 'right'}
         base = {'center': 30, 'right': 0}[label]
         kwargs.update(base=base)
@@ -117,6 +135,7 @@ class Hbin:
         mi = df.xs('min', 1, 'aggr').resample(loffset=loffs, **kwargs).min().iloc[:, 0]
         ma = df.xs('max', 1, 'aggr').resample(loffset=loffs, **kwargs).max().iloc[:, 0]
         x = pd.concat((ave, mi, ma), 1, keys=['ave', 'min', 'max'])
+        x.columns = df.columns.set_levels(x.columns, level='aggr')
         return x if start is None else x.loc[start:]
 
 class Validate(config.WRFop):
@@ -128,6 +147,7 @@ class Validate(config.WRFop):
     K = 273.15
 
     def __init__(self, data=None, copy=None):
+        logging.basicConfig(filename=self.log_file, level=logging.DEBUG)
         if copy is not None:
             self.__dict__ = copy.__dict__
             return
@@ -158,61 +178,72 @@ class Validate(config.WRFop):
                 self.start, end = min(mi), max(ma)
                 self.raw = data
 
-    @classmethod
-    def dirs(cls, dirpat=None, raw_dict=None, start=None, end=None):
-        if start is None:
-            if raw_dict is None:
-                with xr.open_dataset(cls.wrf_intp) as ds:
-                    start = pd.Timestamp(ds['start'].max().item()) + cls.sims_delta
-            else:
-                mi, ma = zip(*[(lambda x: (x.min(), x.max()))(df.dropna().index)
-                               for df in raw_dict.values() if df is not None and df.shape[0]>0])
-                start, end = min(mi), max(ma)
+    def dirs(self, dirpat=None, raw_dict=None, start=None, end=None):
+        assert not (raw_dict is not None and start is not None), "Specify only one of 'raw_dict' or 'start'"
+        if raw_dict is not None:
+            mi, ma = zip(*[(lambda x: (x.min(), x.max()))(df.dropna().index)
+                           for df in raw_dict.values() if df is not None and df.shape[0]>0])
+            start, end = min(mi), max(ma)
 
         if dirpat is None:
-            dirpat = cls.directory_re
+            dirpat = self.directory_re
         all_dirs = []
-        for p in cls.paths:
+        for p in self.paths:
             try:
                 all_dirs.extend([os.path.join(p, d) for d in os.listdir(p) if dirpat.search(d)])
+            except PermissionError: raise # occasionally happens that I dont have permissions in a dir
             except: pass
 
         all_dirs = sorted(all_dirs, key=lambda s:s[-10:])
-        return all_dirs
+        # there's a list with simulations with errors in config_mod
+        for s in self.skip:
+            try:
+                all_dirs.remove(s)
+            except: pass
+        all_times = [datetime.strptime(d[-10:], '%Y%m%d%H') for d in all_dirs]
 
-        # possibly for future include a check here for whether a simulation has terminated or is running,
+        start_idx = None
+        if os.path.isfile(self.wrf_intp):
+            with xr.open_dataset(self.wrf_intp) as ds:
+                start_idx = ds.indexes['start'].sort_values()
+            # looping through the directories is time-consuming, so I set a flag here in case all is up to date
+            if pd.DatetimeIndex(all_times).equals(start_idx):
+                self._intp_done = True
+                return []
+
+        # TODO: possibly for future include a check here for whether a simulation has terminated or is running,
         # just in case
-        def test(d):
-            t = datetime.strptime(d[-10:], '%Y%m%d%H')
+        def test(d, t):
             try:
                 assert os.path.isdir(d)
-                assert t >= start
+                if start_idx is not None:
+                    assert t not in start_idx
+                if start is not None:
+                    assert t >= start
                 if end is not None:
                     assert t <= end
-            except: return False
+            except AssertionError: return False
             else: return True
 
-        dirs = [d for d in all_dirs if test(d)]
+        dt = list(zip(all_dirs, all_times))
+        dirs = [d for d, t in dt if test(d, t)]
 
         if raw_dict is not None:
             # insert additional directories in front whose simulations overlap with data
-            for d in all_dirs[all_dirs.index(dirs[0])-1::-1]:
+            for d, t in dt[all_dirs.index(dirs[0])-1::-1]:
                 try:
-                    out = [os.path.join(d, f) for f in os.listdir(d) if cls.wrfout_re.search(f)]
+                    out = [os.path.join(d, f) for f in os.listdir(d) if self.wrfout_re.search(f)]
                     with xr.open_dataset(sorted(out)[-1]) as ds:
-                        if ds[cls.time_dim_coord].values.max() >= start.asm8:
+                        if ds[self.time_dim_coord].values.max() >= start.asm8 and t not in start_idx:
                             dirs.insert(0, d)
                         else: break
                 except: pass
 
-        # there's a list with simulations with errors in config_mod
-        for s in cls.skip:
-            try:
-                dirs.remove(s)
-            except: pass
 
         return dirs
 
+    # this method only writes the interpolated data to file
+    # implement any chunking behavior here in the future if the size of data presents challenges
     def wrf_files(self, dirs):
         from functools import reduce
         with pd.HDFStore(config.CEAZAMet.meta_data) as S:
@@ -231,6 +262,7 @@ class Validate(config.WRFop):
             dl = os.listdir(d)
             out = [os.path.join(d, f) for f in dl if self.wrfout_re.search(f)]
             if len(out) == 0:
+                logging.info('directory {} has no files'.format(d))
                 continue
             elif len(out) == 1:
                 with xr.open_dataset(out[0]) as ds:
@@ -258,16 +290,14 @@ class Validate(config.WRFop):
                 xi.coords['start'] = oi.coords['start']
                 x.append(xi)
 
-        self.intp = xr.concat(o, 'start').transpose(*self.wrf_dim_order)
+        intp = xr.concat(o, 'start').transpose(*self.wrf_dim_order)
         if len(wrfxtrm_vars) > 0:
-            self.intp = xr.merge((self.intp, xr.concat(x, 'start')))
+            intp = xr.merge((intp, xr.concat(x, 'start').transpose(*self.wrf_dim_order)))
 
         if os.path.isfile(self.wrf_intp):
             with xr.open_dataset(self.wrf_intp) as ds:
-                intp = self.combine_first(self.intp, ds.load()).transpose(*self.wrf_dim_order)
-        else:
-            intp = self.intp
-        self.intp_xtime = intp['XTIME']
+                intp = intp.combine_first(ds.load())
+
         intp.to_netcdf(self.wrf_intp)
 
     def _load_earlier(self, binned, set_end=False):
@@ -275,28 +305,12 @@ class Validate(config.WRFop):
         # otherwise it is assumed that it's an update and there will be no end set
         start = min([d.index.min() for d in binned])
         end = max([d.index.max() for d in binned])
-        if not hasattr(self, 'intp'):
-            dirs = self.dirs(start=start, end=end if set_end else None)
+        dirs = [] if getattr(self, '_intp_done', False) else self.dirs(start=start, end=end if set_end else None)
+
+        if len(dirs) > 0:
             self.wrf_files(dirs)
 
-        w = np.where(self.intp_xtime >= np.datetime64(start))[self.intp['XTIME'].dims.index('start')]
-        if len(w) > 0:
-            with xr.open_dataset(self.wrf_intp) as ds:
-                i = min(w)
-                self.intp = self.combine_first(self.intp, ds.isel(start=slice(i, None)))
-                self.intp_xtime = self.intp_xtime.isel(start=slice(0, i+1))
-
-        start = pd.Timestamp(self.intp['start'].max().item())
-        if all([not getattr(self, '_intp_done', False), set_end, end > start]):
-            dirs = self.dirs(start=start + self.sims_delta, end=end)
-            if len(dirs) > 0:
-                intp = self.intp.copy()
-                self.wrf_files(dirs)
-                self.intp = self.combine_first(self.first, intp)
-                # self.intp_xtime should be correct after calling self.wrf_files
-            else:
-                # signals no more dirs to load, since if end > start and len(dirs)==0, there aren't any
-                self._intp_done = True
+        return start, end
 
     def _stats_by_sensor(self, station, wrfout_var, wrfxtrm_vars, key=None, df=None, start=None, prog=None):
         if df is None:
@@ -312,15 +326,19 @@ class Validate(config.WRFop):
         start += self.update_overlap / 2
         d_mid = Hbin.bin(df, label='center', start=start).dropna(0, 'all')
         d_end = Hbin.bin(df, label='right', start=start).dropna(0, 'all')
-        self._load_earlier([d_mid, d_end], df is not None)
-        x = self.intp.sel(station=station) # TODO: needs selecting of variables
-        dm = align_times(x, d_mid).sel(column='ave') + self.K
-        dm['column'] = 'point'
-        de = align_times(x, d_end) + self.K
+        start, end = self._load_earlier([d_mid, d_end], df is not None)
+
+        with xr.open_dataset(self.wrf_intp) as ds:
+            # NOTE: slice with .sel() includes start, end (not with .isel())
+            x = ds[wrfout_var + wrfxtrm_vars.keys()].sel(station=station, start=slice(start, end)).load()
+
+        dm = align_times(x, d_mid, 'aggr').sel(columns='ave') + self.K
+        dm['columns'] = 'point'
+        de = align_times(x, d_end, 'aggr') + self.K
         X = xr.concat((
-            xr.concat([x[k] - de.sel(column=v) for k, v in wrfxtrm_vars.items()], 'column'),
+            xr.concat([x[k] - de.sel(columns=v) for k, v in wrfxtrm_vars.items()], 'columns'),
             x[wrfout_var] - dm
-        ), 'column')
+        ), 'columns')
         if prog is not None:
             prog.update(1)
         return X, d_end
@@ -373,12 +391,12 @@ class Validate(config.WRFop):
             x = xr.concat(v.values(), 'station')
             d = {
                 'station': slice(None),
-                'column': x.indexes['column'].get_indexer(['ave', 'max', 'min']),
+                'columns': x.indexes['columns'].get_indexer(['ave', 'max', 'min']),
                 'start': slice(None),
                 'Time': 0,
             }
             x[tuple([d[c] for c in x.dims])] = np.nan
-            self.err[k] = x.to_dataset('column').transpose(*self.wrf_dim_order)
+            self.err[k] = x.to_dataset('columns').transpose(*self.wrf_dim_order)
 
     def dict2frame(self, B):
         names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
@@ -540,6 +558,8 @@ class Validate(config.WRFop):
         c = a.columns.get_level_values(0).intersection(b.columns.get_level_values(0))
         return pd.concat([(a[s] - b[s]).dropna() for s in c], 1, keys=c).T
 
+# TODO: include logic to check if all variables are in existing wrf_intp file
+# and if not, first produce a merged wrf_intp file
 def update():
     from data import CEAZA
     # the CEAZA module takes care of updating *its* data (hopefully)
