@@ -347,10 +347,12 @@ class Field(Common):
         for k, v in d.items():
             v.to_hdf(filename, key='/'.join(('raw', var_code, k)), mode='a', format='table')
 
-    def store_raw(self):
+    def store_raw(self, filename=None):
+        if filename is None:
+            filename = self.raw_data
         for k, v in self.data.items():
             if v is not None and v.shape[0] > 0:
-                v.to_hdf(self.raw_data, key='raw/{}/{}'.format(self.var_code, k), mode='a', format='table')
+                v.to_hdf(filename, key='raw/{}/{}'.format(self.var_code, k), mode='a', format='table')
 
 class Meta(Common):
     field = [
