@@ -227,6 +227,8 @@ class Field(Common):
 
     def _get(self, fields_row, prog=None, from_date=None, **kwargs):
         (station, field), row = fields_row
+        # NOTE: need to change this logic to give priority to 'update' *if* it exists
+        # that way, update can be called with from_date earliest 'limit' on updating
         if from_date is None:
             try:
                 # updating: field exists in old data

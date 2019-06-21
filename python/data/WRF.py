@@ -144,19 +144,65 @@ class Hbin:
         x.columns = df.columns.set_levels(x.columns, level='aggr')
         return x if start is None else x.loc[start:]
 
+class SensorFilter:
+    def __init__(self, field):
+        self.filter = getattr(self, field, lambda x: True)
+        flds = pd.read_hdf(config.CEAZAMet.meta_data, 'fields').xs(field, level='field')
+        self.sensors = flds.reset_index().set_index('sensor_code')
+        self.field = field
+
+    def ta_c(self, key):
+        k = key.split('/')[-1]
+        s = self.sensors.loc[k]
+        st = self.sensors[self.sensors['station']==s['station']]
+        if st.shape[0] > 1:
+            if abs(st['elev'] - 2).idxmin() != k:
+                return False
+        return True
+
+class Transforms:
+    obs = {
+        'ta_c': 'ta_c'
+    }
+    wrf = {
+        'hr': 'hr'
+    }
+
+    @classmethod
+    def get(cls, name):
+        return cls.obs.get(name, None), cls.wrf.get(name, None)
+
+    @staticmethod
+    def ta_c(x):
+        return x + 273.15
+
+    @staticmethod
+    def hr(ds):
+        pass
+
+
 class Validate(config.WRFop):
     utc_delta = pd.Timedelta(-4, 'h')
     update_overlap = pd.Timedelta(1, 'd')
     sims_delta = pd.Timedelta(1, 'd')
     time_dim_coord = 'XTIME'
     wrf_dim_order = ('start', 'station', 'Time')
-    K = 273.15
+
+    # call this only once per session if logging is desired
+    # logging is a singleton, and even a new instance of Validate doesn't need to reconfigure the logger -
+    # it would result in multiple handlers all logging to the same file (i.e. multiple entries for the same line)
+    def log(self):
+        fh = logging.FileHandler(self.log_file)
+        self._log.setLevel(logging.DEBUG)
+        self._log.addHandler(fh)
 
     def __init__(self, data=None, copy=None):
-        logging.basicConfig(filename=self.log_file, level=logging.DEBUG)
         if copy is not None:
             self.__dict__ = copy.__dict__
             return
+
+        # logging.basicConfig(filename=self.log_file, level=logging.DEBUG)
+        self._log = logging.getLogger(__name__)
 
         with pd.HDFStore(config.CEAZAMet.meta_data) as S:
             self.flds = S['fields']
@@ -306,36 +352,48 @@ class Validate(config.WRFop):
 
         intp.to_netcdf(self.wrf_intp)
 
-    def _stats_by_sensor(self, station, wrfout_var, wrfxtrm_vars, key=None, df=None, start=None, prog=None):
+    def _stats_by_sensor(self, station, wrfout_vars, wrfxtrm_vars, key=None, df=None, start=None, prog=None):
+        self._log.info('stats-by-sensor: key {}; wrf {}; start {}; df {}'.format(key, wrfout_var, start, df is not None))
         if df is None:
+            field = key.split('/')[-1]
             with pd.HDFStore(config.CEAZAMet.raw_data) as S:
                 if start is None:
                     df = S.select(key)
                 else:
                     df = S.select(key, where=start.strftime('index>="%Y-%m-%dT%H:%M"'))
+        else:
+            field = df.columns.get_level_values('field').unique().items()
         if df.shape[0] == 0:
             if prog is not None:
                 prog.update(1)
             return None
-        start += self.update_overlap / 2
+        if start is not None:
+            start += self.update_overlap / 2
         d_mid = Hbin.bin(df, label='center', start=start).dropna(0, 'all')
         d_end = Hbin.bin(df, label='right', start=start).dropna(0, 'all')
 
         start = min([d.index.min() for d in [d_mid, d_end]])
         end = max([d.index.max() for d in [d_mid, d_end]])
-        dirs = [] if getattr(self, '_intp_done', False) else self.dirs(start=start, end=end if set_end else None)
+        dirs = [] if getattr(self, '_intp_done', False) else self.dirs(start=start, end=None if df is None else end)
         if len(dirs) > 0:
             self.wrf_files(dirs)
 
+        # NOTE: slice with .sel() includes start, end (not with .isel())
+        # I keep the 'start' variable at the UTC time stamps for now, since this corresponds to the directory names
+        # but that means I need to reverse-adjust the local timestamps from the station data
+        # (but not for XTIME, which is adjusted to start with!!!!!)
         with xr.open_dataset(self.wrf_intp) as ds:
             i, _ = np.where(ds[self.time_dim_coord] >= np.datetime64(start))
-            # NOTE: slice with .sel() includes start, end (not with .isel())
-            x = ds[[wrfout_var] + list(wrfxtrm_vars.keys())].sel(station=station, start=slice(None, end))
+            x = ds[wrfout_vars + list(wrfxtrm_vars.keys())].sel(station=station, start=slice(None, end-self.utc_delta))
             x = x.isel(start=slice(min(i), None)).load()
 
-        dm = align_times(x, d_mid, 'aggr').sel(columns='ave') + self.K
+        f, g = Transforms.get(field)
+        if f is not None:
+            d_mid, d_end = f(d_mid), f(d_end)
+
+        dm = align_times(x, d_mid, 'aggr').sel(columns='ave')
         dm['columns'] = 'point'
-        de = align_times(x, d_end, 'aggr') + self.K
+        de = align_times(x, d_end, 'aggr')
         X = xr.concat((
             xr.concat([x[k] - de.sel(columns=v) for k, v in wrfxtrm_vars.items()], 'columns'),
             x[wrfout_var] - dm
@@ -348,25 +406,31 @@ class Validate(config.WRFop):
         sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
         R, B = {}, {}
 
+        n = 0
         if raw_dict is None:
             var_dicts = deepcopy(self.variables)
             with pd.HDFStore(config.CEAZAMet.raw_data) as S:
                 for var_dict in var_dicts:
                     vc = var_dict['ceazamet_field']
+                    sf = SensorFilter(vc)
                     try:
                         t = S.select('raw/binned/end/{}'.format(vc), start=-1).index[0]
                         var_dict['start'] = t - self.update_overlap
                     except: pass
                     node = S.get_node('raw/{}'.format(vc))
-                    var_dict['keys'] = [n._v_pathname for n in node._v_children.values()]
+                    keys = [n._v_pathname for n in node._v_children.values()]
+                    keys = [k for k in keys if sf.filter(k)]
+                    var_dict['keys'] = keys
+                    n += len(keys)
 
+            prog = tqdm(total=n)
             for var_dict in var_dicts:
                 field = var_dict.pop('ceazamet_field')
                 keys = var_dict.pop('keys')
-                sensor_codes = [k.split('/')[-1] for k in keys]
                 stations = [sta[k.split('/')[-1]] for k in keys]
-                f = partial(self._stats_by_sensor, prog=tqdm(total=len(keys)), **var_dict)
-                r, B[field] = zip(*[x for x in [f(station=s, key=k) for s, k in zip(stations, keys)] if x is not None])
+                # f = partial(self._stats_by_sensor, prog=tqdm(total=len(keys)), **var_dict)
+                r, B[field] = zip(*[x for x in [self._stats_by_sensor(station=s, key=k, prog=prog, **var_dict)
+                                                for s, k in zip(stations, keys)] if x is not None])
                 R[field] = dict(zip(stations, r))
 
         else:
@@ -375,14 +439,19 @@ class Validate(config.WRFop):
             for s, df in tqdm(raw_dict.items()):
                 if (df is not None and df.shape[0]>0):
                     field = df.columns.get_level_values('field').unique().item()
-                    var_dict = self.var_dict(field=field)
-                    r, b = self._stats_by_sensor(sta[s], df=df, start=None, **var_dict)
                     try:
-                        R[field][s] = r
-                        B[field].append(b)
+                        assert sf.field == field
                     except:
-                        R[field] = {s: r}
-                        B[field] = [b]
+                        sf = SensorFilter(field)
+                    if sf.filter(s):
+                        var_dict = self.var_dict(field=field)
+                        r, b = self._stats_by_sensor(sta[s], df=df, start=None, **var_dict)
+                        try:
+                            R[field][s] = r
+                            B[field].append(b)
+                        except:
+                            R[field] = {s: r}
+                            B[field] = [b]
 
         self.binned = {k: pd.concat(v, 1) for k, v in B.items()}
 
@@ -597,6 +666,9 @@ def compare_xr(a, b):
     return pd.concat((neq, eq), 1, keys=['neq', 'eq']).swaplevel(axis=1).sort_index(1), t
 
 def compare_df(a, b):
+    pass
+
+def compare_dicts(a, b):
     print('only in a: {}'.format(set(a.keys()) - b.keys()))
     print('only in b: {}'.format(set(b.keys()) - a.keys()))
     d = {}
@@ -624,8 +696,15 @@ def ex(x, var, station, day):
     x = x[var].sel(station=station, Time=slice(day*24, (day+1)*24)).stack(t=('Time', 'start')).sortby('XTIME')
     return x.XTIME, x
 
-def compare_idx(a, b, time):
-    return (a.isnull().astype(int) - b.isnull()).isel(start=time).sum(('Time', 'start')).to_dataframe()
+def compare_idx(a, b):
+     x = (a.isnull().astype(int) - b.isnull()).to_array()
+     j = [x[i] for i in zip(*np.where(x))]
+     if len(j)==0:
+         print('No index differences detected.')
+     else:
+         return xr.concat(j).to_dataframe('null').set_index('station').sort_index()
+     # s = df.sum(('Time', 'start')).isel(start=time).to_dataframe()
+
 
 def append_netcdf(x, name, mode):
     # https://github.com/pydata/xarray/issues/1849
