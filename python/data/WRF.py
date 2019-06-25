@@ -43,8 +43,7 @@ The direct use case consists of calling :meth:`Validate.data` with a data :obj:`
 
 .. TODO::
 
-    * make sure only ~2m temp sensors are used
-    * test multiple variables
+    * figure out transformations like RH <-> Q
     * figure out what would need to be done to run this daily
 
 """
@@ -160,13 +159,41 @@ class SensorFilter:
                 return False
         return True
 
-class Transforms:
+class Transforms(config.WRFop):
     obs = {
-        'ta_c': 'ta_c'
+        'ta_c': {
+            'fields': ['ta_c'],
+            'transf': 'ta_c',
+            # 'xtrm': {'T2MEAN': 'ave', 'T2MIN': 'min', 'T2MAX': 'max'}y
+        },
+        # 'ta_c': {
+        #     'center': {'transf': 'ta_c', 'fields': ['ta_c']},
+        #     'end': {'transf': 'ta_c', 'fields': ['ta_c']}
+        # }
+        # 'hr': {
+        #     'fields': ['hr', 'ta_c', ('pa_hpa', 'pa_kpa')],
+        #     'transf': 'hr_obs',
+        #     'xtrm': {'Q2': 'q2obs'}
+        # },
+        'hr': {
+            'center': {'fields': ['hr']},
+            'end': {'transf': 'hr_obs', 'fields': ['hr', 'ta_c', 'pa_hpa', 'pa_kpa']}
+        }
     }
     wrf = {
-        'hr': 'hr'
+        'ta_c': {
+            'out': {'fields': ['T2']},
+            'xtrm': {'fields': {'T2MEAN': 'ave', 'T2MIN': 'min', 'T2MAX': 'max'}}
+        }
+        'hr': {
+            'out': {'transf': 'hr_wrf', 'fields': ['Q2', 'T2', 'PSFC']},
+            'xtrm': {'fields': {'Q2MEAN': 'ave', 'Q2MIN': 'min', 'Q2MAX': 'max'}}
+        }
     }
+    variables = [
+        {'ceazamet_field': 'ta_c', 'wrfout_var': 'T2', 'wrfxtrm_vars': {'T2MEAN': 'ave', 'T2MIN': 'min', 'T2MAX': 'max'}},
+        {'ceazamet_field': 'hr', 'wrfout_var': 'Q2', 'wrfxtrm_vars': {'Q2MEAN': 'ave', 'Q2MIN': 'min', 'Q2MAX': 'max'}}
+    ]
 
     @classmethod
     def get(cls, name):
@@ -181,7 +208,7 @@ class Transforms:
         pass
 
 
-class Validate(config.WRFop):
+class Validate(Transforms):
     utc_delta = pd.Timedelta(-4, 'h')
     update_overlap = pd.Timedelta(1, 'd')
     sims_delta = pd.Timedelta(1, 'd')
@@ -201,7 +228,6 @@ class Validate(config.WRFop):
             self.__dict__ = copy.__dict__
             return
 
-        # logging.basicConfig(filename=self.log_file, level=logging.DEBUG)
         self._log = logging.getLogger(__name__)
 
         with pd.HDFStore(config.CEAZAMet.meta_data) as S:
@@ -209,26 +235,6 @@ class Validate(config.WRFop):
             # always interpolate to all historically active stations - since, why not
             self.sta = reduce(lambda i, j: S[i].combine_first(S[j]),
                               sorted([k for k in S.keys() if re.search('station', k)], reverse=True))
-
-        if False:
-            if data is None:
-                # when updating, we use two different starting points for station data and WRF files
-                # (b/c WRF files are not subject to changes once written out, unlike the stations db)
-                # NOTE: my binning will cause typically 2 hourly timesteps at the end/beginning to be sensitive to new data
-                with pd.HDFStore(config.CEAZAMet.raw_data) as S:
-                    t = S.select('raw/binned/end/{}'.format(var_code), start=-1).index[0]
-                    self.start_bin = t - self.update_overlap
-                    raw = {k: S.select(k, where=self.start_bin.strftime('index>="%Y-%m-%dT%h:%m"'))
-                           for k in S.get_node('raw/{}'.format(var_code))._v_children.items()}
-                self.raw = {k: v for k, v in raw.items() if v.shape[0]>0}
-                end = max([df.dropna().index.max() for df in self.raw.values()])
-                print('start-wrf: {}; end-wrf: {}; start-binning: {}'.format(self.start, end, self.start_bin))
-            else:
-                data = {k: v for k, v in data.items() if (v is not None and v.shape[0]>0)}
-                print('data with length > 0: {}'.format(len(data)))
-                mi, ma = zip(*[(lambda x: (x.min(), x.max()))(df.dropna().index) for df in data.values()])
-                self.start, end = min(mi), max(ma)
-                self.raw = data
 
     def dirs(self, dirpat=None, raw_dict=None, start=None, end=None):
         assert not (raw_dict is not None and start is not None), "Specify only one of 'raw_dict' or 'start'"
@@ -352,7 +358,61 @@ class Validate(config.WRFop):
 
         intp.to_netcdf(self.wrf_intp)
 
-    def _stats_by_sensor(self, station, wrfout_vars, wrfxtrm_vars, key=None, df=None, start=None, prog=None):
+    def bin(self, fields):
+        CD, ED = {}, {}
+        with pd.HDFStore(config.CEAZAMet.raw_data) as S:
+            N = sum([S.get_node('raw/{}'.format(f))._v_nchildren for f in fields])
+            prog = tqdm(total=N)
+            for f in fields:
+                C, E = [], []
+                key = 'raw/binned/end/{}'.format(f)
+                try:
+                    start = S.select(key, start=-1).index[0] - self.update_overlap
+                except:
+                    start = None
+                node = S.get_node('raw/{}'.format(f))
+                for k, v in node._v_children.items():
+                    if start is None:
+                        df = S.select(v._v_pathname)
+                    else:
+                        df = S.select(v._v_pathname, where=start.strftime('index>="%Y-%m-%dT%H:%M"'))
+                        start += self.update_overlap / 2
+                    C.append(Hbin.bin(df, label='center', start=start).dropna(0, 'all'))
+                    E.append(Hbin.bin(df, label='right', start=start).dropna(0, 'all'))
+                    prog.update(1)
+                ED[f] = pd.concat(E, 1).combine_first(S[key]) if key in S else pd.concat(E, 1)
+                key = 'raw/binned/center/{}'.format(f)
+                CD[f] = pd.concat(C, 1).combine_first(S[key]) if key in S else pd.concat(C, 1)
+        for f, x in ED.items():
+            x.to_hdf(config.CEAZAMet.raw_data, key='raw/binned/end/{}'.format(f), mode='a', format='table')
+        for f, x in CD.items():
+            x.to_hdf(config.CEAZAMet.raw_data, key='raw/binned/center/{}'.format(f), mode='a', format='table')
+
+    def _stats2(self, obs, wrf, start=None):
+        where = start.strftime('index>="%Y-%m-%dT%H:%M"') if start is not None else None
+        with pd.HDFStore(config.CEAZAMet.raw_data) as S:
+            if 'fields' in obs:
+                # if the fields/transform info is the same for centered or end-labeled binning, I don't replicate it
+                # for 'center' and 'end' items in the top-level dict (e.g. 'ta_c')
+                cen = xr.concat([S.select('raw/binned/center/{}'.format(f), where=where) for f in obs['fields']], 1)
+                end = xr.concat([S.select('raw/binned/end/{}'.format(f), where=where) for f in obs['fields']], 1)
+                if 'transf' in obs:
+                    f = getattr(self, obs['transf'])
+                    cen, end = f(cen), f(end)
+            else:
+                # in the case of e.g. 'hr'
+                d = obs['center']
+                cen = xr.concat([S.select('raw/binned/center/{}'.format(f), where=where) for f in d['fields']], 1)
+                if 'transf' in d:
+                    cen = getattr(self, d['transf'])(cen)
+                d = obs['end']
+                end = xr.concat([S.select('raw/binned/end/{}'.format(f), where=where) for f in d['fields']], 1)
+                if 'transf' in d:
+                    end = getattr(self, d['transf'])(end)
+
+
+
+    def _stats_by_sensor(self, station, wrfout_var, wrfxtrm_vars, key=None, df=None, start=None, prog=None):
         self._log.info('stats-by-sensor: key {}; wrf {}; start {}; df {}'.format(key, wrfout_var, start, df is not None))
         if df is None:
             field = key.split('/')[-1]
@@ -378,13 +438,18 @@ class Validate(config.WRFop):
         if len(dirs) > 0:
             self.wrf_files(dirs)
 
+        if transform_vars is not None:
+            raise Exception('not implemented yet')
+            # variables = transform_vars['wrfout'], transform_vars['wrfxtrm']
+        else:
+            variables = [wrfout_var] + list(wrfxtrm_vars.keys())
         # NOTE: slice with .sel() includes start, end (not with .isel())
         # I keep the 'start' variable at the UTC time stamps for now, since this corresponds to the directory names
         # but that means I need to reverse-adjust the local timestamps from the station data
         # (but not for XTIME, which is adjusted to start with!!!!!)
         with xr.open_dataset(self.wrf_intp) as ds:
             i, _ = np.where(ds[self.time_dim_coord] >= np.datetime64(start))
-            x = ds[wrfout_vars + list(wrfxtrm_vars.keys())].sel(station=station, start=slice(None, end-self.utc_delta))
+            x = ds[variables].sel(station=station, start=slice(None, end-self.utc_delta))
             x = x.isel(start=slice(min(i), None)).load()
 
         f, g = Transforms.get(field)
@@ -408,28 +473,26 @@ class Validate(config.WRFop):
 
         n = 0
         if raw_dict is None:
+            obs = deepcopy(self.obs)
             var_dicts = deepcopy(self.variables)
             with pd.HDFStore(config.CEAZAMet.raw_data) as S:
-                for var_dict in var_dicts:
-                    vc = var_dict['ceazamet_field']
-                    sf = SensorFilter(vc)
+                for k, vdict in obs.items():
+                    sf = SensorFilter(k)
                     try:
-                        t = S.select('raw/binned/end/{}'.format(vc), start=-1).index[0]
-                        var_dict['start'] = t - self.update_overlap
+                        t = S.select('raw/binned/end/{}'.format(k), start=-1).index[0]
+                        vdict['start'] = t - self.update_overlap
                     except: pass
-                    node = S.get_node('raw/{}'.format(vc))
+                    node = S.get_node('raw/{}'.format(k))
                     keys = [n._v_pathname for n in node._v_children.values()]
-                    keys = [k for k in keys if sf.filter(k)]
-                    var_dict['keys'] = keys
+                    keys = [s for s in keys if sf.filter(s)]
+                    vdict['keys'] = keys
                     n += len(keys)
 
             prog = tqdm(total=n)
-            for var_dict in var_dicts:
-                field = var_dict.pop('ceazamet_field')
-                keys = var_dict.pop('keys')
+            for f, vdict in obs:
+                keys = vdict.pop('keys')
                 stations = [sta[k.split('/')[-1]] for k in keys]
-                # f = partial(self._stats_by_sensor, prog=tqdm(total=len(keys)), **var_dict)
-                r, B[field] = zip(*[x for x in [self._stats_by_sensor(station=s, key=k, prog=prog, **var_dict)
+                r, B[field] = zip(*[x for x in [self._stats_by_sensor(station=s, key=k, prog=prog, **vdict)
                                                 for s, k in zip(stations, keys)] if x is not None])
                 R[field] = dict(zip(stations, r))
 
