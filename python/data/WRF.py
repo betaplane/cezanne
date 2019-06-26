@@ -86,7 +86,15 @@ def align_times(wrf, df, level=None):
     return xr.DataArray(np.stack([np.where(idx>=0, df[c].values[idx].squeeze(), np.nan) for c in df.columns], 2),
                         coords = [wrf.coords['start'], wrf.coords['Time'], ('columns', columns)])
 
-
+def csel(ds, **kwargs):
+    x = ds.copy()
+    idx = x.indexes['columns']
+    for k, v in kwargs.items():
+        i, idx = idx.get_loc_level(v, level=k)
+        x = x.sel(columns=i)
+    x = x.rename({'columns': 'station'})
+    x.coords['station'] = ('station', idx.get_level_values('station'))
+    return x
 
 # NOTE: in the git repo there are some older attempts at binning which don't use the pandas 'resample'
 # method. In case Hbin is ultimately unsuccesful, I can go back to those.
@@ -164,17 +172,7 @@ class Transforms(config.WRFop):
         'ta_c': {
             'fields': ['ta_c'],
             'transf': 'ta_c',
-            # 'xtrm': {'T2MEAN': 'ave', 'T2MIN': 'min', 'T2MAX': 'max'}y
         },
-        # 'ta_c': {
-        #     'center': {'transf': 'ta_c', 'fields': ['ta_c']},
-        #     'end': {'transf': 'ta_c', 'fields': ['ta_c']}
-        # }
-        # 'hr': {
-        #     'fields': ['hr', 'ta_c', ('pa_hpa', 'pa_kpa')],
-        #     'transf': 'hr_obs',
-        #     'xtrm': {'Q2': 'q2obs'}
-        # },
         'hr': {
             'center': {'fields': ['hr']},
             'end': {'transf': 'hr_obs', 'fields': ['hr', 'ta_c', 'pa_hpa', 'pa_kpa']}
@@ -184,16 +182,12 @@ class Transforms(config.WRFop):
         'ta_c': {
             'out': {'fields': ['T2']},
             'xtrm': {'fields': {'T2MEAN': 'ave', 'T2MIN': 'min', 'T2MAX': 'max'}}
-        }
+        },
         'hr': {
             'out': {'transf': 'hr_wrf', 'fields': ['Q2', 'T2', 'PSFC']},
             'xtrm': {'fields': {'Q2MEAN': 'ave', 'Q2MIN': 'min', 'Q2MAX': 'max'}}
         }
     }
-    variables = [
-        {'ceazamet_field': 'ta_c', 'wrfout_var': 'T2', 'wrfxtrm_vars': {'T2MEAN': 'ave', 'T2MIN': 'min', 'T2MAX': 'max'}},
-        {'ceazamet_field': 'hr', 'wrfout_var': 'Q2', 'wrfxtrm_vars': {'Q2MEAN': 'ave', 'Q2MIN': 'min', 'Q2MAX': 'max'}}
-    ]
 
     @classmethod
     def get(cls, name):
@@ -388,29 +382,76 @@ class Validate(Transforms):
         for f, x in CD.items():
             x.to_hdf(config.CEAZAMet.raw_data, key='raw/binned/center/{}'.format(f), mode='a', format='table')
 
-    def _stats2(self, obs, wrf, start=None):
-        where = start.strftime('index>="%Y-%m-%dT%H:%M"') if start is not None else None
+    def _stats2(self, obs, wrf, start=None, end=None):
+        if start is not None:
+            where = start.strftime('index>="%Y-%m-%dT%H:%M"')
+            if end is not None:
+                where = '&'.join((where, end.strftime('index<="%Y-%m-%dT%H:%M"')))
+        elif end is not None:
+            where = end.strftime('index<="%Y-%m-%dT%H:%M"')
+        else:
+            where = None
+
         with pd.HDFStore(config.CEAZAMet.raw_data) as S:
             if 'fields' in obs:
                 # if the fields/transform info is the same for centered or end-labeled binning, I don't replicate it
                 # for 'center' and 'end' items in the top-level dict (e.g. 'ta_c')
-                cen = xr.concat([S.select('raw/binned/center/{}'.format(f), where=where) for f in obs['fields']], 1)
-                end = xr.concat([S.select('raw/binned/end/{}'.format(f), where=where) for f in obs['fields']], 1)
+                df_cen = pd.concat([S.select('raw/binned/center/{}'.format(f), where=where) for f in obs['fields']], 1)
+                df_end = pd.concat([S.select('raw/binned/end/{}'.format(f), where=where) for f in obs['fields']], 1)
                 if 'transf' in obs:
                     f = getattr(self, obs['transf'])
-                    cen, end = f(cen), f(end)
+                    df_cen, df_end = f(df_cen), f(df_end)
             else:
                 # in the case of e.g. 'hr'
-                d = obs['center']
-                cen = xr.concat([S.select('raw/binned/center/{}'.format(f), where=where) for f in d['fields']], 1)
-                if 'transf' in d:
-                    cen = getattr(self, d['transf'])(cen)
-                d = obs['end']
-                end = xr.concat([S.select('raw/binned/end/{}'.format(f), where=where) for f in d['fields']], 1)
-                if 'transf' in d:
-                    end = getattr(self, d['transf'])(end)
+                if 'center' in obs:
+                    d = obs['center']
+                    df_cen = pd.concat([S.select('raw/binned/center/{}'.format(f), where=where) for f in d['fields']], 1)
+                    if 'transf' in d:
+                        df_cen = getattr(self, d['transf'])(df_cen)
+                if 'end' in obs:
+                    d = obs['end']
+                    df_end = pd.concat([S.select('raw/binned/end/{}'.format(f), where=where) for f in d['fields']], 1)
+                    if 'transf' in d:
+                        df_end = getattr(self, d['transf'])(df_end)
 
+        with xr.open_dataset(self.wrf_intp) as ds:
+            t = ds[self.time_dim_coord]
+            # XTIME/time_dim_coord is adjusted to local time, so no need to correct start, end
+            if start is not None:
+                i, _ = np.where(t >= np.datetime64(start))
+            if end is not None:
+                j, _ = np.where(t >= np.datetime64(end))
+                try:
+                    i = set(i).intersection(j)
+                except: i = j
+            if 'out' in wrf:
+                d = wrf['out']
+                out = ds[d['fields']].sel(station=df_cen.columns.get_level_values('station').unique())
+                try:
+                    out = out.isel(start=i).load()
+                except: out.load()
+                if 'transf' in d:
+                    out = getattr(self, d['transf'])(out)
+                ds_cen = csel(align_times(out, df_cen), aggr='ave')
+                x = (out - ds_cen).expand_dims('aggr')
+                x.coords['aggr'] = ('aggr', ['point'])
+                return x
+            if 'xtrm' in wrf:
+                d = wrf['xtrm']
+                xtrm = ds[list(d['fields'].keys())].sel(station=df_end.columns.get_level_values('station').unique())
+                try:
+                    xtrm = xtrm.isel(start=i).load()
+                except: xtrm.load()
+                if 'transf' in d:
+                    xtrm = getattr(self, d['transf'])(xtrm)
+                ds_end = align_times(xtrm, df_end)
+                y = xr.concat([xtrm[k] - csel(ds_end, aggr=v) for k, v in d['fields'].items()],
+                              pd.Index(d['fields'].values(), name='aggr'))
+                try:
+                    x = xr.concat((x, y), 'aggr')
+                except: x = y
 
+        return x
 
     def _stats_by_sensor(self, station, wrfout_var, wrfxtrm_vars, key=None, df=None, start=None, prog=None):
         self._log.info('stats-by-sensor: key {}; wrf {}; start {}; df {}'.format(key, wrfout_var, start, df is not None))
@@ -430,7 +471,7 @@ class Validate(Transforms):
         if start is not None:
             start += self.update_overlap / 2
         d_mid = Hbin.bin(df, label='center', start=start).dropna(0, 'all')
-        d_end = Hbin.bin(df, label='right', start=start).dropna(0, 'all')
+        d_df_end = Hbin.bin(df, label='right', start=start).dropna(0, 'all')
 
         start = min([d.index.min() for d in [d_mid, d_end]])
         end = max([d.index.max() for d in [d_mid, d_end]])
