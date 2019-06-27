@@ -48,6 +48,7 @@ The direct use case consists of calling :meth:`Validate.data` with a data :obj:`
 
 """
 from helpers import config
+from formulae import rh2w, w2rh
 from glob import glob
 from datetime import datetime, timedelta
 from data.interpolate import BilinearInterpolator
@@ -167,39 +168,93 @@ class SensorFilter:
                 return False
         return True
 
+class SF:
+    @staticmethod
+    def elev(df, nominal=2):
+        c = df.columns.to_frame().reset_index(drop=True)
+
 class Transforms(config.WRFop):
-    obs = {
-        'ta_c': {
-            'fields': ['ta_c'],
-            'transf': 'ta_c',
-        },
-        'hr': {
-            'center': {'fields': ['hr']},
-            'end': {'transf': 'hr_obs', 'fields': ['hr', 'ta_c', 'pa_hpa', 'pa_kpa']}
+    variables = [
+        {
+            'transf': 't2',
+            'obs': ['ta_c'],
+            'wrf': {
+                'out': ['T2'],
+                'xtrm': ['T2MEAN', 'T2MIN', 'T2MAX']
+            }
+        }, {
+            'transf': 'q2',
+            'obs': {
+                'center': ['hr'],
+                'end': ['hr', 'ta_c', 'pa_hpa', 'pa_kpa']
+            },
+            'wrf': {
+                'out': ['Q2', 'T2', 'PSFC'],
+                'xtrm': ['Q2MEAN', 'T2MEAN']
+            }
         }
-    }
-    wrf = {
-        'ta_c': {
-            'out': {'fields': ['T2']},
-            'xtrm': {'fields': {'T2MEAN': 'ave', 'T2MIN': 'min', 'T2MAX': 'max'}}
-        },
-        'hr': {
-            'out': {'transf': 'hr_wrf', 'fields': ['Q2', 'T2', 'PSFC']},
-            'xtrm': {'fields': {'Q2MEAN': 'ave', 'Q2MIN': 'min', 'Q2MAX': 'max'}}
-        }
-    }
-
-    @classmethod
-    def get(cls, name):
-        return cls.obs.get(name, None), cls.wrf.get(name, None)
+    ]
 
     @staticmethod
-    def ta_c(x):
-        return x + 273.15
+    def t2(obs_cen, obs_end, wrf_out, wrf_xtrm):
+        ds_cen = csel(align_times(wrf_out, obs_cen + 273.15), aggr='ave')
+        out = (wrf_out - ds_cen).expand_dims('aggr')
+        out.coords['aggr'] = ('aggr', ['point'])
+        ds_end = align_times(wrf_xtrm, obs_end + 273.15)
+        xtrm = xr.concat(
+            [wrf_xtrm[i] - csel(ds_end, aggr=j)
+             for i, j in [('T2MEAN', 'ave'), ('T2MIN', 'min'), ('T2MAX', 'max')]],
+            pd.Index(['ave', 'min', 'max'], name='aggr')
+        ).to_dataset(name='T2').isel(Time=slice(1, None)) # nixing out Time 0 for xtrm values
+        return xr.concat((out, xtrm), 'aggr')
 
     @staticmethod
-    def hr(ds):
-        pass
+    def q2(obs_cen, obs_end, wrf_out, wrf_xtrm):
+        def k2hpa(df):
+            try:
+                i, _ = df.columns.get_loc_level('pa_kpa', level='field')
+                x = df.iloc[:, i] * 10
+                idx = x.columns
+                idx = idx.set_levels([k if k!='pa_kpa' else 'pa_hpa'
+                                      for k in idx.levels[idx.names.index('field')]], level='field')
+                x.columns = idx
+                df = pd.concat((df.iloc[:, ~i], x), 1)
+            except: pass
+            finally: return df
+        obs_cen, obs_end = k2hpa(obs_cen), k2hpa(obs_end)
+
+        def dl(x):
+            x.columns = x.columns.droplevel(['sensor_code', 'elev'])
+            return x
+        HR = dl(obs_end.xs('hr', 1, 'field'))
+        T = dl(obs_end.xs('ta_c', 1, 'field')) + 273.15
+        p = dl(obs_end.xs('pa_hpa', 1, 'field')) * 100
+
+        s = reduce(
+            lambda x, y: x.intersection(y),
+            [x.columns.get_level_values('station').unique() for x in [HR, T, p]]
+        )
+        q_end = csel(align_times(wrf_xtrm, rh2w(HR[s], T[s], p[s])), aggr='ave')
+
+        q = (wrf_xtrm['Q2MEAN'] - q_end).expand_dims('aggr').isel(Time=slice(1, None)) # because xtrm values
+        q.coords['aggr'] = ('aggr', ['ave'])                                           # are 0 at 'Time' 0
+
+        rh = w2rh(wrf_out['Q2'], wrf_out['T2'], wrf_out['PSFC'])
+        obs = csel(align_times(rh, dl(obs_cen.xs('hr', 1, 'field'))), aggr='ave')
+        rp = (rh - obs).expand_dims('aggr')
+        rp.coords['aggr'] = ('aggr', ['point'])
+
+        p = wrf_out['PSFC']
+        p_intp = p.interp({'Time': p['Time'][:-1]+.5})
+        p_intp.coords['Time'] = ('Time', np.arange(1, p['Time'].size))
+        p_intp.coords['XTIME'] = (p['XTIME'].dims, p['XTIME'].isel(Time=slice(1, None)))
+        T = wrf_xtrm['T2MEAN'].isel(Time=slice(1, None))
+        q = wrf_xtrm['Q2MEAN'].isel(Time=slice(1, None))
+        rh = w2rh(q, T, p_intp)
+        hr = csel(align_times(rh, HR), aggr='ave')
+        ra = (rh - hr).expand_dims('aggr')
+        ra.coords['aggr'] = ('aggr', ['ave'])
+        return xr.merge((q.to_dataset(name='Q2'), xr.concat((rp, ra), 'aggr').to_dataset(name='RH')))
 
 
 class Validate(Transforms):
@@ -230,13 +285,13 @@ class Validate(Transforms):
             self.sta = reduce(lambda i, j: S[i].combine_first(S[j]),
                               sorted([k for k in S.keys() if re.search('station', k)], reverse=True))
 
-    def dirs(self, dirpat=None, raw_dict=None, start=None, end=None):
-        assert not (raw_dict is not None and start is not None), "Specify only one of 'raw_dict' or 'start'"
-        if raw_dict is not None:
-            mi, ma = zip(*[(lambda x: (x.min(), x.max()))(df.dropna().index)
-                           for df in raw_dict.values() if df is not None and df.shape[0]>0])
-            start, end = min(mi), max(ma)
+    def dirs_dict(self, raw_dict, **kwargs):
+        mi, ma = zip(*[(lambda x: (x.min(), x.max()))(df.dropna().index)
+                       for df in raw_dict.values() if df is not None and df.shape[0]>0])
+        return self.dirs(start=min(mi), end=max(ma), **kwargs)
 
+    def dirs(self, start=None, end=None, var=None, add_at_start=False, dirpat=None):
+        # start and end in local time
         if dirpat is None:
             dirpat = self.directory_re
         all_dirs = []
@@ -257,22 +312,23 @@ class Validate(Transforms):
         start_idx = None
         if os.path.isfile(self.wrf_intp):
             with xr.open_dataset(self.wrf_intp) as ds:
-                start_idx = ds.indexes['start'].sort_values()
-            # looping through the directories is time-consuming, so I set a flag here in case all is up to date
-            if pd.DatetimeIndex(all_times).equals(start_idx):
-                self._intp_done = True
-                return []
+                if var is not None:
+                    try:
+                        start_idx = ds[var].dropna('start', 'all').indexes['start'].sort_values()
+                    except: pass
+                else:
+                    start_idx = ds.indexes['start'].sort_values()
 
-        # TODO: possibly for future include a check here for whether a simulation has terminated or is running,
-        # just in case
+        start_utc = None if start is None else start - self.utc_delta
+        end_utc = None if end is None else end - self.utc_delta
         def test(d, t):
             try:
                 if start_idx is not None:
                     assert t not in start_idx
-                if start is not None:
-                    assert t >= start
-                if end is not None:
-                    assert t <= end
+                if start_utc is not None:
+                    assert t >= start_utc
+                if end_utc is not None:
+                    assert t <= end_utc
             except AssertionError: return False
             else: return True
 
@@ -280,24 +336,31 @@ class Validate(Transforms):
         dirs = [d for d, t in dt if test(d, t)]
 
         # insert additional directories in front whose simulations overlap with data
-        i = pd.DatetimeIndex(all_times).get_loc(start, method='nearest')
-        i -= int(all_times[i]>start)
+        if add_at_start:
+            i = pd.DatetimeIndex(all_times).get_loc(start_utc, method='nearest')
+            i -= int(all_times[i]>start_utc)
 
-        for d, t in dt[i::-1]:
-            try:
-                out = [os.path.join(d, f) for f in os.listdir(d) if self.wrfout_re.search(f)]
-                with xr.open_dataset(sorted(out)[-1]) as ds:
-                    if ds[self.time_dim_coord].values.max() >= start.asm8 and t not in start_idx:
-                        dirs.insert(0, d)
-                    else: break
-            except: pass
-
+            for d, t in dt[i::-1]:
+                try:
+                    out = [os.path.join(d, f) for f in os.listdir(d) if self.wrfout_re.search(f)]
+                    with xr.open_dataset(sorted(out)[-1]) as ds:
+                        # XTIME is on local time, as is start
+                        if ds[self.time_dim_coord].values.max() >= start.asm8 and t not in start_idx:
+                            dirs.insert(0, d)
+                        else: break
+                except: pass
         return dirs
 
-    # this method only writes the interpolated data to file
-    # implement any chunking behavior here in the future if the size of data presents challenges
-    def wrf_files(self, dirs):
-        from functools import reduce
+    def wrf_intp(self, dirs):
+        wrfout_vars = list(set([i for j in [v['wrf'].get('out', [])
+                                   for v in self.variables] for i in j]))
+        wrfxtrm_vars = list(set([i for j in [v['wrf'].get('xtrm', [])
+                                    for v in self.variables] for i in j]))
+        self.wrf_files(dirs, wrfout_vars, wrfxtrm_vars)
+
+    def wrf_files(self, dirs, wrfout_vars, wrfxtrm_vars):
+        # this method only writes the interpolated data to file
+        # implement any chunking behavior here in the future if the size of data presents challenges
         with pd.HDFStore(config.CEAZAMet.meta_data) as S:
             sta = reduce(lambda i, j: S[i].combine_first(S[j]),
                          sorted([k for k in S.keys() if re.search('station', k)], reverse=True))
@@ -306,9 +369,6 @@ class Validate(Transforms):
         with xr.open_dataset(os.path.join(dirs[0], out[0])) as ds:
             itp = BilinearInterpolator(ds, stations=self.sta)
 
-        wrfout_vars = [v['wrfout_var'] for v in self.variables]
-        wrfxtrm_vars = [k for v in self.variables for k in list(v['wrfxtrm_vars'].keys())
-                        if 'wrfxtrm_vars' in v]
         o, x = [], []
         for d in tqdm(dirs):
             dl = os.listdir(d)
@@ -352,12 +412,12 @@ class Validate(Transforms):
 
         intp.to_netcdf(self.wrf_intp)
 
-    def bin(self, fields):
+    def _bin(self, fields):
         CD, ED = {}, {}
         with pd.HDFStore(config.CEAZAMet.raw_data) as S:
-            N = sum([S.get_node('raw/{}'.format(f))._v_nchildren for f in fields])
+            N = sum([getattr(S.get_node('raw/{}'.format(f)), '_v_nchildren', 0) for f in fields.keys()])
             prog = tqdm(total=N)
-            for f in fields:
+            for f, ce in fields.items():
                 C, E = [], []
                 key = 'raw/binned/end/{}'.format(f)
                 try:
@@ -365,24 +425,44 @@ class Validate(Transforms):
                 except:
                     start = None
                 node = S.get_node('raw/{}'.format(f))
-                for k, v in node._v_children.items():
-                    if start is None:
-                        df = S.select(v._v_pathname)
-                    else:
-                        df = S.select(v._v_pathname, where=start.strftime('index>="%Y-%m-%dT%H:%M"'))
-                        start += self.update_overlap / 2
-                    C.append(Hbin.bin(df, label='center', start=start).dropna(0, 'all'))
-                    E.append(Hbin.bin(df, label='right', start=start).dropna(0, 'all'))
-                    prog.update(1)
-                ED[f] = pd.concat(E, 1).combine_first(S[key]) if key in S else pd.concat(E, 1)
-                key = 'raw/binned/center/{}'.format(f)
-                CD[f] = pd.concat(C, 1).combine_first(S[key]) if key in S else pd.concat(C, 1)
+                if node is not None:
+                    for k, v in node._v_children.items():
+                        if start is None:
+                            df = S.select(v._v_pathname)
+                        else:
+                            df = S.select(v._v_pathname, where=start.strftime('index>="%Y-%m-%dT%H:%M"'))
+                            start += self.update_overlap / 2
+                        if not df.empty:
+                            if 'center' in ce:
+                                C.append(Hbin.bin(df, label='center', start=start).dropna(0, 'all'))
+                            if 'end' in ce:
+                                E.append(Hbin.bin(df, label='right', start=start).dropna(0, 'all'))
+                        prog.update(1)
+                    if len(E) > 0:
+                        ED[f] = pd.concat(E, 1).combine_first(S[key]) if key in S else pd.concat(E, 1)
+                    if len(C) > 0:
+                        key = 'raw/binned/center/{}'.format(f)
+                        CD[f] = pd.concat(C, 1).combine_first(S[key]) if key in S else pd.concat(C, 1)
         for f, x in ED.items():
             x.to_hdf(config.CEAZAMet.raw_data, key='raw/binned/end/{}'.format(f), mode='a', format='table')
         for f, x in CD.items():
             x.to_hdf(config.CEAZAMet.raw_data, key='raw/binned/center/{}'.format(f), mode='a', format='table')
 
-    def _stats2(self, obs, wrf, start=None, end=None):
+    def bin(self, dict_only=False):
+        F = {}
+        for vdict in self.variables:
+            obs = vdict['obs']
+            try:
+                for k, v in obs.items():
+                    F.update({f: F.get(f, set()).union({k}) for f in v})
+            except:
+                F.update({f: {'center', 'end'} for f in obs})
+
+        if dict_only:
+            return F
+        self._bin(F)
+
+    def _stats(self, obs, wrf, transf, start=None, end=None):
         if start is not None:
             where = start.strftime('index>="%Y-%m-%dT%H:%M"')
             if end is not None:
@@ -392,27 +472,21 @@ class Validate(Transforms):
         else:
             where = None
 
+        df_cen, df_end, out, xtrm = None, None, None, None
         with pd.HDFStore(config.CEAZAMet.raw_data) as S:
-            if 'fields' in obs:
+            def f(fields, label):
+                return ['raw/binned/{}/{}'.format(label, f) for f in fields]
+            if isinstance(obs, list):
                 # if the fields/transform info is the same for centered or end-labeled binning, I don't replicate it
                 # for 'center' and 'end' items in the top-level dict (e.g. 'ta_c')
-                df_cen = pd.concat([S.select('raw/binned/center/{}'.format(f), where=where) for f in obs['fields']], 1)
-                df_end = pd.concat([S.select('raw/binned/end/{}'.format(f), where=where) for f in obs['fields']], 1)
-                if 'transf' in obs:
-                    f = getattr(self, obs['transf'])
-                    df_cen, df_end = f(df_cen), f(df_end)
+                df_cen = pd.concat([S.select(k, where=where) for k in f(obs, 'center') if k in S], 1)
+                df_end = pd.concat([S.select(k, where=where) for k in f(obs, 'end') if k in S], 1)
             else:
                 # in the case of e.g. 'hr'
                 if 'center' in obs:
-                    d = obs['center']
-                    df_cen = pd.concat([S.select('raw/binned/center/{}'.format(f), where=where) for f in d['fields']], 1)
-                    if 'transf' in d:
-                        df_cen = getattr(self, d['transf'])(df_cen)
+                    df_cen = pd.concat([S.select(k, where=where) for k in f(obs['center'], 'center') if k in S], 1)
                 if 'end' in obs:
-                    d = obs['end']
-                    df_end = pd.concat([S.select('raw/binned/end/{}'.format(f), where=where) for f in d['fields']], 1)
-                    if 'transf' in d:
-                        df_end = getattr(self, d['transf'])(df_end)
+                    df_end = pd.concat([S.select(k, where=where) for k in f(obs['end'], 'end') if k in S], 1)
 
         with xr.open_dataset(self.wrf_intp) as ds:
             t = ds[self.time_dim_coord]
@@ -425,33 +499,25 @@ class Validate(Transforms):
                     i = set(i).intersection(j)
                 except: i = j
             if 'out' in wrf:
-                d = wrf['out']
-                out = ds[d['fields']].sel(station=df_cen.columns.get_level_values('station').unique())
+                out = ds[wrf['out']].sel(station=df_cen.columns.get_level_values('station').unique())
                 try:
                     out = out.isel(start=i).load()
                 except: out.load()
-                if 'transf' in d:
-                    out = getattr(self, d['transf'])(out)
-                ds_cen = csel(align_times(out, df_cen), aggr='ave')
-                x = (out - ds_cen).expand_dims('aggr')
-                x.coords['aggr'] = ('aggr', ['point'])
-                return x
             if 'xtrm' in wrf:
                 d = wrf['xtrm']
-                xtrm = ds[list(d['fields'].keys())].sel(station=df_end.columns.get_level_values('station').unique())
+                xtrm = ds[wrf['xtrm']].sel(station=df_end.columns.get_level_values('station').unique())
                 try:
                     xtrm = xtrm.isel(start=i).load()
                 except: xtrm.load()
-                if 'transf' in d:
-                    xtrm = getattr(self, d['transf'])(xtrm)
-                ds_end = align_times(xtrm, df_end)
-                y = xr.concat([xtrm[k] - csel(ds_end, aggr=v) for k, v in d['fields'].items()],
-                              pd.Index(d['fields'].values(), name='aggr'))
-                try:
-                    x = xr.concat((x, y), 'aggr')
-                except: x = y
 
-        return x
+        return getattr(self, transf)(df_cen, df_end, out, xtrm)
+
+    def stats(self):
+        err = xr.merge([self._stats(**vdict) for vdict in self.variables])
+        if os.path.isfile(self.wrf_err):
+            with xr.open_dataset(self.wrf_err) as ds:
+                err = self.combine_first(err, ds.load())
+        err.to_netcdf(self.wrf_err, mode='w')
 
     def _stats_by_sensor(self, station, wrfout_var, wrfxtrm_vars, key=None, df=None, start=None, prog=None):
         self._log.info('stats-by-sensor: key {}; wrf {}; start {}; df {}'.format(key, wrfout_var, start, df is not None))
@@ -508,7 +574,7 @@ class Validate(Transforms):
             prog.update(1)
         return X, d_end
 
-    def stats(self, raw_dict=None):
+    def _stats_old(self, raw_dict=None):
         sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
         R, B = {}, {}
 
@@ -573,31 +639,10 @@ class Validate(Transforms):
             x[tuple([d[c] for c in x.dims])] = np.nan
             self.err[k] = x.to_dataset('columns').transpose(*self.wrf_dim_order)
 
-    # def dict2frame(self, B):
-    #     names = ['station', 'field', 'sensor_code', 'elev', 'aggr']
-    #     d = self.flds['sensor_code'].reset_index().join(self.sta, on='station')
-    #     def df(k, v):
-    #         df = v.copy()
-    #         s = d[d['sensor_code']==k][names[:-1]].values[0]
-    #         df.columns = pd.MultiIndex.from_tuples([np.r_[s, [c]] for c in v.columns])
-    #         df.columns.names = names
-    #         return df
-    #     return pd.concat([df(k, v) for k, v in B.items()], 1)
-
     @staticmethod
     def split_rename(filename, suffix):
         n, e = os.path.splitext(filename)
         return '{}_{}{}'.format(n, suffix, e)
-
-    # @classmethod
-    # def nc_overwrite(cls, data, filename):
-    #     # There's some weird issue with overwriting a previously-opened file in xarray / netCDF4
-    #     # (no matter how much I try to close the dataset or use a 'with' context).
-    #     # I can't reproduce it reliably, except *this* piece of code without the renaming shenanigans
-    #     # *always* fails. Hence the renaming shenanigans.
-    #     fn = cls.split_rename(filename, 'overwrite')
-    #     data.to_netcdf(fn, mode='w')
-    #     os.rename(fn, filename)
 
     # need to treat XTIME separately because combine_first seems to drop unused coordinates
     @staticmethod
