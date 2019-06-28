@@ -202,7 +202,6 @@ class Field(Common):
     cols = ['s_cod', 'datetime', 'min', 'ave', 'max', 'data_pc']
 
     def get_all(self, var_code, fields_table=None, from_date=None, to_date=None, raw=False):
-        self.var_code = var_code
         if fields_table is None:
             logging.info('Using field table from file {}'.format(self.meta_data))
             fields_table = pd.read_hdf(self.meta_data, 'fields')
@@ -227,18 +226,17 @@ class Field(Common):
 
     def _get(self, fields_row, prog=None, from_date=None, **kwargs):
         (station, field), row = fields_row
-        # NOTE: need to change this logic to give priority to 'update' *if* it exists
-        # that way, update can be called with from_date earliest 'limit' on updating
-        if from_date is None:
-            try:
-                # updating: field exists in old data
-                from_date = row['update'] - self.update_overlap
+        # NOTE: 'update' in row has priority over from_date, *but* from_date is the *earliest*
+        try:
+            # updating: field exists in old data
+            d = row['update'] - self.update_overlap
+            from_date = d if from_date is None else (maxd, from_date)
+        except: pass
+        if from_date is None or from_date != from_date: # if NaT
+            try: from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
             except: pass
-            if from_date is None or from_date != from_date: # if NaT
-                try: from_date = pd.Timestamp(row['first']) # updating: earliest record from meta
-                except: pass
-            if hasattr(self, 'update_times'):
-                self.update_times.loc[row['sensor_code'], 'from_date'] = from_date
+        if hasattr(self, 'update_times'):
+            self.update_times.loc[row['sensor_code'], 'from_date'] = from_date
 
         df = self.fetch(row['sensor_code'], from_date, **kwargs)
         if prog is not None:
@@ -298,10 +296,8 @@ class Field(Common):
             logging.info('Possibly no data for {}: from {} to {}'.format(code, from_date, to_date))
             return None
 
-
     def update(self, var_code, raw=True, **kwargs):
         assert raw, "Currently only raw updating is implemented"
-        self.var_code = var_code
         with pd.HDFStore(self.meta_data) as M:
             flds = M['fields'].xs(var_code, 0, 'field', drop_level=False)
             last = flds[['sensor_code', 'last']].set_index('sensor_code').squeeze()
@@ -322,8 +318,9 @@ class Field(Common):
             left_on='sensor_code',
             right_index=True
         )
+        now = kwargs['to_date'] if 'to_date' in kwargs else datetime.utcnow()
         delta = flds.merge(
-            (datetime.utcnow() - update.combine_first(last)).to_frame('delta'),
+            (now - update.combine_first(last)).to_frame('delta'),
             how='left',
             left_on='sensor_code',
             right_index=True
@@ -354,7 +351,8 @@ class Field(Common):
             filename = self.raw_data
         for k, v in self.data.items():
             if v is not None and v.shape[0] > 0:
-                v.to_hdf(filename, key='raw/{}/{}'.format(self.var_code, k), mode='a', format='table')
+                var_code = v.columns.get_level_values('field').unique().item()
+                v.to_hdf(filename, key='raw/{}/{}'.format(var_code, k), mode='a', format='table')
 
 class Meta(Common):
     field = [
