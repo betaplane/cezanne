@@ -318,7 +318,9 @@ class Field(Common):
             left_on='sensor_code',
             right_index=True
         )
-        now = kwargs['to_date'] if 'to_date' in kwargs else datetime.utcnow()
+        now = kwargs.get('to_date', None)
+        if now is None:
+            now = datetime.utcnow()
         delta = flds.merge(
             (now - update.combine_first(last)).to_frame('delta'),
             how='left',
@@ -327,7 +329,7 @@ class Field(Common):
         )['delta']
         try:
             # this should avoid problems with NaNs in delta, but will probably break if they're all NaNs
-            assert delta.min() > self.update_overlap
+            assert delta.min() > (self.update_overlap / 2)
         except:
             raise FieldsUpToDate()
         self.get_all(var_code, fields_table=table[delta < self.update_drop], raw=raw, **kwargs)
