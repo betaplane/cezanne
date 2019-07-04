@@ -13,7 +13,7 @@ Furthermore, there are some utility classes, e.g. :class:`compare` to compare da
 Command-line use
 ================
 
-Work in progress.
+Currently not implemented. Command-line usage is enabled in :mod:`WRF` and this module is called from the function :func:`WRF.update_ceazamet`.
 
 Updating
 ========
@@ -46,6 +46,15 @@ from importlib import import_module
 from tqdm import tqdm
 from helpers import config
 from functools import reduce
+
+
+logger = logging.getLogger(__name__)
+# this is supposed to get executed only once (in particular not if 'reload' is used) -
+# otherwise each logged line is added to the file as many times as identical file handlers have been added
+if len(logger.handlers) == 0:
+    fh = logging.FileHandler(config.CEAZAMet.log_file)
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(fh)
 
 class compare(config.CEAZAMet):
     """Helper to spot differences between datasets. Currently mainly focused on :obj:`dicts <dict>` with 'raw' :class:`DataFrames <pandas.DataFrame>`.
@@ -135,14 +144,6 @@ class ServerMemoryError(Exception):
 class FieldsUpToDate(Exception):
     pass
 
-class base_app(Application):
-    config_file = Unicode('~/Dropbox/work/config.py').tag(config=True)
-    def __init__(self, *args, config={}, **kwargs):
-        try:
-            cfg = PyFileConfigLoader(os.path.expanduser(self.config_file)).load_config()
-            cfg.merge(config)
-        except ConfigFileNotFound: cfd = Config(config)
-        super().__init__(config=cfg, **kwargs)
 
 class Common(config.CEAZAMet):
     """Common functionality and config values."""
@@ -154,7 +155,8 @@ class Common(config.CEAZAMet):
     memory_err =  re.compile('allowed memory', re.IGNORECASE)
 
     def __init__(self):
-        logging.basicConfig(filename=self.log_file, level=logging.DEBUG)
+        s = '{} @ {}'.format(self.__class__.__name__, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        logger.info('\n{}\n{}'.format(s, ''.join(['=' for _ in range(len(s))])))
 
     def dates(self, from_date, to_date):
         try:
@@ -171,8 +173,9 @@ class Common(config.CEAZAMet):
 
     def read(self, url, params, cols, n_trials=10, prog=None, **kwargs):
         for trial in range(n_trials):
+            params.update(kwargs)
             req = requests.get(url, params=params)
-            logging.debug('fetching {}'.format(req.url))
+            logger.debug('fetching {}'.format(req.url))
             self.memory_check(req.text)
             # self.log.debug(req.text)
             with StringIO(req.text) as sio:
@@ -182,11 +185,11 @@ class Common(config.CEAZAMet):
                     df.index.name = cols[0]
                     df.sort_index(inplace=True)
                 except:
-                    logging.warning('attempt #{}'.format(trial))
+                    logger.warning('attempt #{}'.format(trial))
                 else:
                     if prog is not None:
                         prog.update(1)
-                return df.sort_index()
+                    return df.sort_index()
 
         raise TrialsExhaustedError()
 
@@ -197,13 +200,12 @@ class Common(config.CEAZAMet):
         except:
             raise ServerMemoryError()
 
-
 class Field(Common):
     cols = ['s_cod', 'datetime', 'min', 'ave', 'max', 'data_pc']
 
     def get_all(self, var_code, fields_table=None, from_date=None, to_date=None, raw=False):
         if fields_table is None:
-            logging.info('Using field table from file {}'.format(self.meta_data))
+            logger.info('Using field table from file {}'.format(self.meta_data))
             fields_table = pd.read_hdf(self.meta_data, 'fields')
         table = fields_table.xs(var_code, 0, 'field', False)
 
@@ -216,8 +218,8 @@ class Field(Common):
         if raw:
             self.no_data = [k for k, v in data.items() if v is None]
             last = table.set_index('sensor_code').loc[self.no_data]['last'].astype('datetime64')
-            logging.warning('No data retrieved from {}'.format(self.no_data))
-            logging.warning('Last data within {} of now: {}'.format(
+            logger.warning('No data retrieved from {}'.format(self.no_data))
+            logger.warning('Last data within {} of now: {}'.format(
                 self.update_drop, last[datetime.utcnow() - last < self.update_drop]
             ))
             self.data = {k: v for k, v in data.items() if v is not None}
@@ -293,7 +295,7 @@ class Field(Common):
                 try: return dfs[0]
                 except: return None
         except:
-            logging.info('Possibly no data for {}: from {} to {}'.format(code, from_date, to_date))
+            logger.info('Possibly no data for {}: from {} to {}'.format(code, from_date, to_date))
             return None
 
     def update(self, var_code, raw=True, **kwargs):
@@ -376,13 +378,11 @@ class Meta(Common):
         ('e_primera_lectura', 'first'),
         ('e_ultima_lectura', 'last')
     ]
-    def __init__(self, **kwargs):
-        super().__init__()
-        self.__dict__.update({'_'+k: v for k, v in kwargs.items()})
 
     @property
     def stations(self):
         if not hasattr(self, '_stations'):
+            logger.info('\nstations\n********')
             params, cols = zip(*self.station)
             params = {'c{:d}'.format(i): v for i, v in enumerate(params)}
             self._stations = self.read(self.url, params, cols, fn='GetListaEstaciones', p_cod='ceazamet')
@@ -391,6 +391,7 @@ class Meta(Common):
     @property
     def fields(self):
         if not hasattr(self, '_fields'):
+            logger.info('\nfields\n******')
             with tqdm(total = self.stations.shape[0]) as prog:
                 def get(st):
                     params, cols = zip(*self.field)
@@ -413,8 +414,9 @@ class Meta(Common):
                 S[os.path.join(change_key, k)] = S[k]
                 S[k] = kwargs.get(k, getattr(self, k))
 
-        print('CEAZAMet station metadata saved in file {}.'.format(self.meta_data))
-        print('Old contents moved to node {}.'.format(change_key))
+        logger.info("\nstore\n*****")
+        logger.info('CEAZAMet station metadata saved in file {}.'.format(self.meta_data))
+        logger.info('Old contents moved to node {}.'.format(change_key))
 
     @staticmethod
     def model_elevation(meta, dem, var_name, column_name):
@@ -440,7 +442,9 @@ class Meta(Common):
         flds = kwargs.get('fields', pd.read_hdf(self.meta_data, 'fields'))
 
         flds['elev'] = flds['elev'].astype(float)
-        flds.reset_index('sensor_code', inplace=True)
+        try:
+            flds.reset_index('sensor_code', inplace=True)
+        except: pass
 
         self._stations = self.stations.combine_first(sta)
         self._fields = self.update_fields(flds)
@@ -473,104 +477,26 @@ class Meta(Common):
         return outer.sort_index()
 
 
-class Update(base_app):
-    overlap = Instance(timedelta, kw={'days': 30}).tag(config = True)
-    file_name = Unicode().tag(config = True)
-    overwrite = Bool(True).tag(config = True)
+class Tools:
+    @staticmethod
+    def HDF_dict(var_code, filename=config.CEAZAMet.raw_data):
+        with pd.HDFStore(filename) as S:
+            node = S.get_node('raw/{}'.format(var_code))
+            return {k: S[v._v_pathname] for k, v in node._v_children.items()}
 
-    aliases = Dict({'v': 'Field.var_code',
-                    'f': 'Field.file_name',
-                    'm': 'Meta.file_name',
-                    'o': 'Update.file_name',
-                    'log_level': 'Application.log_level'})
-    flags = Dict({'r': ({'Field': {'raw': True}}, "set raw=True"),
-                  'n': ({'Update': {'overwrite': False}}, "Always use Update.file_name to save updated data.")})
+    @classmethod
+    def HDF_dates(cls, filename=config.CEAZAMet.raw_data):
+        with pd.HDFStore(filename) as S:
+            node = S.get_node('raw')
+            variables = [v for v in node._v_children.keys() if v!='binned']
+        mm = lambda idx: (idx.min(), idx.max())
+        return pd.concat([
+            pd.DataFrame({k: mm(df.index) for k, df in cls.HDF_dict(v, filename).items()},
+                         index=('start', 'end')).T
+            for v in variables], 1, keys=variables)
 
-    def start(self):
-        sta, flds = self.parent.get_meta()
-        fields_table = flds.xs(self.config.Field.var_code, 0, 'field', False)
-        old_data  = pd.read_hdf(self.config.Field.file_name, self.config.Field.var_code)
-        latest = old_data.drop('data_pc', 1, 'aggr').apply(lambda c: c.dropna().index.max()).min(0, level='station')
-        # stopped = (sta['last'].astype('datetime64') - datetime.utcnow() + timedelta(hours=4) < - self.overlap)
-        from_date = {k: v - self.overlap for k, v in latest.iteritems()}
-        # new_codes = fields_table.index.get_level_values('sensor_code').symmetric_difference(old_codes)
-        # old_codes = old_data.columns.get_level_values('sensor_code')
-
-        data = self.parent.get_data(None, fields_table, from_date)
-        data.update(old_data, overwrite = False)
-
-        with pd.HDFStore(self.config.Meta.file_name) as S:
-            S['stations'] = sta
-            S['fields'] = flds
-            print('Meta data file {} updated.'.format(self.config.Meta.file_name))
-
-        ts = (datetime.utcnow() - timedelta(hours=4))
-        if data.shape[1] == old_data.shape[1]:
-            try:
-                c = Compare(old_data, data)
-            except AssertionError:
-                self.log.warn('%s: data_pc values between 1 and 99 encountered', ts)
-            if len(c.s) > 0:
-                self.log.warn('%s: CEAZA.Compare found differing data values', ts)
-            elif self.overwrite:
-                self.file_name = self.config.Field.file_name
-        else:
-            self.log.warn('%s: data shape mismatch old %s | new %s', ts, old_data.shape[1], data.shape[1])
-
-        with pd.HDFStore(self.file_name) as N:
-            N[self.config.Field.var_code] = data
-            print('Updated DataFrame {} saved in file {}.'.format(self.config.Field.var_code, self.file_name))
-
-class CEAZAMet(base_app):
-    """Class to download data from CEAZAMet webservice. Main reason for having a class is
-    to be able to reference the data (CEAZAMet.data) in case something goes wrong at some point.
-
-    """
-    url = Unicode().tag(config = True)
-
-    subcommands = Dict({'meta': (Meta, 'get stations and field metadata'),
-                        'data': (Field, 'get one field from all stations'),
-                        'update': (Update, 'update existing field data')})
-
-    trials = Integer(10)
-    max_workers = Integer(16)
-    log_file_name = Unicode().tag(config = True) # see initialize()
-
-    def initialize(self):
-        self.parse_command_line()
-        if self.log_file_name != '':
-            pass # not yet implemented
-
-    def get_meta(self, fields=True):
-        """Query CEAZA webservice for a list of the stations (and all available meteorological variables for each field if ``field=True``) and return :class:`DataFrame(s)<pandas.DataFrame>` with the data.
-
-        :param stations: existing 'stations' DataFrame to update
-        :type stations: :class:`~pandas.DataFrame`
-        :param fields: whether or not to return a 'fields' DataFrame (if ``True``, a tuple of (stations, fields) DataFrames is returned)
-        :type fields: :obj:`bool`
-        :returns: 'stations' (and optionally 'fields') DataFrame(s)
-        :rtype: :class:`~pandas.DataFrame` or :obj:`tuple` of two DataFrames
-
-        """
-        app = Meta(parent=self)
-        app.get_fields = fields
-        return app.start()
-
-    def get_data(self, var_code=None, fields_table=None, from_date=None, raw=False):
-        """Collect data from CEAZAMet webservice, for one variable type but all stations.
-
-        :param var_code: variable code to be collected (e.g. 'ta_c')
-        :param fields_table: pandas.DataFrame with field metadata as constructed by get_stations()
-        :param from_date: initial date from which onward to request data
-        :param raw: False (default) or True whether raw data should be collected
-        :returns: data for one variable and all stations given by var_table
-        :rtype: :class:`~pandas.DataFrame` or :obj:`dict` of DataFrames if raw==True
-
-        """
-        app = Field(parent=self)
-        if var_code is not None: app.var_code = var_code
-        if raw is not None: app.raw = raw
-        return app.start(fields_table, from_date)
+    @statimethod
+    def 
 
 class Compare(object):
     """Compare two CEAZAMet station data DataFrames of one single field (e.g. ta_c).
@@ -622,5 +548,4 @@ class Compare(object):
         plt.legend()
 
 if __name__ == '__main__':
-    f = Field()
-    f.update('ta_c')
+    pass

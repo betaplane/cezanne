@@ -44,9 +44,12 @@ The direct use case consists of calling :meth:`Validate.data` with a data :obj:`
 
 .. TODO::
 
-    * figure out what would need to be done to run this daily
     * implement a check of binned data against hourly (non-raw) from CEAZAMet
-    * sequential writing of the netcdf file (at this point not possible with xarray, only netCDF4)
+    * check how to enable adding back-data of new variable to the update process/files
+    * sequential writing of the netcdf file (at this point not possible with xarray, only netCDF4):
+        * https://github.com/pydata/xarray/issues/1849
+        * https://github.com/pydata/xarray/issues/1672
+        * see also function 'append_netcdf' in old git check-ins
 
 """
 __package__ = 'data'
@@ -87,7 +90,9 @@ variables = [
 ]
 
 logger = logging.getLogger(__name__)
-def log():
+# this is supposed to get executed only once (in particular not if 'reload' is used) -
+# otherwise each logged line is added to the file as many times as identical file handlers have been added
+if len(logger.handlers) == 0:
     fh = logging.FileHandler(config.WRFop.log_file)
     logger.setLevel(logging.DEBUG)
     logger.addHandler(fh)
@@ -156,6 +161,15 @@ class Hbin:
         d, n = (np.vstack((x, np.isfinite(x))) * w).sum(1)
         return pd.Series([d, n], index=['sum', 'weight'])
 
+    @staticmethod
+    def weight_idx(df, weights):
+        w = df.index.minute.values
+        wc = w.copy()
+        m = np.unique(w)
+        for v in m:
+            wc[w==v] = weights.get(v, 0)
+        return wc.reshape((-1, 1))
+
     @classmethod
     def bin(cls, df, label='center', start=None):
         """FIXME! briefly describe function
@@ -168,19 +182,19 @@ class Hbin:
         :rtype: 
 
         """
-        kwargs = {'rule': '60T', 'closed': 'right', 'label': 'right'}
-        base = {'center': 30, 'right': 0}[label]
+        kwargs = {'rule': '60T', 'closed': 'right', 'label': 'left' if label=='left' else 'right'}
+        base = 30 if label=='center' else 0
         kwargs.update(base=base)
-        loffs = pd.offsets.Minute(-base)
-        ave = df.xs('ave', 1, 'aggr')
+        loffs = pd.offsets.Minute(-base) # label adjustment if labelling the 'center' of a bin
 
         m = np.unique(df.index.minute)
         if len(m)==1:
             if (label=='right' and m[0]==0) or (label=='center' and m[0]==30):
-                # df = df.copy()
-                # df.columns = df.columns.get_level_values('aggr')
                 return df if start is None else df.loc[start:]
-        w, e = cls.weights(m, {'center': 30, 'right': 0}[label])
+
+        w, e = cls.weights(m, base)
+
+        ave = df.xs('ave', 1, 'aggr')
         a = ave.resample(loffset=loffs, **kwargs).apply(cls.ave, weights=w)
         b = ave.resample(loffset=loffs - pd.offsets.Hour(1), **kwargs).apply(cls.ave, weights=e)
         d = a.add(b, fill_value=0)
@@ -192,21 +206,65 @@ class Hbin:
         x.columns = df.columns.set_levels(x.columns, level='aggr')
         return x if start is None else x.loc[start:]
 
-# class SensorFilter:
-#     def __init__(self, field):
-#         self.filter = getattr(self, field, lambda x: True)
-#         flds = pd.read_hdf(config.CEAZAMet.meta_data, 'fields').xs(field, level='field')
-#         self.sensors = flds.reset_index().set_index('sensor_code')
-#         self.field = field
+def hourly_bin(df, label='right', start=None):
+    x = pd.DataFrame(df.values, index=df.index, columns=df.columns.get_level_values('aggr'))
+    assert 0 in x.index.minute, "not hour-aligned"
+    dt = np.diff(x.index).min().astype('timedelta64[s]').astype(int)
+    x = x.shift(freq=pd.offsets.Second(-dt/2))
 
-#     def ta_c(self, key):
-#         k = key.split('/')[-1]
-#         s = self.sensors.loc[k]
-#         st = self.sensors[self.sensors['station']==s['station']]
-#         if st.shape[0] > 1:
-#             if abs(st['elev'] - 2).idxmin() != k:
-#                 return False
-#         return True
+    if label=='center':
+        x = x.shift(freq=pd.offsets.Minute(30))
+
+    shift = pd.offsets.Hour(1 if label=='right' else 0)
+    idx = pd.DatetimeIndex(x.index.date)+pd.TimedeltaIndex(x.index.hour,'h')
+    X = x.assign(minute=x.index.minute).assign(idx=idx).pivot(index='idx', columns='minute')
+
+    # # for trapezoidal rule averaging, I make the integration interval closed on both sides
+    # # (i.e. use minute '0' as minute '60' of the previous hour)
+    # z = X.xs(0, 1, 'minute', drop_level=False).shift(-1)
+    # z.columns.set_levels([60], level='minute', inplace=True)
+    # z = pd.concat((X, z), 1).sort_index(1)
+
+    def ave(row):
+        x = row.dropna()
+        try: return np.trapz(x.values, x=x.index) / np.diff(x.index[[0, -1]]).item()
+        except: return np.nan
+
+    a = X['ave']
+    # applying the 'raw' np.trapz routine to hours without missing values is much more efficient than 'ave',
+    # which is however needed for those hours *with* missing values
+    i = a.isnull().sum(1)==0
+    a = pd.concat((
+        a.loc[i].apply(np.trapz, 1, dx=dt, raw=True) / np.diff(a.columns[[0, -1]]).item() / 60,
+        a.loc[~i].apply(ave, 1)
+    )).sort_index()
+
+    mi = X['min'].apply(np.min, 1, raw=True)
+    ma = X['max'].apply(np.max, 1, raw=True)
+    z = pd.concat((a, mi, ma), 1, keys=['ave', 'min', 'max']).shift(freq=shift)
+    z.columns = df.columns.set_levels(z.columns, level='aggr')
+    return z if start is None else z.loc[start:]
+
+    # t = pd.date_range(x.index.min().round('H'), x.index.max().round('H'), freq=dt)
+    # x = x.reindex(index=t)
+    # X = np.reshape(x.values[:-1, :], (-1, int(pd.Timedelta('1H')/dt), 3))
+    # X = np.r_['1', X, np.r_[X[1:, 0, :], x.iloc[-1:]].reshape((-1, 1, 3))]
+    # return X
+
+
+    # mins = df.index.minute
+    # w, e = weights(np.unique(mins), 30 if label=='center' else 0)
+    # X = pd.DataFrame(df.values, index=df.index, columns=df.columns.get_level_values('aggr')) \
+    # .assign(minute=df.index.minute) \
+    # .join(pd.Series(w, name='w1'), on='minute', how='left') \
+    # .join(pd.Series(e, name='w2'), on='minute', how='left')
+    # ave = X[['w1', 'w2']].multiply(X['ave'], axis=0)
+    # NN = X[['w1', 'w2']].multiply(X['ave'].notnull(), axis=0)
+    # # NOTE: needs alining the w2 with the right hour
+    # ave = ((ave * X['w1']).resample('60T').sum() + (ave * X['w2']).resample('60T').sum()) /\
+    #     ((nn * X['w1']).resample('60T').sum() + (nn * X['w2']).resample('60T').sum())
+    # return ave
+
 
 
 class Transforms:
@@ -576,180 +634,12 @@ class Validate(config.WRFop):
                 err = self.combine_first(err, ds.load())
         err.to_netcdf(self.wrf_err, mode='w')
 
-    def _stats_by_sensor(self, station, wrfout_var, wrfxtrm_vars, key=None, df=None, start=None, prog=None):
-        logger.info('stats-by-sensor: key {}; wrf {}; start {}; df {}'.format(key, wrfout_var, start, df is not None))
-        if df is None:
-            field = key.split('/')[-1]
-            with pd.HDFStore(config.CEAZAMet.raw_data) as S:
-                if start is None:
-                    df = S.select(key)
-                else:
-                    df = S.select(key, where=start.strftime('index>="%Y-%m-%dT%H:%M"'))
-        else:
-            field = df.columns.get_level_values('field').unique().items()
-        if df.shape[0] == 0:
-            if prog is not None:
-                prog.update(1)
-            return None
-        if start is not None:
-            start += self.update_overlap / 2
-        d_mid = Hbin.bin(df, label='center', start=start).dropna(0, 'all')
-        d_df_end = Hbin.bin(df, label='right', start=start).dropna(0, 'all')
-
-        start = min([d.index.min() for d in [d_mid, d_end]])
-        end = max([d.index.max() for d in [d_mid, d_end]])
-        dirs = [] if getattr(self, '_intp_done', False) else self.dirs(start=start, end=None if df is None else end)
-        if len(dirs) > 0:
-            self.wrf_files(dirs)
-
-        if transform_vars is not None:
-            raise Exception('not implemented yet')
-            # variables = transform_vars['wrfout'], transform_vars['wrfxtrm']
-        else:
-            variables = [wrfout_var] + list(wrfxtrm_vars.keys())
-        # NOTE: slice with .sel() includes start, end (not with .isel())
-        # I keep the 'start' variable at the UTC time stamps for now, since this corresponds to the directory names
-        # but that means I need to reverse-adjust the local timestamps from the station data
-        # (but not for XTIME, which is adjusted to start with!!!!!)
-        with xr.open_dataset(self.wrf_intp) as ds:
-            i, _ = np.where(ds[self.time_coord] >= np.datetime64(start))
-            x = ds[variables].sel(station=station, start=slice(None, end-self.utc_delta))
-            x = x.isel(start=slice(min(i), None)).load()
-
-        f, g = Transforms.get(field)
-        if f is not None:
-            d_mid, d_end = f(d_mid), f(d_end)
-
-        dm = align_times(x, d_mid, 'aggr').sel(columns='ave')
-        dm['columns'] = 'point'
-        de = align_times(x, d_end, 'aggr')
-        X = xr.concat((
-            xr.concat([x[k] - de.sel(columns=v) for k, v in wrfxtrm_vars.items()], 'columns'),
-            x[wrfout_var] - dm
-        ), 'columns')
-        if prog is not None:
-            prog.update(1)
-        return X, d_end
-
-    def _stats_old(self, raw_dict=None):
-        sta = {k: v for (v, _), k in self.flds['sensor_code'].items()}
-        R, B = {}, {}
-
-        n = 0
-        if raw_dict is None:
-            obs = deepcopy(self.obs)
-            var_dicts = deepcopy(self.variables)
-            with pd.HDFStore(config.CEAZAMet.raw_data) as S:
-                for k, vdict in obs.items():
-                    sf = SensorFilter(k)
-                    try:
-                        t = S.select('raw/binned/end/{}'.format(k), start=-1).index[0]
-                        vdict['start'] = t - self.update_overlap
-                    except: pass
-                    node = S.get_node('raw/{}'.format(k))
-                    keys = [n._v_pathname for n in node._v_children.values()]
-                    keys = [s for s in keys if sf.filter(s)]
-                    vdict['keys'] = keys
-                    n += len(keys)
-
-            prog = tqdm(total=n)
-            for f, vdict in obs:
-                keys = vdict.pop('keys')
-                stations = [sta[k.split('/')[-1]] for k in keys]
-                r, B[field] = zip(*[x for x in [self._stats_by_sensor(station=s, key=k, prog=prog, **vdict)
-                                                for s, k in zip(stations, keys)] if x is not None])
-                R[field] = dict(zip(stations, r))
-
-        else:
-            ceazamet_fields = set(f for df in raw_dict.values() for f in df.columns.get_level_values('field'))
-
-            for s, df in tqdm(raw_dict.items()):
-                if (df is not None and df.shape[0]>0):
-                    field = df.columns.get_level_values('field').unique().item()
-                    try:
-                        assert sf.field == field
-                    except:
-                        sf = SensorFilter(field)
-                    if sf.filter(s):
-                        var_dict = self.var_dict(field=field)
-                        r, b = self._stats_by_sensor(sta[s], df=df, start=None, **var_dict)
-                        try:
-                            R[field][s] = r
-                            B[field].append(b)
-                        except:
-                            R[field] = {s: r}
-                            B[field] = [b]
-
-        self.binned = {k: pd.concat(v, 1) for k, v in B.items()}
-
-        self.err = {}
-        # NOTE: In the wrfxtrm files, the first data point of a simulation run is always 0!
-        # nan it out here
-        for k, v in R.items():
-            x = xr.concat(v.values(), 'station')
-            d = {
-                'station': slice(None),
-                'columns': x.indexes['columns'].get_indexer(['ave', 'max', 'min']),
-                'start': slice(None),
-                'Time': 0,
-            }
-            x[tuple([d[c] for c in x.dims])] = np.nan
-            self.err[k] = x.to_dataset('columns').transpose(*self.wrf_dim_order)
-
-    @staticmethod
-    def split_rename(filename, suffix):
-        n, e = os.path.splitext(filename)
-        return '{}_{}{}'.format(n, suffix, e)
-
     # need to treat XTIME separately because combine_first seems to drop unused coordinates
     @staticmethod
     def combine_first(a, b):
         c = a.combine_first(b)
         c.coords['XTIME'] = a['XTIME'].combine_first(b['XTIME'])
         return c
-
-    @classmethod
-    def var_dict(cls, field=None):
-        if field is not None:
-            return [v for v in deepcopy(cls.variables) if v.pop('ceazamet_field')==field][0]
-
-    def store(self, ceazamet_file=None, WRF_err_file=None):
-        filename = config.CEAZAMet.raw_data if ceazamet_file is None else ceazamet_file
-        file_exists = os.path.isfile(filename)
-        with pd.HDFStore(filename) as S:
-            for field, b in self.binned.items():
-                key = 'raw/binned/end/{}'.format(field)
-                S[key] = b.combine_first(S[key]) if (file_exists and key in S) else b
-
-        for field, err in self.err.items():
-            wrfout = self.var_dict(field=field)['wrfout_var']
-            filename = self.split_rename(self.wrf_err if WRF_err_file is None else WRF_err_file, wrfout)
-            try:
-                with xr.open_dataset(filename) as ds:
-                    err = self.combine_first(err, ds.load())
-            except: pass
-            err.to_netcdf(filename, mode='w')
-            # self.nc_overwrite(err, self.split_rename(self.wrf_err, wrfout))
-
-    # @classmethod
-    # def load(cls, var_code, limit=False):
-    #     nt = namedtuple('data', ['binned', 'raw', 'intp', 'err'])
-    #     l = int(limit)
-    #     ds = xr.open_dataset(cls.wrf_intp)
-    #     intp = ds.isel(start=slice(*[(None,), (-10, None)][l])).load()
-    #     ds.close()
-    #     try:
-    #         ds = xr.open_dataset(cls.wrf_err)
-    #         err = ds.isel(start=slice(*[(None,), (-10, None)][l])).load()
-    #         ds.close()
-    #     except:
-    #         err = None
-    #     with pd.HDFStore(config.CEAZAMet.raw_data) as S:
-    #         node = S.get_node('raw/{}'.format(var_code))
-    #         raw = {k: S[v._v_pathname].iloc[slice(*[(None,), (-1000, None)][l])]
-    #                for k, v in node._v_children.items()}
-    #         binned = S['raw/binned/end/{}'.format(var_code)].iloc[slice(*[(None,), (-100, None)][l])]
-    #     return nt(binned, raw, intp, err)
 
     def map_plot(self, lead=1, coq=None):
         cpl = import_module('plots')
@@ -830,31 +720,6 @@ class Validate(config.WRFop):
         df = df.reset_index().pivot('XTIME', 'station', list(nc.data_vars))
         return df.sort_index(1).swaplevel(axis=1)
 
-    # def check_overlap(self, other, aggr='ave'):
-    #     a = other.xs(aggr, 1, 'aggr')
-    #     b = self.binned.xs(aggr, 1, 'aggr')
-    #     c = a.columns.get_level_values(0).intersection(b.columns.get_level_values(0))
-    #     return pd.concat([(a[s] - b[s]).dropna() for s in c], 1, keys=c).T
-
-# TODO: include logic to check if all variables are in existing wrf_intp file
-# and if not, first produce a merged wrf_intp file
-def update():
-    from data import CEAZA
-    # the CEAZA module takes care of updating *its* data (hopefully)
-    f = CEAZA.Field()
-
-    w = WRFR()
-    for var_dict in config.WRFop.variables:
-        try:
-            f.update(var_dict('ceazamet_field'), raw=True)
-        except CEAZA.FieldsUpToDate:
-            print('CEAZAMet data are up to date')
-        # this call simply uses the current WRFR.wrf_intp file to determine the start
-    w.wrf_files(w.dirs())
-    w.stats()
-    return w
-    # w.store()
-
 def HDF_dict(filename, var_code):
     with pd.HDFStore(filename) as S:
         node = S.get_node('raw/{}'.format(var_code))
@@ -911,16 +776,6 @@ def compare_idx(a, b):
          return xr.concat(j).to_dataframe('null').set_index('station').sort_index()
      # s = df.sum(('Time', 'start')).isel(start=time).to_dataframe()
 
-
-def append_netcdf(x, name, mode):
-    # https://github.com/pydata/xarray/issues/1849
-    for k in x.variables:
-        if 'contiguous' in x[k].encoding:
-            del x[k].encoding['contiguous']
-    x.to_netcdf(name, mode, unlimited_dims=('start', 'Time'))
-
-# https://github.com/pydata/xarray/issues/1672
-
 def update_ceazamet(**kwargs):
     logger.info('\nupdate_ceazamet\n---------------')
     from . import CEAZA
@@ -948,7 +803,6 @@ if __name__ == '__main__':
     p.add_argument('--to_date', action='store', type=pd.Timestamp, default=None)
 
     c = p.parse_args()
-    log()
     s = '{} @ {}'.format(c.command, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     logger.info('\n{}\n{}'.format(s, ''.join(['*' for _ in range(len(s))])))
 
@@ -978,11 +832,19 @@ if __name__ == '__main__':
             start = c.from_date
         if test:
             w.stats(start=start)
+
     elif c.command == 'weekly':
         with open(w.log_file) as f:
-            s = f.read().splitlines()
-            last = max([datetime.strptime(l, 'daily @ %Y-%m-%d %H:%M:%S')
-                        for l in s if l[:5]=='daily'])
-        print(last)
+            if c.from_date is None:
+                # read the last 'weekly' update time from the log file
+                s = f.read().splitlines()
+                start = max([datetime.strptime(l, 'weekly @ %Y-%m-%d %H:%M:%S')
+                             for l in s if l[:6]=='weekly']) - w.update_overlap
+            else:
+                start = c.from_date
+            update_ceazamet(from_date=start)
+            w.bin(start=start)
+            w.interpolate_wrf(dirs=w.dirs(start=start), dirpat='c01|c05')
+            w.stats(start=start)
     else:
         p.print_help()
