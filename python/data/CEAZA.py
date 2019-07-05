@@ -478,25 +478,130 @@ class Meta(Common):
 
 
 class Tools:
-    @staticmethod
-    def HDF_dict(var_code, filename=config.CEAZAMet.raw_data):
-        with pd.HDFStore(filename) as S:
-            node = S.get_node('raw/{}'.format(var_code))
-            return {k: S[v._v_pathname] for k, v in node._v_children.items()}
+    class HDF:
+        @staticmethod
+        def dict(var_code, filename=config.CEAZAMet.raw_data):
+            with pd.HDFStore(filename) as S:
+                node = S.get_node('raw/{}'.format(var_code))
+                return {k: S[v._v_pathname] for k, v in node._v_children.items()}
 
-    @classmethod
-    def HDF_dates(cls, filename=config.CEAZAMet.raw_data):
-        with pd.HDFStore(filename) as S:
-            node = S.get_node('raw')
-            variables = [v for v in node._v_children.keys() if v!='binned']
-        mm = lambda idx: (idx.min(), idx.max())
-        return pd.concat([
-            pd.DataFrame({k: mm(df.index) for k, df in cls.HDF_dict(v, filename).items()},
-                         index=('start', 'end')).T
-            for v in variables], 1, keys=variables)
+        @staticmethod
+        def variables(filename=config.CEAZAMet.raw_data):
+            with pd.HDFStore(filename) as S:
+                node = S.get_node('raw')
+                return [v for v in node._v_children.keys() if v!='binned']
 
-    @statimethod
-    def 
+        @classmethod
+        def dates(cls, filename=config.CEAZAMet.raw_data):
+            variables = cls.variables(filename)
+            mm = lambda idx: (idx.min(), idx.max())
+            return pd.concat([
+                pd.DataFrame({k: mm(df.index) for k, df in cls.dict(v, filename).items()},
+                             index=('start', 'end')).T
+                for v in variables], 1, keys=variables)
+
+        @classmethod
+        def minutes(cls, filename=config.CEAZAMet.raw_data):
+            variables = cls.variables(filename)
+            return {v: {k: tuple(sorted(df.index.minute.unique()))
+                        for k, df in cls.dict(v, filename).items()} for v in variables}
+####### below experimental
+        @classmethod
+        def irreg(cls, filename=config.CEAZAMet.raw_data):
+            a = tuple(np.arange(4) * 15)
+            b = tuple(np.arange(12) * 5)
+            d = cls.minutes(filename)
+            return {k: s for t in d.values() for k, s in t.items() if not (s==a or s==b)}
+
+        @staticmethod
+        def sensors(sensor_codes):
+            flds = pd.read_hdf(config.CEAZAMet.meta_data, 'fields').reset_index().set_index('sensor_code')
+            return flds.loc[sensor_codes]
+
+        @staticmethod
+        def minute_idx(df, minutes):
+            i = df.index.minute.get_indexer_for(minutes)
+            assert -1 not in np.unique(i), "some or all indexes not found"
+            return df.iloc[i]
+
+        @classmethod
+        def irreg_timestamps(cls, df, minutes):
+            s = set(minutes)
+            a = s - set(np.arange(12) * 5)
+            b = s - set(np.arange(4) * 15)
+            c = (a, b)[int(len(a) > len(b))]
+            print(sorted(c))
+            return cls.minute_idx(df, c)
+
+        @staticmethod
+        def intervals(df, intervals=[1, 5, 10, 15]):
+            a = tuple(df.index[:100].minute.unique().sort_values())
+            b = tuple(df.index[-100:].minute.unique().sort_values())
+            start = [m for m in intervals if tuple(np.arange(60/m, dtype=int)*m)==a]
+            end = [m for m in intervals if tuple(np.arange(60/m, dtype=int)*m)==b]
+            return start, end
+
+        @staticmethod
+        def interval_df(df, intervals=[1, 5, 10, 15]):
+            sta = df.columns.get_level_values('station').unique().item()
+            sensor = df.columns.get_level_values('sensor_code').unique().item()
+            idx = pd.DatetimeIndex(df.index.date)+pd.TimedeltaIndex(df.index.hour, 'h')
+            try:
+                d = df.assign(minute=df.index.minute).assign(idx=idx).pivot(index='idx', columns='minute')
+                s = d.notnull().sum(1)
+                counts = np.vstack(sorted(np.vstack(np.unique(s, return_counts=True)).T,key=lambda x:x[1]))
+            except:
+                return (sta, sensor), None, None, None, None, "pivot"
+            else:
+                try:
+                    switch = s.index[s==counts[-1, 0]].min()
+                    iv2, iv1 = sorted(60 / counts[-2:, 0] * df.shape[1])
+                    n = sorted(counts[-2:, 0])
+                except:
+                    return (sta, sensor), None, None, None, None, "switch"
+                else:
+                    try:
+                        assert s.index[s==n[0]].values.astype(float).mean() < s.index[s==n[1]].values.astype(float).mean()
+                    except:
+                        return (sta, sensor), iv1, iv2, switch, None, "assert"
+                    else:
+                        try:
+                            m = d.columns.get_level_values('minute')
+                            ix1, ix2 = [m.get_indexer_for(np.arange(n[0]/df.shape[1]) * i) for i in (iv1, iv2)]
+                            jx = list(set(ix2)-set(ix1))
+                            dc = d.loc[:switch]
+                            check = dc.index[dc.iloc[:, jx].isnull().sum(1)==len(jx)].max()
+                            try:
+                                cx = df.loc[check:switch].iloc[1:-1]
+                                assert cx.index.hour.unique().item() == switch.hour - 1
+                                switch = cx.index.min()
+                                cx = df.loc[check:switch].iloc[1:-1]
+                            except: pass
+                            return (sta, sensor), iv1, iv2, switch, check, cx.shape[0]
+                        except:
+                            return (sta, sensor), iv1, iv2, switch, None, None
+
+        @classmethod
+        def interval_dfs(cls, var_code, filename=config.CEAZAMet.raw_data):
+            flds = pd.read_hdf(config.CEAZAMet.meta_data, 'fields')
+            flds = flds.reset_index(level='field').set_index('sensor_code', append=True)
+            d = cls.dict(var_code, filename)
+            df = pd.DataFrame(cls.interval_df(df) for df in d.values())
+            df.index = pd.MultiIndex.from_tuples(df[0], names=['station', 'sensor_code'])
+            df.drop(0, 1, inplace=True)
+            df.columns = ['iv1', 'iv2', 'switch', 'check', 'gaplength']
+            return df.join(flds)
+
+        @classmethod
+        def intervals(cls, filename=config.CEAZAMet.raw_data):
+            return pd.concat([cls.interval_dfs(v, filename) for v in cls.variables(filename)]).sort_index()
+
+        @staticmethod
+        def check_switch(data, meta):
+            sensor = data.columns.get_level_values('sensor_code').unique().item()
+            loc = data.index.get_loc(meta.xs(sensor, level='sensor_code')['switch'].item())
+            return data.iloc[loc-20:loc+20]
+
 
 class Compare(object):
     """Compare two CEAZAMet station data DataFrames of one single field (e.g. ta_c).

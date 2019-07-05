@@ -45,6 +45,7 @@ The direct use case consists of calling :meth:`Validate.data` with a data :obj:`
 .. TODO::
 
     * implement a check of binned data against hourly (non-raw) from CEAZAMet
+    * to make binning more efficient, first split dfs according to datalogger interval changes
     * check how to enable adding back-data of new variable to the update process/files
     * sequential writing of the netcdf file (at this point not possible with xarray, only netCDF4):
         * https://github.com/pydata/xarray/issues/1849
@@ -142,69 +143,8 @@ def csel(ds, **kwargs):
     x.coords['station'] = ('station', idx.get_level_values('station'))
     return x
 
-# NOTE: in the git repo there are some older attempts at binning which don't use the pandas 'resample'
-# method. In case Hbin is ultimately unsuccesful, I can go back to those.
-
-class Hbin:
-    """Hourly binning of raw station data."""
-    @staticmethod
-    def weights(minutes, split_min):
-        m = sorted(np.r_[minutes, split_min])
-        d = np.diff(np.r_[m[-1], m]) % 60
-        i = m.index(split_min)
-        return dict(zip(m, d)), {m[(i+1) % len(m)]: d[i]}
-
-    @staticmethod
-    def ave(df, weights):
-        w = [weights.get(m, 0) for m in df.index.minute]
-        x = df.values.flatten()
-        d, n = (np.vstack((x, np.isfinite(x))) * w).sum(1)
-        return pd.Series([d, n], index=['sum', 'weight'])
-
-    @staticmethod
-    def weight_idx(df, weights):
-        w = df.index.minute.values
-        wc = w.copy()
-        m = np.unique(w)
-        for v in m:
-            wc[w==v] = weights.get(v, 0)
-        return wc.reshape((-1, 1))
-
-    @classmethod
-    def bin(cls, df, label='center', start=None):
-        """FIXME! briefly describe function
-
-        :param cls: 
-        :param df: 
-        :param label: 
-        :param start: 
-        :returns: 
-        :rtype: 
-
-        """
-        kwargs = {'rule': '60T', 'closed': 'right', 'label': 'left' if label=='left' else 'right'}
-        base = 30 if label=='center' else 0
-        kwargs.update(base=base)
-        loffs = pd.offsets.Minute(-base) # label adjustment if labelling the 'center' of a bin
-
-        m = np.unique(df.index.minute)
-        if len(m)==1:
-            if (label=='right' and m[0]==0) or (label=='center' and m[0]==30):
-                return df if start is None else df.loc[start:]
-
-        w, e = cls.weights(m, base)
-
-        ave = df.xs('ave', 1, 'aggr')
-        a = ave.resample(loffset=loffs, **kwargs).apply(cls.ave, weights=w)
-        b = ave.resample(loffset=loffs - pd.offsets.Hour(1), **kwargs).apply(cls.ave, weights=e)
-        d = a.add(b, fill_value=0)
-        ave = d['sum'] / d['weight']
-        # apparently, reusing a resampler leads to unpredictble results
-        mi = df.xs('min', 1, 'aggr').resample(loffset=loffs, **kwargs).min().iloc[:, 0]
-        ma = df.xs('max', 1, 'aggr').resample(loffset=loffs, **kwargs).max().iloc[:, 0]
-        x = pd.concat((ave, mi, ma), 1, keys=['ave', 'min', 'max'])
-        x.columns = df.columns.set_levels(x.columns, level='aggr')
-        return x if start is None else x.loc[start:]
+# NOTE: in the git repo there are some older attempts at binning, some with pandas.resample, some without
+# In case hourly_bin is ultimately unsuccesful, I can go back to those.
 
 def hourly_bin(df, label='right', start=None):
     x = pd.DataFrame(df.values, index=df.index, columns=df.columns.get_level_values('aggr'))
@@ -214,57 +154,31 @@ def hourly_bin(df, label='right', start=None):
 
     if label=='center':
         x = x.shift(freq=pd.offsets.Minute(30))
-
     shift = pd.offsets.Hour(1 if label=='right' else 0)
+
+    # create a pivot table with date+hour as index and minutes as columns,
+    # shifted in accordance with the 'label' argument
     idx = pd.DatetimeIndex(x.index.date)+pd.TimedeltaIndex(x.index.hour,'h')
-    X = x.assign(minute=x.index.minute).assign(idx=idx).pivot(index='idx', columns='minute')
-
-    # # for trapezoidal rule averaging, I make the integration interval closed on both sides
-    # # (i.e. use minute '0' as minute '60' of the previous hour)
-    # z = X.xs(0, 1, 'minute', drop_level=False).shift(-1)
-    # z.columns.set_levels([60], level='minute', inplace=True)
-    # z = pd.concat((X, z), 1).sort_index(1)
-
+    X = x.assign(second=x.index.second).assign(idx=idx).pivot(index='idx', columns='second')
+    return X
     def ave(row):
         x = row.dropna()
         try: return np.trapz(x.values, x=x.index) / np.diff(x.index[[0, -1]]).item()
         except: return np.nan
 
+    # far more efficient to apply the 'raw' np.trapz function to those hours that don't have missing values
     a = X['ave']
-    # applying the 'raw' np.trapz routine to hours without missing values is much more efficient than 'ave',
-    # which is however needed for those hours *with* missing values
     i = a.isnull().sum(1)==0
     a = pd.concat((
-        a.loc[i].apply(np.trapz, 1, dx=dt, raw=True) / np.diff(a.columns[[0, -1]]).item() / 60,
+        a.loc[i].apply(np.trapz, 1, dx=dt, raw=True) / np.diff(a.columns[[0, -1]]).item(),
         a.loc[~i].apply(ave, 1)
     )).sort_index()
 
-    mi = X['min'].apply(np.min, 1, raw=True)
-    ma = X['max'].apply(np.max, 1, raw=True)
+    mi = X['min'].apply(np.nanmin, 1, raw=True)
+    ma = X['max'].apply(np.nanmax, 1, raw=True)
     z = pd.concat((a, mi, ma), 1, keys=['ave', 'min', 'max']).shift(freq=shift)
     z.columns = df.columns.set_levels(z.columns, level='aggr')
     return z if start is None else z.loc[start:]
-
-    # t = pd.date_range(x.index.min().round('H'), x.index.max().round('H'), freq=dt)
-    # x = x.reindex(index=t)
-    # X = np.reshape(x.values[:-1, :], (-1, int(pd.Timedelta('1H')/dt), 3))
-    # X = np.r_['1', X, np.r_[X[1:, 0, :], x.iloc[-1:]].reshape((-1, 1, 3))]
-    # return X
-
-
-    # mins = df.index.minute
-    # w, e = weights(np.unique(mins), 30 if label=='center' else 0)
-    # X = pd.DataFrame(df.values, index=df.index, columns=df.columns.get_level_values('aggr')) \
-    # .assign(minute=df.index.minute) \
-    # .join(pd.Series(w, name='w1'), on='minute', how='left') \
-    # .join(pd.Series(e, name='w2'), on='minute', how='left')
-    # ave = X[['w1', 'w2']].multiply(X['ave'], axis=0)
-    # NN = X[['w1', 'w2']].multiply(X['ave'].notnull(), axis=0)
-    # # NOTE: needs alining the w2 with the right hour
-    # ave = ((ave * X['w1']).resample('60T').sum() + (ave * X['w2']).resample('60T').sum()) /\
-    #     ((nn * X['w1']).resample('60T').sum() + (nn * X['w2']).resample('60T').sum())
-    # return ave
-
 
 
 class Transforms:
@@ -352,8 +266,8 @@ class Validate(config.WRFop):
         with pd.HDFStore(config.CEAZAMet.meta_data) as S:
             self.flds = S['fields']
             # always interpolate to all historically active stations - since, why not
-            self.sta = reduce(lambda i, j: S[i].combine_first(S[j]),
-                              sorted([k for k in S.keys() if re.search('station', k)], reverse=True))
+            self.sta = reduce(lambda i, j: i.combine_first(j),
+                              map(S.get, sorted([k for k in S.keys() if re.search('stations', k)], reverse=True)))
 
     @classmethod
     def dirs_dict(cls, raw_dict, **kwargs):
@@ -530,10 +444,10 @@ class Validate(config.WRFop):
                             start += cls.update_overlap / 2
                         if not df.empty:
                             if 'center' in ce:
-                                C.append(Hbin.bin(df, label='center', start=start).dropna(0, 'all'))
+                                C.append(hourly_bin(df, label='center', start=start).dropna(0, 'all'))
                                 logger.info('{}, center: {}, start: {}'.format(f, k, start))
                             if 'end' in ce:
-                                E.append(Hbin.bin(df, label='right', start=start).dropna(0, 'all'))
+                                E.append(hourly_bin(df, label='right', start=start).dropna(0, 'all'))
                                 logger.info('{}, end: {}'.format(f, k, start))
                         prog.update(1)
                     if len(E) > 0:
@@ -793,7 +707,7 @@ def update_ceazamet(**kwargs):
         else:
             logger.info('getting {} for first time'.format(k))
             f.get_all(k, raw=True, **kwargs)
-            f.store_raw()
+            # f.store_raw()
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
