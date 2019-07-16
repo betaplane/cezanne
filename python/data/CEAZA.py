@@ -505,13 +505,6 @@ class Tools:
             variables = cls.variables(filename)
             return {v: {k: tuple(sorted(df.index.minute.unique()))
                         for k, df in cls.dict(v, filename).items()} for v in variables}
-####### below experimental
-        @classmethod
-        def irreg(cls, filename=config.CEAZAMet.raw_data):
-            a = tuple(np.arange(4) * 15)
-            b = tuple(np.arange(12) * 5)
-            d = cls.minutes(filename)
-            return {k: s for t in d.values() for k, s in t.items() if not (s==a or s==b)}
 
         @staticmethod
         def sensors(sensor_codes):
@@ -519,30 +512,12 @@ class Tools:
             return flds.loc[sensor_codes]
 
         @staticmethod
-        def minute_idx(df, minutes):
-            i = df.index.minute.get_indexer_for(minutes)
-            assert -1 not in np.unique(i), "some or all indexes not found"
-            return df.iloc[i]
-
-        @classmethod
-        def irreg_timestamps(cls, df, minutes):
-            s = set(minutes)
-            a = s - set(np.arange(12) * 5)
-            b = s - set(np.arange(4) * 15)
-            c = (a, b)[int(len(a) > len(b))]
-            print(sorted(c))
-            return cls.minute_idx(df, c)
+        def pivot(df):
+            idx = pd.DatetimeIndex(df.index.date)+pd.TimedeltaIndex(df.index.hour, 'h')
+            return df.assign(minute=df.index.minute).assign(idx=idx).pivot(index='idx', columns='minute')
 
         @staticmethod
-        def intervals(df, intervals=[1, 5, 10, 15]):
-            a = tuple(df.index[:100].minute.unique().sort_values())
-            b = tuple(df.index[-100:].minute.unique().sort_values())
-            start = [m for m in intervals if tuple(np.arange(60/m, dtype=int)*m)==a]
-            end = [m for m in intervals if tuple(np.arange(60/m, dtype=int)*m)==b]
-            return start, end
-
-        @staticmethod
-        def interval_df(df, intervals=[1, 5, 10, 15]):
+        def interval_df1(df):
             sta = df.columns.get_level_values('station').unique().item()
             sensor = df.columns.get_level_values('sensor_code').unique().item()
             idx = pd.DatetimeIndex(df.index.date)+pd.TimedeltaIndex(df.index.hour, 'h')
@@ -582,11 +557,42 @@ class Tools:
                             return (sta, sensor), iv1, iv2, switch, None, None
 
         @classmethod
+        def interval_df2(cls, df):
+            def mode(idx):
+                d = np.diff(idx).astype('timedelta64[m]').astype(int)
+                return sorted(np.vstack(np.unique(d, return_counts=True)).T, key=lambda i:i[1])[-1][0].item()
+            m = [mode(df.index[slice(*s)]) for s in [(100,), (-100, None), (2,), (-2, None)]]
+            if m[:2]!=m[2:]: return (m,)
+            else:
+               if m[0]==m[1]:
+                   o = cls.interval_outliers(df, m[:1])
+                   return m[:1], o
+               else:
+                   o = cls.interval_outliers(df, m[:2])
+                   t = cls.interval_change(df)
+                   return m[:2], o, t
+
+        @staticmethod
+        def interval_change(df):
+            from sklearn.tree import DecisionTreeClassifier
+            tr = DecisionTreeClassifier(max_leaf_nodes=2)
+            t = df.index.values[1:].astype(float).reshape((-1, 1))
+            a = tr.fit(t, np.diff(df.index).astype('timedelta64[m]').astype(int)).predict(t)
+            return df.index[1:][a==a[0]].max()
+
+        @staticmethod
+        def interval_outliers(df, intervals):
+            m = set(df.index.minute)
+            x = set(np.hstack(np.arange(60/iv) * iv for iv in intervals))
+            return m-x
+
+
+        @classmethod
         def interval_dfs(cls, var_code, filename=config.CEAZAMet.raw_data):
             flds = pd.read_hdf(config.CEAZAMet.meta_data, 'fields')
             flds = flds.reset_index(level='field').set_index('sensor_code', append=True)
             d = cls.dict(var_code, filename)
-            df = pd.DataFrame(cls.interval_df(df) for df in d.values())
+            df = pd.DataFrame(cls.interval_df1(df) for df in d.values())
             df.index = pd.MultiIndex.from_tuples(df[0], names=['station', 'sensor_code'])
             df.drop(0, 1, inplace=True)
             df.columns = ['iv1', 'iv2', 'switch', 'check', 'gaplength']
@@ -597,10 +603,9 @@ class Tools:
             return pd.concat([cls.interval_dfs(v, filename) for v in cls.variables(filename)]).sort_index()
 
         @staticmethod
-        def check_switch(data, meta):
-            sensor = data.columns.get_level_values('sensor_code').unique().item()
-            loc = data.index.get_loc(meta.xs(sensor, level='sensor_code')['switch'].item())
-            return data.iloc[loc-20:loc+20]
+        def check_change(df, ts):
+            loc = df.index.get_loc(ts)
+            return df.iloc[loc-20:loc+20]
 
 
 class Compare(object):

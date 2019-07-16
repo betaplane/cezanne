@@ -16,12 +16,8 @@ def __get_config():
     return config_mod
 
 config = __get_config()
-with pd.HDFStore(config.CEAZAMet.meta_data) as S:
-    sta = S['stations']
-    flds = S['fields']
-
-def read_hdf(filedict, key):
-    return pd.read_hdf(filedict[config.hostname], key)
+sta = pd.read_hdf(config.CEAZAMet.meta_data, 'stations')
+flds = pd.read_hdf(config.CEAZAMet.meta_data, 'fields')
 
 K = 273.15
 

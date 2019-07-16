@@ -86,7 +86,8 @@ def title(fig, title, height=.94):
     ax = fig.add_axes([0, 0, 1, height])
     ax.axis('off')
     ax.set_title(title)
-    fig.draw_artist(ax)
+    try: fig.draw_artist(ax)
+    except: pass
 
 def add_axes(subplot_spec):
     ax = plt.gcf().add_subplot(subplot_spec)
