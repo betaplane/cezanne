@@ -51,6 +51,11 @@ Various linear stats
 ====================
 .. automodule:: linear
 
+Various smoothing methods
+=========================
+.. automodule:: smooth
+   :members:
+
 Helpers
 =======
 .. automodule:: helpers
@@ -67,11 +72,6 @@ Geo
 Plotting
 ========
 .. automodule:: plots
-   :members:
-
-Filtering
-=========
-.. automodule:: filters
    :members:
 
 Müller Ice Shelf

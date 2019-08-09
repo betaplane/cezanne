@@ -145,6 +145,67 @@ def csel(ds, **kwargs):
 
 # NOTE: in the git repo there are some older attempts at binning, some with pandas.resample, some without
 # In case hourly_bin is ultimately unsuccesful, I can go back to those.
+class Hbin:
+    """Hourly binning of raw station data."""
+    @staticmethod
+    def weights(minutes, split_min):
+        m = sorted(np.r_[minutes, split_min])
+        d = np.diff(np.r_[m[-1], m]) % 60
+        i = m.index(split_min)
+        return dict(zip(m, d)), {m[(i+1) % len(m)]: d[i]}
+
+    @staticmethod
+    def ave(df, weights):
+        w = [weights.get(m, 0) for m in df.index.minute]
+        x = df.values.flatten()
+        d, n = (np.vstack((x, np.isfinite(x))) * w).sum(1)
+        return pd.Series([d, n], index=['sum', 'weight'])
+
+    @staticmethod
+    def weight_idx(df, weights):
+        w = df.index.minute.values
+        wc = w.copy()
+        m = np.unique(w)
+        for v in m:
+            wc[w==v] = weights.get(v, 0)
+        return wc.reshape((-1, 1))
+
+    @classmethod
+    def bin(cls, df, label='center', start=None):
+        """FIXME! briefly describe function
+
+        :param cls: 
+        :param df: 
+        :param label: 
+        :param start: 
+        :returns: 
+        :rtype: 
+
+        """
+        kwargs = {'rule': '60T', 'closed': 'right', 'label': 'left' if label=='left' else 'right'}
+        base = 30 if label=='center' else 0
+        kwargs.update(base=base)
+        loffs = pd.offsets.Minute(-base) # label adjustment if labelling the 'center' of a bin
+
+        m = np.unique(df.index.minute)
+        if len(m)==1:
+            if (label=='right' and m[0]==0) or (label=='center' and m[0]==30):
+                return df if start is None else df.loc[start:]
+
+        w, e = cls.weights(m, base)
+
+        ave = df.xs('ave', 1, 'aggr')
+        a = ave.resample(loffset=loffs, **kwargs).apply(cls.ave, weights=w)
+        b = ave.resample(loffset=loffs - pd.offsets.Hour(1), **kwargs).apply(cls.ave, weights=e)
+        d = a.add(b, fill_value=0)
+        ave = d['sum'] / d['weight']
+        # apparently, reusing a resampler leads to unpredictble results
+        mi = df.xs('min', 1, 'aggr').resample(loffset=loffs, **kwargs).min().iloc[:, 0]
+        ma = df.xs('max', 1, 'aggr').resample(loffset=loffs, **kwargs).max().iloc[:, 0]
+        x = pd.concat((ave, mi, ma), 1, keys=['ave', 'min', 'max'])
+        x.columns = df.columns.set_levels(x.columns, level='aggr')
+        return x if start is None else x.loc[start:]
+
 
 def hourly_bin(df, label='right', start=None):
     x = pd.DataFrame(df.values, index=df.index, columns=df.columns.get_level_values('aggr'))

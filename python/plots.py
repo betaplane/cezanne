@@ -82,10 +82,12 @@ def annotated(df, ax=None, color=None):
     ax.set_extent((-180, 180, -65, -90), crs.PlateCarree())
     return p
 
-def title(fig, title, height=.94):
-    ax = fig.add_axes([0, 0, 1, height])
+def title(fig, title, height=.94, **kwargs):
+    x0 = min([ax.get_position().corners()[:, 0].min() for ax in fig.axes])
+    x1 = max([ax.get_position().corners()[:, 0].max() for ax in fig.axes])
+    ax = fig.add_axes([x0, 0, x1-x0, height])
     ax.axis('off')
-    ax.set_title(title)
+    ax.set_title(title, **kwargs)
     try: fig.draw_artist(ax)
     except: pass
 

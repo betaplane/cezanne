@@ -273,7 +273,8 @@ class Field(Common):
             True: {
                 'fi': from_str,
                 'ff': to_str,
-                's_cod': code
+                's_cod': code,
+                'user': self.user
             }
         }[raw]
         url = {True: self.raw_url, False: self.url}[raw]
@@ -478,6 +479,11 @@ class Meta(Common):
 
 
 class Tools:
+    @staticmethod
+    def read_dat(filename):
+        df = pd.read_csv(filename, header = [1, 2, 3], index_col=0, parse_dates=True)
+        return df
+
     class HDF:
         @staticmethod
         def dict(var_code, filename=config.CEAZAMet.raw_data):
@@ -573,19 +579,10 @@ class Tools:
                    return m[:2], o, t
 
         @staticmethod
-        def interval_change(df):
-            from sklearn.tree import DecisionTreeClassifier
-            tr = DecisionTreeClassifier(max_leaf_nodes=2)
-            t = df.index.values[1:].astype(float).reshape((-1, 1))
-            a = tr.fit(t, np.diff(df.index).astype('timedelta64[m]').astype(int)).predict(t)
-            return df.index[1:][a==a[0]].max()
-
-        @staticmethod
         def interval_outliers(df, intervals):
             m = set(df.index.minute)
             x = set(np.hstack(np.arange(60/iv) * iv for iv in intervals))
             return m-x
-
 
         @classmethod
         def interval_dfs(cls, var_code, filename=config.CEAZAMet.raw_data):
@@ -606,6 +603,29 @@ class Tools:
         def check_change(df, ts):
             loc = df.index.get_loc(ts)
             return df.iloc[loc-20:loc+20]
+
+        @staticmethod
+        def precise_switch(df):
+            return df[df['switch'] - pd.DatetimeIndex(df['first']) < pd.Timedelta('5D')]
+
+    class tree:
+        def __init__(self, df, max_leaf_nodes=2):
+            from sklearn.tree import DecisionTreeClassifier
+            tr = DecisionTreeClassifier(max_leaf_nodes=max_leaf_nodes)
+            idx = df.dropna().index
+            t = idx.values[1:].astype(float).reshape((-1, 1))
+            x = np.diff(idx).astype('timedelta64[m]').astype(int)
+            self.x = pd.Series(x, index=idx[1:])
+            self.a = tr.fit(t, x).predict(t)
+            self.ix = idx[1:][self.a==self.a[0]].max()
+
+        def plot(self, ax=None):
+            import matplotlib.pyplot as plt
+            ax = plt.subplots()[1] if ax is None else ax
+            ax.plot(self.x, '.')
+            ax.plot(self.x.index, self.a)
+            ax.axvline(self.ix, color='r')
+            ax.set_ylim(self.a.min()-5, self.a.max()+5)
 
 
 class Compare(object):

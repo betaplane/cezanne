@@ -46,7 +46,8 @@ extensions = ['sphinx.ext.autodoc',
 # somehow the autodoc version doesn't work properly
 mock_imports = ['pycurl', 'pandas', 'xarray', 'numpy', 'scipy', 'scipy.linalg', 'matplotlib', 'matplotlib.pyplot', 'matplotlib.ticker', 'matplotlib.gridspec', 'cartopy', 'cartopy.crs', 'cartopy.io', 'cartopy.io.shapereader', 'shapely', 'shapely.geometry', 'tensorflow', 'edward', 'bayespy', 'mpi4py', 'netCDF4', 'fs.sshfs', 'importlib', 'tables', 'osgeo', 'pyzotero', 'tqdm', 'pyproj', 'bs4', 'shapefile']
 
-mock_classes = ['Dataset', 'DataArray']
+# this does seem to solve at least the problem with singledispatch
+mock_classes = ['Dataset', 'DataArray', 'DataFrame']
 
 from unittest.mock import MagicMock
 class Mock(MagicMock):
