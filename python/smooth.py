@@ -5,7 +5,10 @@ from importlib import import_module
 
 @singledispatch
 def LocalRegression(x, y, xi=None, kernel='RBF', length_scale=1, deg=1):
-    """Local regression of arbitrary order and at arbitrary x locations. Similar to the R 'loess' function (I think). Instead of the arguments ``x``, ``y`` and ``xi``, a single :class:`pandas.DataFrame` can be subsituted, in which case ``x`` and ``y`` are taken to be its :attr:`~pandas.DataFrame.index` and :attr:`~pandas.DataFrame.values` after applying :meth:`~pandas.DataFrame.dropna`, while ``xi`` is taken to be the index before dropping the NaNs. If a :class:`~pandas.DataFrame` is passed as input, the output will also be one.
+    """Local regression of arbitrary order and at arbitrary locations of the independent variable if desired (i.e., interpolatory). Similar to the R 'loess' function (I think) and based on :cite:`hastie_elements_2001`. Instead of the arguments ``x``, ``y`` and ``xi``, a single :class:`pandas.DataFrame` can be subsituted, in which case ``x`` and ``y`` are taken to be its :attr:`~pandas.DataFrame.index` and :attr:`~pandas.DataFrame.values` after applying :meth:`~pandas.DataFrame.dropna`, while ``xi`` is taken to be the index before dropping the NaNs. If a :class:`~pandas.DataFrame` is passed as input, the output will also be one. If the DataFrame's index is a :class:`~pandas.DatetimeIndex`, it will be converted to a :obj:`float` :class:`~numpy.ndarray` given a ``datetime_granularity`` argument.
+
+    .. Note::
+        If the degree of the local regression (``deg``) is higher, numerical instability may result from the exponentiation of the independent variable (``x``, ``xi``). Re-scaling it will alleviate this.
 
     :param x: independent variable
     :type x: numeric type :class:`~numpy.ndarray`
@@ -14,7 +17,6 @@ def LocalRegression(x, y, xi=None, kernel='RBF', length_scale=1, deg=1):
     :param xi: locations at which to evaluate the regression (defaults to ``x``)
     :type xi: numeric type :class:`~numpy.ndarray`
     :param kernel: kernel type to use, amount those found in `sklearn.gaussian_process.kernels <https://scikit-learn.org/stable/modules/classes.html#module-sklearn.gaussian_process>`_
-    :mod:`sklearn.gaussian_process.kernels`
     :type kernel: :obj:`str`
     :param length_scale: argument ``length_scale`` for the instantiation of the kernel
     :type deg: numeric
@@ -22,6 +24,11 @@ def LocalRegression(x, y, xi=None, kernel='RBF', length_scale=1, deg=1):
     :type deg: :obj:`int`
     :returns: regression result evaluated at ``x`` or ``xi``
     :rtype: :class:`~numpy.ndarray` or :class:`~pandas.DataFrame`
+
+    :Additional keyword argument:
+        * **datetime_granularity** - If a :class:`~pandas.DataFrame` is used as argument (replacing ``x``, ``y`` and ``xi``) and its index is a :class:`~pandas.DatetimeIndex`, it will be converted to a :obj:`float` :class:`~numpy.ndarray` after casting it to ``datetime64[datetime_granularity]``.
+
+    .. bibliography:: refs.bib
 
     """
     kernels = import_module('sklearn.gaussian_process.kernels')
