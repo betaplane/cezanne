@@ -191,7 +191,7 @@ class Common(config.CEAZAMet):
                         prog.update(1)
                     return df.sort_index()
 
-        raise TrialsExhaustedError()
+        raise TrialsExhaustedError(params['s_cod'], None)
 
     @classmethod
     def memory_check(cls, s):
@@ -214,7 +214,7 @@ class Field(Common):
             with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
                 self.data = [exe.submit(self._get, r, prog, from_date=from_date, to_date=to_date, raw=raw)
                              for r in table.iterrows()]
-            data = dict([d.result() for d in as_completed(self.data)])
+            data = dict([d.result() if d.exception() is None else d.exception().args for d in as_completed(self.data)])
         if raw:
             self.no_data = [k for k, v in data.items() if v is None]
             last = table.set_index('sensor_code').loc[self.no_data]['last'].astype('datetime64')
@@ -280,7 +280,14 @@ class Field(Common):
         url = {True: self.raw_url, False: self.url}[raw]
         cols = self.cols[:-1] if raw else self.cols
         try:
-            return self.read(url, params, cols).set_index('datetime')
+            d = self.read(url, params, cols).set_index('datetime')
+            while True:
+                params['fi' if raw else 'fecha_inicio'] = d.index[-1]
+                e = self.read(url, params, cols).set_index('datetime').combine_first(d)
+                if e.shape[0] == d.shape[0]:
+                    break
+                d = e
+            return d
 
         # for too long data series, the server throws an error, see Common.memory_check
         except ServerMemoryError:

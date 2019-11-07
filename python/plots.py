@@ -44,10 +44,10 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
         df = hh.stationize(df)
     except: pass
     grid_color = kwargs.pop('grid_color', plt.rcParams['grid.color'])
-    fig.subplots_adjust(bottom=bottom, top=top, **kwargs)
-    plt.set_cmap('viridis')
+    fig.subplots_adjust(bottom=bottom, top=top)
+    plt.set_cmap(kwargs.pop('cmap', 'viridis'))
     y = np.arange(df.shape[1] + 1)
-    ax.pcolormesh(df.index, y, df.T, vmin=0., vmax=1.)
+    ax.pcolormesh(df.index, y, df.T, vmin=kwargs.pop('vmin', 0.), vmax=kwargs.pop('vmax', 1.))
     ax.set_yticks(y[1:])
     if label:
         l = ax.set_yticklabels(df.columns)
@@ -55,7 +55,7 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
             k.set_verticalalignment('bottom')
             k.set_fontsize(8)
         for i, c in enumerate(df.columns):
-            l[i].set_color(color[c])
+            l[i].set_color(color.get(c, 'k'))
     else:
         ax.set_yticklabels([])
     ax.yaxis.set_tick_params(tick1On=False)

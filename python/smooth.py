@@ -16,7 +16,7 @@ def LocalRegression(x, y, xi=None, kernel='RBF', length_scale=1, deg=1):
     :type y: numeric type :class:`~numpy.ndarray`
     :param xi: locations at which to evaluate the regression (defaults to ``x``)
     :type xi: numeric type :class:`~numpy.ndarray`
-    :param kernel: kernel type to use, amount those found in `sklearn.gaussian_process.kernels <https://scikit-learn.org/stable/modules/classes.html#module-sklearn.gaussian_process>`_
+    :param kernel: kernel type to use, among those found in `sklearn.gaussian_process.kernels <https://scikit-learn.org/stable/modules/classes.html#module-sklearn.gaussian_process>`_
     :type kernel: :obj:`str`
     :param length_scale: argument ``length_scale`` for the instantiation of the kernel
     :type deg: numeric
@@ -75,13 +75,16 @@ class Lanczos(object):
 
     :param df: DataFrame to which the filtering is to be applied (needs to have an index with :attr:`~pandas.DatetimeIndex.freq` - apply :meth:`~pandas.DataFrame.resample` first if that isn't the case).
     :type df: :class:`~pandas.DataFrame`
-    :param period: :class:`pandas.Timedelta` :obj:`str` giving the cutoff period.
-    :type period: :obj:`str`
+    :param period: Either a :class:`pandas.Timedelta` :obj:`str` giving the cutoff period, or an integer giving the number of samples per period
+    :type period: :obj:`str` or :obj:`int`
     :param a: integer 'order' of the filter (the higher, the more filter terms)
     :type a: :obj:`int`
     """
     def __init__(self, df, period, a=3):
-        N = int(pd.Timedelta(period) / df.index.freq * a + 1)
+        if isinstance(period, str):
+            N = int(pd.Timedelta(period) / df.index.freq * a + 1)
+        else:
+            N = period * a + 1
         self.s = df.shape[0]
         self.n1 = N // 2
         self.n2 = self.s - self.n1
