@@ -616,22 +616,34 @@ class Tools:
             return df[df['switch'] - pd.DatetimeIndex(df['first']) < pd.Timedelta('5D')]
 
     class tree:
-        def __init__(self, df, max_leaf_nodes=2):
+        def __init__(self, df, max_leaf_nodes=2, **kwargs):
             from sklearn.tree import DecisionTreeClassifier
-            tr = DecisionTreeClassifier(max_leaf_nodes=max_leaf_nodes)
+            tr = DecisionTreeClassifier(max_leaf_nodes=max_leaf_nodes if len(kwargs)==0 else None, **kwargs)
             idx = df.dropna().index
             t = idx.values[1:].astype(float).reshape((-1, 1))
             x = np.diff(idx).astype('timedelta64[m]').astype(int)
             self.x = pd.Series(x, index=idx[1:])
             self.a = tr.fit(t, x).predict(t)
-            self.ix = idx[1:][self.a==self.a[0]].max()
+            try:
+                ix, = np.where(np.diff(self.a))
+                self.iv = np.r_[self.a[ix[0]], self.a[ix+1]]
+                self.ix = idx[ix+1] # start of new interval
+                if self.iv[0] == self.iv[-1]:
+                    raise
+            except:
+                self.iv = self.a[[0]]
+                self.ix = []
+            else:
+                if max_leaf_nodes > 2 and any(np.diff(self.iv) > 0):
+                    tr = self.__class__(df, max_leaf_nodes - 1)
+                    [setattr(self, a, getattr(tr, a)) for a in ['iv', 'ix', 'x', 'a']]
 
         def plot(self, ax=None):
             import matplotlib.pyplot as plt
             ax = plt.subplots()[1] if ax is None else ax
             ax.plot(self.x, '.')
             ax.plot(self.x.index, self.a)
-            ax.axvline(self.ix, color='r')
+            [ax.axvline(i, color='r') for i in self.ix]
             ax.set_ylim(self.a.min()-5, self.a.max()+5)
 
 

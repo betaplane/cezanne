@@ -13,7 +13,7 @@ from functools import singledispatch
 from helpers import config
 
 
-def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, **kwargs):
+def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, colorbar=False, **kwargs):
     """Plot a matrix of the times when a given :class:`~pandas.DataFrame` has valid observations. Not sure with what data types it'll still work, but in general 0/False(/nan?) should work for nonexistent times, and 1/count for exisitng ones. Figure size is automatically computed, but can be overridden with the **figsize** or **fig_width** arguments.
 
     :param df: DataFrame with time in index and station labels as columns. The columns labels are used to label the rows of the plotted matrix. The given DataFrame is attempted to pass through :meth:`python.helpers.stationize` first.
@@ -31,6 +31,7 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
             * **figsize** - override automatic figure sizing
             * **fig_width** - override only the figure width
             * **grid_color** - color spec for the grid over the matrix
+            * **colorbar** - ``True`` or ``False``
 
     """
     if ax is None:
@@ -47,7 +48,7 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
     fig.subplots_adjust(bottom=bottom, top=top)
     plt.set_cmap(kwargs.pop('cmap', 'viridis'))
     y = np.arange(df.shape[1] + 1)
-    ax.pcolormesh(df.index, y, df.T, vmin=kwargs.pop('vmin', 0.), vmax=kwargs.pop('vmax', 1.))
+    pl = ax.pcolormesh(df.index, y, df.T, vmin=kwargs.pop('vmin', 0.), vmax=kwargs.pop('vmax', 1.))
     ax.set_yticks(y[1:])
     if label:
         l = ax.set_yticklabels(df.columns)
@@ -61,6 +62,15 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
     ax.yaxis.set_tick_params(tick1On=False)
     ax.grid(color=grid_color)
     ax.invert_yaxis()
+    if colorbar:
+        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+        cax = inset_axes(ax, width="100%", height="100%",
+                         bbox_to_anchor=(0, 1.02, 1, .015),
+                         bbox_transform=ax.transAxes,
+                         borderpad=0)
+    plt.colorbar(pl, orientation='horizontal', cax=cax)
+    cax.xaxis.set_ticks_position('top')
+
 
 
 def annotated(df, ax=None, color=None):
