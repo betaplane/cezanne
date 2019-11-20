@@ -56,7 +56,7 @@ def availability_matrix(df, ax=None, label=True, color={}, bottom=.05, top=.99, 
             k.set_verticalalignment('bottom')
             k.set_fontsize(8)
         for i, c in enumerate(df.columns):
-            l[i].set_color(color.get(c, 'k'))
+            l[i].set_color(color.get(c, 'k') if isinstance(color, dict) else color[i])
     else:
         ax.set_yticklabels([])
     ax.yaxis.set_tick_params(tick1On=False)

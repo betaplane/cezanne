@@ -616,7 +616,7 @@ class Tools:
             return df[df['switch'] - pd.DatetimeIndex(df['first']) < pd.Timedelta('5D')]
 
     class tree:
-        def __init__(self, df, max_leaf_nodes=2, **kwargs):
+        def __init__(self, df, max_leaf_nodes=2, post=True, **kwargs):
             from sklearn.tree import DecisionTreeClassifier
             tr = DecisionTreeClassifier(max_leaf_nodes=max_leaf_nodes if len(kwargs)==0 else None, **kwargs)
             idx = df.dropna().index
@@ -628,13 +628,13 @@ class Tools:
                 ix, = np.where(np.diff(self.a))
                 self.iv = np.r_[self.a[ix[0]], self.a[ix+1]]
                 self.ix = idx[ix+1] # start of new interval
-                if self.iv[0] == self.iv[-1]:
+                if post and self.iv[0] == self.iv[-1]:
                     raise
             except:
                 self.iv = self.a[[0]]
                 self.ix = []
             else:
-                if max_leaf_nodes > 2 and any(np.diff(self.iv) > 0):
+                if post and max_leaf_nodes > 2 and any(np.diff(self.iv) > 0):
                     tr = self.__class__(df, max_leaf_nodes - 1)
                     [setattr(self, a, getattr(tr, a)) for a in ['iv', 'ix', 'x', 'a']]
 
